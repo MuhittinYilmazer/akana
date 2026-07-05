@@ -13,7 +13,7 @@ python-dotenv>=1.2.2
 ulid-py>=1.1
 pyyaml>=6.0
 python-multipart>=0.0.9
-anyio>=4
+anyio>=4.14.1
 numpy>=1.26
 edge-tts>=7
 # In-process MCP client — lets the native function-calling providers (ollama/gemini/
