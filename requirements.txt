@@ -19,4 +19,4 @@ edge-tts>=7
 # In-process MCP client — lets the native function-calling providers (ollama/gemini/
 # openai) reach external MCP servers from mcp_servers.yaml, matching the cursor/claude
 # tool surface. Soft dependency: the bridge degrades gracefully if it is absent.
-mcp>=1.0
+mcp>=1.28.1
