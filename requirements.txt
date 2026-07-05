@@ -5,7 +5,7 @@
 # Install manually with: pip install -r requirements.txt
 fastapi>=0.110
 starlette>=0.36
-uvicorn[standard]>=0.27
+uvicorn[standard]>=0.50.0
 httpx>=0.27
 pydantic>=2.13.4
 cryptography>=49.0.0
