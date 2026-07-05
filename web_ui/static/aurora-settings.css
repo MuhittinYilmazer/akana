@@ -1,0 +1,858 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   AURORA SETTINGS — Wave 4 surface refinements
+   ─────────────────────────────────────────────────────────────────────────
+   Load LAST among stylesheets (after aurora-shell/skin). It only:
+     1. Re-frames the settings panel into a CENTERED frosted modal window
+        (was top-anchored) + refines nav / tabs / panes / theme cards.
+     2. Defines the full 8-accent [data-accent] family by remapping the
+        existing --j-* tokens (no token names invented or renamed).
+        Loads AFTER aurora-skin.css, so it (re)defines violet/teal/amber too
+        to keep all 8 visually consistent + closes the azure/teal gaps.
+     3. Atmosphere / Shape / Density presets + the `.aur-seg` segmented
+        control used by aurora-ui.js. Defaults (no data-attr) look unchanged.
+
+   CONTRACT: no id/class/data-* / `--j-*`-name changes to existing markup.
+   Every NEW class is `aur-`-prefixed. Colors via var(--j-*) / color-mix;
+   the only literal hex values are (a) the accent-preset palette (source of
+   truth) and (b) the theme-card PREVIEW swatch fills — fixed light/dark
+   canvas samples that must read the same regardless of the active theme
+   (mirrors the reference .sw-light / .sw-dark / .sw-sys tiles).
+   Honors prefers-reduced-motion (motion only via transform/opacity).
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+
+/* ════════════════════════════════════════════════════════════════════════════
+   §1 · SETTINGS — CENTERED MODAL WINDOW
+   The legacy panel is top-anchored (top: header+gap, translate(-50%, …)).
+   Re-frame it to a true viewport-centered frosted window with a sane max
+   width. Open/close mechanics stay in styles.css (body.settings-open +
+   transform/opacity) — we keep the SAME transform axes so the entrance
+   animation still reads; we only re-center the resting position.
+   ════════════════════════════════════════════════════════════════════════════ */
+#settings-panel.settings-panel {
+  /* center on both axes via inset:0 + margin:auto (reference pattern) */
+  position: fixed;
+  inset: 0;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  margin: auto;
+  width: min(1040px, calc(100vw - 2.5rem));
+  height: min(760px, calc(100dvh - 2.5rem));
+  max-height: calc(100dvh - 2.5rem);
+  /* closed: gently scaled + nudged down, centered (no -50% offset now) */
+  transform: scale(0.97) translateY(12px);
+}
+
+body.settings-open #settings-panel.settings-panel {
+  /* open: settle to dead center */
+  transform: none;
+}
+
+/* Modal chrome: opaque frosted glass + deeper drop shadow so the centered
+   window reads as a focused, lifted surface (reference: .settings). The base
+   already sets --j-overlay glass + border; we deepen the shadow + ring. */
+#settings-panel.settings-panel {
+  box-shadow:
+    var(--j-shadow-3),
+    inset 0 1px 0 var(--j-hairline),
+    0 0 0 1px color-mix(in srgb, var(--j-accent) 10%, transparent);
+}
+
+/* Head: calmer gradient wash + a touch more vertical room for the title. */
+#settings-panel .settings-panel-head {
+  padding: var(--j-sp-5) var(--j-sp-5) var(--j-sp-4);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--j-accent-soft) 55%, transparent) 0%,
+    color-mix(in srgb, var(--j-accent-2-soft) 22%, transparent) 45%,
+    transparent 100%
+  );
+}
+
+/* Backdrop: a touch deeper so the centered window reads as a focused modal. */
+#settings-backdrop.settings-backdrop {
+  background:
+    radial-gradient(
+      120% 90% at 50% 0%,
+      color-mix(in srgb, var(--j-accent-2) 9%, transparent),
+      transparent 60%
+    ),
+    color-mix(in srgb, var(--j-bg) 74%, transparent);
+  backdrop-filter: blur(10px) saturate(1.06);
+  -webkit-backdrop-filter: blur(10px) saturate(1.06);
+}
+
+/* Body grid: slightly narrower nav rail for the centered frame. */
+#settings-panel .settings-body {
+  grid-template-columns: 236px minmax(0, 1fr);
+}
+
+/* Nav rail: clearer column separation + a calmer transparent backing inside
+   the modal so the frosted surface reads through it. */
+#settings-panel .settings-nav {
+  padding: var(--j-sp-4) var(--j-sp-3);
+  gap: 4px;
+  background: transparent;
+  border-right: 1px solid color-mix(in srgb, var(--j-border) 85%, transparent);
+}
+
+/* Tabs: roomier hit area + softer resting state to match the reference rail. */
+#settings-panel .settings-tab {
+  padding: 0.6rem 0.75rem;
+  border-radius: var(--j-r-md);
+}
+
+/* Active tab: lift the gradient-glass treatment a touch for the modal. */
+#settings-panel .settings-tab.is-active {
+  box-shadow:
+    inset 0 1px 0 var(--j-hairline),
+    0 6px 20px -12px color-mix(in srgb, var(--j-accent) 60%, transparent);
+}
+
+/* Pane scroll: a hair more breathing room in the wider centered frame. */
+#settings-panel .settings-scroll {
+  padding: var(--j-sp-5) var(--j-sp-6) var(--j-sp-6);
+}
+
+/* Section blocks: a touch more vertical rhythm between groups in the modal. */
+#settings-panel .settings-block {
+  margin-top: var(--j-sp-5);
+  padding-top: var(--j-sp-4);
+}
+#settings-panel .settings-block:first-of-type {
+  margin-top: 0;
+}
+#settings-panel .settings-block-title {
+  margin-bottom: var(--j-sp-3);
+}
+
+/* Reveal row under a credential's masked state line: a Show/Hide toggle and the
+   raw value (shown on demand from the audited /reveal endpoint). */
+#settings-panel .cred-reveal-row {
+  display: flex;
+  align-items: center;
+  gap: var(--j-sp-2);
+  margin: var(--j-sp-2) 0 var(--j-sp-3);
+  flex-wrap: wrap;
+}
+#settings-panel .cred-revealed {
+  flex: 1 1 160px;
+  min-width: 0;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 0.9em;
+  word-break: break-all;
+  user-select: all;
+  opacity: 0.9;
+}
+
+
+/* ── THEME CARDS ─────────────────────────────────────────────────────────────
+   The legacy markup is three <label.theme-picker-option> each wrapping a
+   hidden radio + a single <span> text label. The reference shows large
+   selectable CARDS with a theme-preview swatch above the name. We can't add
+   markup (LEAD owns index.html), so we re-frame the label into a card and
+   render the preview swatch as a generated block ABOVE the span via the
+   label's ::before. Card order is fixed (Dark / Light / System) so nth-of-type
+   maps the three preview fills deterministically.
+   ────────────────────────────────────────────────────────────────────────── */
+#settings-panel .theme-picker {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--j-sp-3);
+}
+
+#settings-panel .theme-picker-option {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--j-sp-2);
+  padding: var(--j-sp-3);
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-md);
+  background: var(--j-panel);
+  box-shadow: inset 0 1px 0 var(--j-hairline);
+  cursor: pointer;
+  transition:
+    border-color var(--j-dur-fast) var(--j-ease),
+    background var(--j-dur-fast) var(--j-ease),
+    box-shadow var(--j-dur-fast) var(--j-ease),
+    transform var(--j-dur-fast) var(--j-ease);
+}
+
+#settings-panel .theme-picker-option:hover {
+  border-color: var(--j-border-strong);
+  transform: translateY(-2px);
+}
+
+/* the preview swatch — a generated tile above the label */
+#settings-panel .theme-picker-option::before {
+  content: "";
+  display: block;
+  height: 46px;
+  border-radius: var(--j-r-sm);
+  border: 1px solid var(--j-border);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  /* default fill (overridden per card below) */
+  background: linear-gradient(135deg, #0a0c12, #161b27);
+}
+#settings-panel .theme-picker-option:nth-of-type(1)::before {
+  background: linear-gradient(135deg, #0a0c12, #1b2233);
+}
+#settings-panel .theme-picker-option:nth-of-type(2)::before {
+  background: linear-gradient(135deg, #e7ecfa, #f5f7fd);
+}
+#settings-panel .theme-picker-option:nth-of-type(3)::before {
+  background: linear-gradient(135deg, #e7ecfa 0 50%, #0a0c12 50% 100%);
+}
+
+/* the existing text label sits below the swatch */
+#settings-panel .theme-picker-option span {
+  display: block;
+  padding: 0;
+  border: none;
+  background: none;
+  text-align: center;
+  font-size: var(--j-fs-sm);
+  font-weight: 600;
+  color: var(--j-ink-dim);
+  transition: color var(--j-dur-fast) var(--j-ease);
+}
+
+/* selected card: accent ring + soft glow + brighter label */
+#settings-panel .theme-picker-option input:checked + span {
+  background: none;
+  border: none;
+  color: var(--j-ink);
+}
+#settings-panel .theme-picker-option:has(input:checked) {
+  border-color: color-mix(in srgb, var(--j-accent) 50%, var(--j-border));
+  background: var(--j-accent-soft);
+  box-shadow:
+    inset 0 1px 0 var(--j-hairline),
+    var(--j-glow-soft);
+}
+/* keyboard focus on the hidden radio → visible ring on its card */
+#settings-panel .theme-picker-option:focus-within {
+  border-color: color-mix(in srgb, var(--j-accent) 55%, var(--j-border));
+  box-shadow:
+    inset 0 1px 0 var(--j-hairline),
+    var(--j-glow-accent);
+}
+
+/* Responsive: on narrow viewports collapse the nav to a top strip so the
+   centered modal still fits (mirrors the legacy small-screen intent). */
+@media (max-width: 720px) {
+  #settings-panel.settings-panel {
+    width: calc(100vw - 1rem);
+    height: calc(100dvh - 1rem);
+  }
+  #settings-panel .settings-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  #settings-panel .settings-nav {
+    flex-direction: row;
+    overflow-x: auto;
+    border-right: none;
+    border-bottom: 1px solid color-mix(in srgb, var(--j-border) 85%, transparent);
+  }
+}
+
+/* Phone (≤560px): the nav is a horizontal scroll strip here, but the desktop
+   rules above still apply their roomy column spacing (nav gap:4px + tab
+   padding:0.6rem 0.75rem), wasting width on a ~412px screen. Tighten the strip
+   to sit compactly: smaller inter-tab gap, slimmer tab padding/rail padding,
+   and let it scroll horizontally so tabs never wrap. Touch height stays ≥40px
+   (0.45rem×2 + the ~1.65rem icon row). Mobile-scoped only — desktop untouched. */
+@media (max-width: 560px) {
+  #settings-panel .settings-nav {
+    gap: 2px;
+    padding: 0.4rem 0.4rem;
+    flex-wrap: nowrap;
+    scrollbar-width: none;
+  }
+  #settings-panel .settings-nav::-webkit-scrollbar {
+    display: none;
+  }
+  #settings-panel .settings-tab {
+    flex: 0 0 auto;
+    padding: 0.45rem 0.55rem;
+    white-space: nowrap;
+  }
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════════
+   §2 · ACCENT PRESETS — 18-color family
+   azure (base) + the core trio (violet/teal/amber, defined in tokens.css)
+   + 14 extended presets defined here. Each preset sets only its 4 hue vars;
+   the rest of the family is derived in the grouped rule near the end of §2.
+   "azure" == base (cyan/azure bucket) → no override needed.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* -- dark (default) -------------------------------------------------------- */
+[data-accent="violet"] {
+  --j-accent: #7c5cff; --j-accent-strong: #5b3fd0;
+  --j-accent-2: #c264e6; --j-accent-3: #5b8cf0;
+  --j-accent-soft: color-mix(in srgb, #7c5cff 14%, transparent);
+  --j-accent-grad: linear-gradient(135deg, #7c5cff 0%, #c264e6 100%);
+}
+[data-accent="teal"] {
+  --j-accent: #109fb0; --j-accent-strong: #0a7480;
+  --j-accent-2: #5b8cf0; --j-accent-3: #16c4a0;
+  --j-accent-soft: color-mix(in srgb, #109fb0 16%, transparent);
+  --j-accent-grad: linear-gradient(135deg, #109fb0 0%, #5b8cf0 100%);
+}
+[data-accent="amber"] {
+  --j-accent: #cf8412; --j-accent-strong: #985f06;
+  --j-accent-2: #c264e6; --j-accent-3: #e0b84a;
+  --j-accent-soft: color-mix(in srgb, #cf8412 16%, transparent);
+  --j-accent-grad: linear-gradient(135deg, #cf8412 0%, #c264e6 100%);
+}
+/* Each preset declares only its 4 hue vars (+ ink where a bright fill needs
+   dark text). The full token family — soft fills, gradient, title gradient,
+   focus glow and shadow — is DERIVED once in the grouped rule below, so every
+   accent recolors the whole UI cohesively in both themes. These base blocks
+   are the LIGHT-theme tones; the [data-theme="dark"] blocks brighten them. */
+[data-accent="sky"] {
+  --j-accent: #1f8fe0; --j-accent-strong: #0f6fc0;
+  --j-accent-2: #6c78ff; --j-accent-3: #3fb8e8;
+}
+[data-accent="emerald"] {
+  --j-accent: #0fa968; --j-accent-strong: #0a7d4d;
+  --j-accent-2: #3b9ae0; --j-accent-3: #34c98a;
+}
+[data-accent="sunset"] {
+  --j-accent: #e8643c; --j-accent-strong: #c44a26;
+  --j-accent-2: #e0507f; --j-accent-3: #f0945a;
+}
+[data-accent="rose"] {
+  --j-accent: #e0507f; --j-accent-strong: #c23363;
+  --j-accent-2: #8b5cf0; --j-accent-3: #f78da8;
+}
+/* 10 new presets — spectrum companions to the originals (light-theme tones). */
+[data-accent="indigo"] {
+  --j-accent: #4f55d6; --j-accent-strong: #3f45c0;
+  --j-accent-2: #7c5cff; --j-accent-3: #2f7fe6;
+}
+[data-accent="lavender"] {
+  --j-accent: #7d6ae0; --j-accent-strong: #6a55d0;
+  --j-accent-2: #c77ce0; --j-accent-3: #5aa9ff;
+}
+[data-accent="fuchsia"] {
+  --j-accent: #cf2a9a; --j-accent-strong: #b51f86;
+  --j-accent-2: #8f5cff; --j-accent-3: #ff6fae;
+}
+[data-accent="plum"] {
+  --j-accent: #8b3fb5; --j-accent-strong: #74309c;
+  --j-accent-2: #d05a8f; --j-accent-3: #7c5cff;
+}
+[data-accent="ruby"] {
+  --j-accent: #cf1f48; --j-accent-strong: #b3163c;
+  --j-accent-2: #ff6f8a; --j-accent-3: #ff7a5c;
+}
+[data-accent="coral"] {
+  --j-accent: #e05540; --j-accent-strong: #c8412e;
+  --j-accent-2: #f06fa0; --j-accent-3: #ffae6e;
+}
+[data-accent="gold"] {
+  --j-accent: #b07d0a; --j-accent-strong: #976a06;
+  --j-accent-2: #e0762e; --j-accent-3: #d9a92e;
+}
+[data-accent="lime"] {
+  --j-accent: #5f8f12; --j-accent-strong: #4f7a0e;
+  --j-accent-2: #2ba86a; --j-accent-3: #b0c93e;
+}
+[data-accent="mint"] {
+  --j-accent: #0fa37a; --j-accent-strong: #0c8a68;
+  --j-accent-2: #3fb6e0; --j-accent-3: #5fe0c0;
+}
+[data-accent="slate"] {
+  --j-accent: #5a7290; --j-accent-strong: #4a6080;
+  --j-accent-2: #7d93b0; --j-accent-3: #9db4d0;
+}
+/* 6 more presets — fill the remaining gaps on the wheel (light-theme tones). */
+[data-accent="cobalt"] {
+  --j-accent: #2f4fd0; --j-accent-strong: #2540b8;
+  --j-accent-2: #5f6ff0; --j-accent-3: #2f8fe6;
+}
+[data-accent="turquoise"] {
+  --j-accent: #0a9fb5; --j-accent-strong: #087e90;
+  --j-accent-2: #2f9fe0; --j-accent-3: #2fd0c0;
+}
+[data-accent="olive"] {
+  --j-accent: #7a8a1e; --j-accent-strong: #677518;
+  --j-accent-2: #a8902e; --j-accent-3: #9aa84a;
+}
+[data-accent="copper"] {
+  --j-accent: #b5602a; --j-accent-strong: #9c4f20;
+  --j-accent-2: #d98a4a; --j-accent-3: #c87850;
+}
+[data-accent="burgundy"] {
+  --j-accent: #9c1f44; --j-accent-strong: #84163a;
+  --j-accent-2: #c23363; --j-accent-3: #b04f6e;
+}
+[data-accent="peach"] {
+  --j-accent: #e07a52; --j-accent-strong: #c86440;
+  --j-accent-2: #f0a07a; --j-accent-3: #f5b888;
+}
+
+/* -- dark theme: brighter tones for contrast on deep glass --------------- */
+[data-theme="dark"][data-accent="violet"] {
+  --j-accent: #9d8bff; --j-accent-strong: #b3a4ff;
+  --j-accent-2: #d08cff; --j-accent-3: #6f9bff;
+  --j-accent-soft: color-mix(in srgb, #9d8bff 16%, transparent);
+  --j-accent-grad: linear-gradient(135deg, #9d8bff 0%, #d08cff 100%);
+}
+[data-theme="dark"][data-accent="teal"] {
+  --j-accent: #3fd2dc; --j-accent-strong: #6fe2ea;
+  --j-accent-2: #7fa6ff; --j-accent-3: #3fe0c0;
+  --j-accent-soft: color-mix(in srgb, #3fd2dc 16%, transparent);
+  --j-accent-grad: linear-gradient(135deg, #3fd2dc 0%, #7fa6ff 100%);
+}
+[data-theme="dark"][data-accent="amber"] {
+  --j-accent: #f0b048; --j-accent-strong: #f5c873;
+  --j-accent-2: #cf8cf0; --j-accent-3: #f0cf6a;
+  --j-accent-soft: color-mix(in srgb, #f0b048 18%, transparent);
+  --j-accent-grad: linear-gradient(135deg, #f0b048 0%, #cf8cf0 100%);
+}
+[data-theme="dark"][data-accent="sky"] {
+  --j-accent: #4fb8ff; --j-accent-strong: #6fc8ff;
+  --j-accent-2: #8b9bff; --j-accent-3: #5fd0f0;
+}
+[data-theme="dark"][data-accent="emerald"] {
+  --j-accent: #3fd99a; --j-accent-strong: #5fe6b0;
+  --j-accent-2: #5fb6f0; --j-accent-3: #5fe0b8;
+}
+[data-theme="dark"][data-accent="sunset"] {
+  --j-accent: #ff8a5c; --j-accent-strong: #ffa377;
+  --j-accent-2: #ff7aa6; --j-accent-3: #ffae6e;
+}
+[data-theme="dark"][data-accent="rose"] {
+  --j-accent: #ff7aa6; --j-accent-strong: #ff96ba;
+  --j-accent-2: #b07cff; --j-accent-3: #ff9cc0;
+}
+[data-theme="dark"][data-accent="indigo"] {
+  --j-accent: #8b90ff; --j-accent-strong: #a3a8ff;
+  --j-accent-2: #b0a0ff; --j-accent-3: #6f9bff;
+}
+[data-theme="dark"][data-accent="lavender"] {
+  --j-accent: #c4b6ff; --j-accent-strong: #d6ccff;
+  --j-accent-2: #e8b8f0; --j-accent-3: #8b9bff;
+  --j-accent-ink: #221a3d;
+}
+[data-theme="dark"][data-accent="fuchsia"] {
+  --j-accent: #f25cc8; --j-accent-strong: #f57ad4;
+  --j-accent-2: #b88cff; --j-accent-3: #ff8ec0;
+}
+[data-theme="dark"][data-accent="plum"] {
+  --j-accent: #c884e8; --j-accent-strong: #d6a0f0;
+  --j-accent-2: #f07ab0; --j-accent-3: #a98bff;
+}
+[data-theme="dark"][data-accent="ruby"] {
+  --j-accent: #ff5a78; --j-accent-strong: #ff7d94;
+  --j-accent-2: #ff8fa6; --j-accent-3: #ff9e6e;
+}
+[data-theme="dark"][data-accent="coral"] {
+  --j-accent: #ff8676; --j-accent-strong: #ffa192;
+  --j-accent-2: #ff8eb4; --j-accent-3: #ffbe86;
+}
+[data-theme="dark"][data-accent="gold"] {
+  --j-accent: #f5c542; --j-accent-strong: #f7d36a;
+  --j-accent-2: #ffae5c; --j-accent-3: #f0d96a;
+  --j-accent-ink: #2a1e02;
+}
+[data-theme="dark"][data-accent="lime"] {
+  --j-accent: #a6e04a; --j-accent-strong: #bce86e;
+  --j-accent-2: #5fe0a0; --j-accent-3: #d6ea6a;
+  --j-accent-ink: #16210a;
+}
+[data-theme="dark"][data-accent="mint"] {
+  --j-accent: #4fe8be; --j-accent-strong: #76eccc;
+  --j-accent-2: #5fd0f0; --j-accent-3: #8af0d6;
+  --j-accent-ink: #04261d;
+}
+[data-theme="dark"][data-accent="slate"] {
+  --j-accent: #9db4d0; --j-accent-strong: #b6c8de;
+  --j-accent-2: #8fa6c4; --j-accent-3: #c4d4e6;
+  --j-accent-ink: #0f151e;
+}
+[data-theme="dark"][data-accent="cobalt"] {
+  --j-accent: #6f86ff; --j-accent-strong: #8b9eff;
+  --j-accent-2: #9d8bff; --j-accent-3: #5fb0ff;
+}
+[data-theme="dark"][data-accent="turquoise"] {
+  --j-accent: #3fdcf0; --j-accent-strong: #6fe6f5;
+  --j-accent-2: #5fb0ff; --j-accent-3: #5fe8d8;
+  --j-accent-ink: #042024;
+}
+[data-theme="dark"][data-accent="olive"] {
+  --j-accent: #c4d24a; --j-accent-strong: #d6e06e;
+  --j-accent-2: #e0c45f; --j-accent-3: #b0d05f;
+  --j-accent-ink: #1c2008;
+}
+[data-theme="dark"][data-accent="copper"] {
+  --j-accent: #f09060; --j-accent-strong: #f5a87e;
+  --j-accent-2: #ffb86e; --j-accent-3: #f0a07a;
+}
+[data-theme="dark"][data-accent="burgundy"] {
+  --j-accent: #e0506e; --j-accent-strong: #e87088;
+  --j-accent-2: #f07a9a; --j-accent-3: #d96e8e;
+}
+[data-theme="dark"][data-accent="peach"] {
+  --j-accent: #ffb08e; --j-accent-strong: #ffc4a8;
+  --j-accent-2: #ffae8e; --j-accent-3: #ffd0b0;
+  --j-accent-ink: #2e1408;
+}
+
+/* -- derive the full token family for every extended accent from its hue
+      vars — focus glow, title gradient, soft fills and shadow all follow the
+      chosen accent in BOTH themes (var() resolves to whichever hue won). The
+      core trio violet/teal/amber keep their bespoke families in tokens.css. */
+[data-accent="sky"],       [data-accent="emerald"],   [data-accent="sunset"],
+[data-accent="rose"],      [data-accent="indigo"],    [data-accent="lavender"],
+[data-accent="fuchsia"],   [data-accent="plum"],      [data-accent="ruby"],
+[data-accent="coral"],     [data-accent="gold"],      [data-accent="lime"],
+[data-accent="mint"],      [data-accent="slate"],     [data-accent="cobalt"],
+[data-accent="turquoise"], [data-accent="olive"],     [data-accent="copper"],
+[data-accent="burgundy"],  [data-accent="peach"],     [data-accent="custom"] {
+  --j-accent-soft: color-mix(in srgb, var(--j-accent) 15%, transparent);
+  --j-accent-2-soft: color-mix(in srgb, var(--j-accent-2) 12%, transparent);
+  --j-accent-grad: linear-gradient(135deg, var(--j-accent) 0%, var(--j-accent-2) 100%);
+  --j-title-grad: linear-gradient(110deg,
+    color-mix(in srgb, var(--j-accent) 52%, #fff) 0%,
+    var(--j-accent) 34%, var(--j-accent-2) 66%, var(--j-accent-3) 100%);
+  --j-accent-glow: radial-gradient(120% 120% at 30% 0%,
+    color-mix(in srgb, var(--j-accent) 17%, transparent), transparent 70%);
+  --j-glow-accent: 0 0 0 3px color-mix(in srgb, var(--j-accent) 22%, transparent);
+  --j-glow-soft: 0 0 0 2px color-mix(in srgb, var(--j-accent) 12%, transparent);
+  --j-shadow-accent: 0 14px 40px -18px color-mix(in srgb, var(--j-accent-strong) 45%, transparent);
+}
+
+/* -- swatch dot colors (the 4 originals are styled in tokens.css) --------- */
+.accent-swatch[data-accent-choice="sky"]      .accent-swatch-dot { background: #4fb8ff; }
+.accent-swatch[data-accent-choice="emerald"]  .accent-swatch-dot { background: #3fd99a; }
+.accent-swatch[data-accent-choice="sunset"]   .accent-swatch-dot { background: #ff8a5c; }
+.accent-swatch[data-accent-choice="rose"]     .accent-swatch-dot { background: #ff7aa6; }
+.accent-swatch[data-accent-choice="indigo"]   .accent-swatch-dot { background: #7b82f5; }
+.accent-swatch[data-accent-choice="lavender"] .accent-swatch-dot { background: #a78bf0; }
+.accent-swatch[data-accent-choice="fuchsia"]  .accent-swatch-dot { background: #f25cc8; }
+.accent-swatch[data-accent-choice="plum"]     .accent-swatch-dot { background: #c06ee0; }
+.accent-swatch[data-accent-choice="ruby"]     .accent-swatch-dot { background: #f0405f; }
+.accent-swatch[data-accent-choice="coral"]    .accent-swatch-dot { background: #ff7a68; }
+.accent-swatch[data-accent-choice="gold"]     .accent-swatch-dot { background: #f0b429; }
+.accent-swatch[data-accent-choice="lime"]     .accent-swatch-dot { background: #8ed24b; }
+.accent-swatch[data-accent-choice="mint"]     .accent-swatch-dot { background: #2fd0a4; }
+.accent-swatch[data-accent-choice="slate"]     .accent-swatch-dot { background: #6e8bb0; }
+.accent-swatch[data-accent-choice="cobalt"]    .accent-swatch-dot { background: #5f7fff; }
+.accent-swatch[data-accent-choice="turquoise"] .accent-swatch-dot { background: #2fd6e6; }
+.accent-swatch[data-accent-choice="olive"]     .accent-swatch-dot { background: #aeb84a; }
+.accent-swatch[data-accent-choice="copper"]    .accent-swatch-dot { background: #d9783f; }
+.accent-swatch[data-accent-choice="burgundy"]  .accent-swatch-dot { background: #c23358; }
+.accent-swatch[data-accent-choice="peach"]     .accent-swatch-dot { background: #ff9e76; }
+
+
+/* -- swatch chip polish: roomier round chips + a ringed active state -------
+   The base (tokens.css) already wires the pill chip + gradient-border active
+   look. We refine the SELECTED state inside the modal so the active swatch
+   reads as a clearly *ringed* chip (reference: round chip with active ring),
+   and make the dot a touch larger with a soft halo in its own hue. Layout is
+   never shifted (border width stays 1px; ring is box-shadow only). */
+#settings-panel .accent-swatch-row {
+  gap: 8px 7px;
+  max-width: 560px;
+}
+#settings-panel .accent-swatch {
+  padding: 6px 13px 6px 9px;
+  transition:
+    border-color var(--j-dur-fast) var(--j-ease),
+    color var(--j-dur-fast) var(--j-ease),
+    transform var(--j-dur-fast) var(--j-ease),
+    box-shadow var(--j-dur-fast) var(--j-ease);
+}
+/* hover lifts the chip a hair and warms its border toward the live accent */
+#settings-panel .accent-swatch:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--j-accent) 38%, var(--j-border));
+}
+#settings-panel .accent-swatch:active {
+  transform: translateY(0);
+}
+/* glossy bead: solid hue (set per-accent) + a top highlight + drop shadow */
+#settings-panel .accent-swatch .accent-swatch-dot {
+  width: 15px;
+  height: 15px;
+  box-shadow:
+    inset 0 1.5px 1.5px -0.5px rgba(255, 255, 255, 0.55),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.2),
+    0 1px 3px -1px rgba(0, 0, 0, 0.45);
+}
+/* active chip: gradient border (from base) + an extra accent focus ring so
+   the selected swatch is unmistakable even at a glance. */
+#settings-panel .accent-swatch[aria-pressed="true"] {
+  box-shadow:
+    var(--j-glow-accent),
+    var(--j-shadow-1);
+}
+/* the active chip's dot gets a soft halo ring in the neutral accent so it
+   pops against the gradient border without a layout shift. */
+#settings-panel .accent-swatch[aria-pressed="true"] .accent-swatch-dot {
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.3),
+    0 0 0 2px color-mix(in srgb, var(--j-accent) 30%, transparent);
+}
+
+/* -- "Custom" chip: opens the Theme Studio. Its dot previews the live
+      custom gradient (set inline by aurora-ui.js); before any colour is picked
+      it shows a colour-wheel "create a theme" hint. */
+.accent-swatch-custom .accent-swatch-dot {
+  background:
+    conic-gradient(from 210deg,
+      #ff5a78, #ff9e5c, #f5c542, #8ed24b, #3fd99a,
+      #2fd6e6, #4fb8ff, #7b82f5, #a78bf0, #f25cc8, #ff5a78);
+}
+
+/* ── THEME STUDIO ─────────────────────────────────────────────────────────
+   A panel revealed under the picker while the custom theme is active: a live
+   preview (driven entirely by the live accent tokens) + two colour controls
+   (swatch + hex) + a WCAG AA badge + Surprise/Reset. */
+.aur-theme-studio[hidden] { display: none; }
+.aur-theme-studio .ts-preview {
+  display: flex;
+  align-items: center;
+  gap: var(--j-sp-3);
+  padding: var(--j-sp-3) var(--j-sp-4);
+  margin-bottom: var(--j-sp-3);
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-md);
+  background: var(--j-panel);
+  overflow: hidden;
+}
+.ts-preview-title {
+  font: 700 1.45rem/1 var(--j-font-display, var(--j-font-ui));
+  letter-spacing: 0.01em;
+  background: var(--j-title-grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  white-space: nowrap;
+}
+.ts-preview-bar {
+  flex: 1;
+  min-width: 48px;
+  height: 10px;
+  border-radius: var(--j-r-pill);
+  background: var(--j-accent-grad);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+.ts-preview-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--j-sp-2);
+}
+.ts-preview-btn {
+  padding: 5px 13px;
+  border-radius: var(--j-r-pill);
+  background: var(--j-accent);
+  color: var(--j-accent-ink);
+  font: 600 var(--j-fs-sm) var(--j-font-ui);
+  box-shadow: var(--j-shadow-accent);
+}
+.ts-preview-soft {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--j-accent-soft);
+  color: var(--j-accent);
+  font: 700 var(--j-fs-sm) var(--j-font-ui);
+  border: 1px solid color-mix(in srgb, var(--j-accent) 35%, transparent);
+}
+.ts-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--j-sp-3);
+}
+.ts-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ts-field-label {
+  font: 500 var(--j-fs-sm) var(--j-font-ui);
+  color: var(--j-ink-dim);
+}
+.ts-input-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--j-sp-2);
+  padding: 4px 10px 4px 4px;
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-sm);
+  background: var(--j-panel);
+  transition: border-color var(--j-dur-fast) var(--j-ease);
+}
+.ts-input-wrap:focus-within {
+  border-color: color-mix(in srgb, var(--j-accent) 50%, var(--j-border));
+  box-shadow: var(--j-glow-soft);
+}
+.ts-swatch {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  border-radius: calc(var(--j-r-sm) - 3px);
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18), 0 1px 2px -1px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+}
+.ts-swatch .ts-color {
+  position: absolute;
+  inset: -4px;
+  width: calc(100% + 8px);
+  height: calc(100% + 8px);
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  opacity: 0;
+  cursor: pointer;
+}
+.ts-hex {
+  width: 84px;
+  border: none;
+  background: none;
+  outline: none;
+  color: var(--j-ink);
+  font: 500 var(--j-fs-sm) var(--j-font-mono, ui-monospace, monospace);
+  letter-spacing: 0.02em;
+  text-transform: lowercase;
+}
+.ts-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--j-sp-3);
+  margin-top: var(--j-sp-3);
+}
+.ts-aa {
+  font: 600 var(--j-fs-sm) var(--j-font-ui);
+  padding: 4px 11px;
+  border-radius: var(--j-r-pill);
+  border: 1px solid var(--j-border);
+  color: var(--j-ink-dim);
+  white-space: nowrap;
+}
+.ts-aa.ts-aa-pass {
+  color: #1f9d6b;
+  border-color: color-mix(in srgb, #1f9d6b 45%, var(--j-border));
+  background: color-mix(in srgb, #1f9d6b 12%, transparent);
+}
+.ts-aa.ts-aa-fail {
+  color: #e0683c;
+  border-color: color-mix(in srgb, #e0683c 45%, var(--j-border));
+  background: color-mix(in srgb, #e0683c 12%, transparent);
+}
+.ts-foot-actions {
+  display: inline-flex;
+  gap: var(--j-sp-2);
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════════
+   §3 · ATMOSPHERE / SHAPE / DENSITY PRESETS
+   Wired by aurora-ui.js → documentElement.dataset.{atmos,shape,density}.
+   Defaults (no attribute) intentionally have NO rule → look unchanged.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* -- Atmosphere: nebula intensity on the .app-bg orbs + ::after wash ----- */
+/* (aurora-skin.css base: .app-bg .app-bg-orb { opacity:.6 } / ::after .5) */
+[data-atmos="calm"] .app-bg .app-bg-orb { opacity: 0.32; filter: blur(84px); }
+[data-atmos="calm"] .app-bg::after { opacity: 0.26; }
+[data-theme="light"][data-atmos="calm"] .app-bg .app-bg-orb { opacity: 0.26; }
+
+[data-atmos="cinematic"] .app-bg .app-bg-orb { opacity: 0.92; filter: blur(64px) saturate(1.15); }
+[data-atmos="cinematic"] .app-bg::after { opacity: 0.78; }
+[data-theme="light"][data-atmos="cinematic"] .app-bg .app-bg-orb { opacity: 0.7; }
+/* cinematic deepens the glow on the living orb + CTA buttons */
+[data-atmos="cinematic"] #orb,
+[data-atmos="cinematic"] .btn-primary { filter: saturate(1.12) brightness(1.03); }
+
+/* -- Shape: radius personality (remap the radius scale only) ------------- */
+[data-shape="soft"] {
+  --j-r-sm: 14px; --j-r-md: 20px; --j-r-lg: 28px; --j-r-xl: 38px;
+}
+[data-shape="sharp"] {
+  --j-r-sm: 3px; --j-r-md: 5px; --j-r-lg: 8px; --j-r-xl: 12px;
+}
+
+/* -- Density: tighten the conversation rhythm --------------------------- */
+/* base: .log .row { margin-top: --j-sp-5; gap: --j-sp-3 },
+   .log .bubble-user { padding: --j-sp-3 --j-sp-4 } */
+[data-density="compact"] .log .row { margin-top: var(--j-sp-3); gap: var(--j-sp-2); }
+[data-density="compact"] .log .row-user + .row-user,
+[data-density="compact"] .log .row-assistant + .row-assistant { margin-top: var(--j-sp-1); }
+[data-density="compact"] .log .bubble-user { padding: var(--j-sp-2) var(--j-sp-3); }
+[data-density="compact"] .log { padding-bottom: var(--j-sp-1); }
+
+
+/* ════════════════════════════════════════════════════════════════════════════
+   §4 · `aur-` SEGMENTED CONTROL (Atmosphere / Shape / Density chooser)
+   Glass pill track + active segment lifts onto a raised chip. Hover never
+   shifts layout (color/background only). Focus = accent ring.
+   ════════════════════════════════════════════════════════════════════════════ */
+.aur-seg {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 4px;
+  max-width: 420px;
+  padding: 4px;
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-pill);
+  background: color-mix(in srgb, var(--j-panel) 70%, transparent);
+  box-shadow: inset 0 1px 0 var(--j-hairline);
+}
+
+.aur-seg-btn {
+  padding: 0.48rem 0.6rem;
+  border: none;
+  border-radius: var(--j-r-pill);
+  background: none;
+  color: var(--j-ink-dim);
+  font: 600 var(--j-fs-sm) var(--j-font-ui);
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition:
+    color var(--j-dur-fast) var(--j-ease),
+    background var(--j-dur-fast) var(--j-ease),
+    box-shadow var(--j-dur-fast) var(--j-ease);
+}
+
+.aur-seg-btn:hover {
+  color: var(--j-ink);
+}
+
+.aur-seg-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--j-glow-accent);
+}
+
+/* active segment lifts onto a raised glass chip (reference: .set-seg .on). */
+.aur-seg-btn[aria-pressed="true"] {
+  color: var(--j-ink);
+  background: var(--j-raised);
+  box-shadow:
+    inset 0 1px 0 var(--j-hairline),
+    var(--j-shadow-1),
+    0 4px 14px -8px color-mix(in srgb, var(--j-accent) 50%, transparent);
+}
+
+/* the appearance-tweak blocks read as a calm, slightly indented group so the
+   three segmented controls feel related (Appearance cluster). */
+.aur-tweak-block .aur-seg {
+  margin-top: 0.15rem;
+}

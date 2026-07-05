@@ -1,0 +1,143 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   AURORA — MOBILE  (bottom tab strip · CSS-only · loads AFTER aurora-responsive)
+   ─────────────────────────────────────────────────────────────────────────
+   In index.html, loaded IMMEDIATELY AFTER aurora-responsive.css, BEFORE
+   aurora-onboard. Its only job: make the fixed bottom tab strip (Chat · Voice ·
+   Memory · Settings) visible + styled on PHONE/standalone PWA, and finish the
+   stage behavior (no clash with composer/scroll).
+
+   CONTRACT (same discipline as aurora-responsive):
+     • EVERY rule lives inside an @media — NEVER touches the desktop/base layout.
+     • Only var(--j-*) tokens; NO raw hex.
+     • New class prefixes: `mnav-` (strip) / `aur-` (helper).
+     • Motion only via transform/opacity; reduced-motion in aurora-responsive §12.
+     • The strip's JS (akana-mobile-nav.js) ALWAYS builds <nav class="mnav">;
+       VISIBILITY is gated here (mobile width / standalone).
+
+   Gate: (max-width:560px) and (pointer:coarse) → EXCLUDES small desktop
+   windows; plus (display-mode:standalone) → installed PWA always shows it.
+   Single-source height: --mnav-h (defined only in these @media → aurora-
+   responsive's var(--mnav-h,0px) falls to 0 outside phone, harmless).
+
+   VISIBILITY CONTRACT (without touching the base layer): the strip stays with
+   `hidden` in the DOM (akana-mobile-nav.js does NOT remove `hidden`). UA style
+   hides `hidden` → HIDDEN on desktop. The @media reveal rules below override
+   that and show it only on mobile/standalone.
+   IMPORTANT: Chromium's UA rule is `[hidden] { display: none !important }` —
+   no specificity (id included) can beat it; the only way is `!important`.
+   Previously the reveal rule was `body .mnav{display:grid}` and couldn't beat
+   the UA important, so the strip stayed display:none on phones, and with the
+   composer pushed up 56px it left an empty band at the bottom (UI bug). That's
+   why the reveal rule is written `display:grid !important`. Still no rule is
+   added to the base layer — header contract (each rule inside @media) is preserved.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   STRIP VISIBLE + STYLED — phone (≤560px touch) OR installed PWA
+   Media-list comma = logical OR: (narrow AND coarse) OR standalone.
+   So all visuals (position/height/glass surface/tab/indicator) apply fully on
+   BOTH gates — even a wide standalone PWA window doesn't come up unstyled.
+   Target device (Android A34, installed PWA) ALREADY meets both.
+   ═══════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 560px) and (pointer: coarse), (display-mode: standalone) {
+  :root {
+    /* Single-source height — aurora-responsive consumes this (composer offset +
+       #log-scroll bottom gap). Safe-area is added SEPARATELY (pure height here). */
+    --mnav-h: 56px;
+  }
+
+  body .mnav {
+    /* `!important` REQUIRED: specificity can't beat the UA's
+       `[hidden]{display:none !important}` — applied only to display (rest normal cascade). */
+    display: grid !important;
+    grid-template-columns: repeat(4, 1fr);
+    align-items: stretch;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: var(--j-z-nav);
+    height: calc(var(--mnav-h) + env(safe-area-inset-bottom, 0px));
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    /* Aurora glass surface — panel + top border + blur. */
+    background: var(--j-panel);
+    border-top: 1px solid var(--j-border);
+    box-shadow: var(--j-shadow-2);
+    -webkit-backdrop-filter: blur(18px) saturate(1.4);
+    backdrop-filter: blur(18px) saturate(1.4);
+  }
+
+  /* Tab button: vertical icon+label, full touch height.
+     position:relative → the inner .mnav-ind indicator (absolute) positions to it. */
+  body .mnav .mnav-tab {
+    position: relative;
+    appearance: none;
+    -webkit-appearance: none;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    min-height: 44px;
+    padding: var(--j-sp-1) 2px;
+    border: 0;
+    background: transparent;
+    color: var(--j-ink-dim);
+    font: inherit;
+    font-size: 0.66rem;
+    line-height: 1;
+    letter-spacing: 0.01em;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: color var(--j-dur-fast) var(--j-ease);
+  }
+
+  body .mnav .mnav-tab .mnav-ico {
+    width: 22px;
+    height: 22px;
+    display: block;
+    pointer-events: none;
+  }
+
+  body .mnav .mnav-tab .mnav-label {
+    pointer-events: none;
+    white-space: nowrap;
+  }
+
+  /* Active tab: accent color + tiny indicator above the icon. */
+  body .mnav .mnav-tab.is-active {
+    color: var(--j-accent);
+  }
+
+  body .mnav .mnav-tab .mnav-ind {
+    position: absolute;
+    top: 6px;
+    width: 18px;
+    height: 3px;
+    border-radius: var(--j-r-pill);
+    background: var(--j-accent);
+    opacity: 0;
+    transform: scaleX(0.4);
+    transform-origin: center;
+    transition:
+      opacity var(--j-dur-fast) var(--j-ease),
+      transform var(--j-dur-fast) var(--j-ease-snap);
+  }
+
+  body .mnav .mnav-tab.is-active .mnav-ind {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+
+  /* Pressed/focus-visible feedback (touch + keyboard accessibility). */
+  body .mnav .mnav-tab:active {
+    color: var(--j-accent-strong);
+  }
+
+  body .mnav .mnav-tab:focus-visible {
+    outline: 2px solid var(--j-accent);
+    outline-offset: -3px;
+    border-radius: var(--j-r-md);
+  }
+}

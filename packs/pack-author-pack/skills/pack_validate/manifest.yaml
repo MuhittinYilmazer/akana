@@ -1,0 +1,14 @@
+id: pack_validate
+version: 1
+title: "Pack: validate (schema + files)"
+description: "Validates a pack directory with packs.contract.cli for schema and file presence, and reports the result."
+triggers:
+  - "validate the pack"
+  - "is the pack valid"
+  - "validate pack"
+  - "check the pack schema"
+risk: low
+learn_from_success: true
+requires_approval: false
+cursor_skills: []
+tools_allowed: []

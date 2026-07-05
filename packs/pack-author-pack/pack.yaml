@@ -1,0 +1,16 @@
+# Pack Author Capability Pack — the meta-pack that AUTHORS new packs.
+#
+# Standard pack: the skills (skills/<id>/SKILL.md) and the persona
+# (personas/pack_architect.yaml) are AUTO-DISCOVERED — no `contains` block.
+# Offline, no external tools (uses the repo's own packs.contract.cli locally).
+
+pack:
+  id: "user/pack-author-pack"
+  version: "0.1.0"
+  created_by: "manual"
+  created_at: "2026-06-13"
+  title: "Pack Architect"
+  description: >
+    Authors and maintains new Capability Packs: scaffold (pack.yaml + skill stubs +
+    persona), add a skill to an existing pack, and validate against the contract
+    (packs.contract.cli). Offline; uses the repo's own tooling locally.

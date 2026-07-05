@@ -1,0 +1,242 @@
+{
+  "$defs": {
+    "Contains": {
+      "additionalProperties": true,
+      "description": "Content the pack registers with akana registries (reference lists).\n\nOnly the three content types the consumer actually registers are modelled:\n``skills`` and ``personas`` (auto-discovered from the folder layout, §1) and\n``tools`` (the external-MCP names, mirrored from ``dependencies.external_tools``\nfor listing convenience). A canonical pack omits this block entirely.",
+      "properties": {
+        "skills": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Skills",
+          "type": "array"
+        },
+        "tools": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tools",
+          "type": "array"
+        },
+        "personas": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Personas",
+          "type": "array"
+        }
+      },
+      "title": "Contains",
+      "type": "object"
+    },
+    "Dependencies": {
+      "additionalProperties": true,
+      "properties": {
+        "packs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Packs",
+          "type": "array"
+        },
+        "external_tools": {
+          "items": {
+            "$ref": "#/$defs/ExternalTool"
+          },
+          "title": "External Tools",
+          "type": "array"
+        }
+      },
+      "title": "Dependencies",
+      "type": "object"
+    },
+    "ExternalTool": {
+      "additionalProperties": true,
+      "description": "An external tool required by the pack (e.g. ghidra-mcp). Extra fields allowed.",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "kind": {
+          "default": "mcp_server",
+          "title": "Kind",
+          "type": "string"
+        },
+        "purpose": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Purpose"
+        },
+        "required": {
+          "default": false,
+          "title": "Required",
+          "type": "boolean"
+        },
+        "probe": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Probe"
+        },
+        "install_hint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Install Hint"
+        },
+        "setup_skill": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Setup Skill"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "ExternalTool",
+      "type": "object"
+    },
+    "Permissions": {
+      "additionalProperties": false,
+      "description": "Consent + PolicyEngine enforcement point. Empty network = offline.",
+      "properties": {
+        "network": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Network",
+          "type": "array"
+        },
+        "sandbox": {
+          "default": "container",
+          "enum": [
+            "host",
+            "container",
+            "gvisor",
+            "microvm",
+            "wasm",
+            "vm"
+          ],
+          "title": "Sandbox",
+          "type": "string"
+        },
+        "secure_vault_read": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Secure Vault Read",
+          "type": "array"
+        },
+        "file_system": {
+          "items": {
+            "type": "string"
+          },
+          "title": "File System",
+          "type": "array"
+        }
+      },
+      "title": "Permissions",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "L2 Capability Pack manifest (the ``pack:`` body in pack.yaml).",
+  "properties": {
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "version": {
+      "title": "Version",
+      "type": "string"
+    },
+    "created_by": {
+      "default": "manual",
+      "enum": [
+        "user-teaching",
+        "manual",
+        "marketplace"
+      ],
+      "title": "Created By",
+      "type": "string"
+    },
+    "created_at": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Created At"
+    },
+    "title": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Title"
+    },
+    "description": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Description"
+    },
+    "contains": {
+      "$ref": "#/$defs/Contains"
+    },
+    "dependencies": {
+      "$ref": "#/$defs/Dependencies"
+    },
+    "permissions": {
+      "$ref": "#/$defs/Permissions"
+    }
+  },
+  "required": [
+    "id",
+    "version"
+  ],
+  "title": "PackManifest",
+  "type": "object"
+}

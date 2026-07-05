@@ -1,0 +1,551 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   AURORA — WAVE 3 · ANSWER  (CSS-only, loads after aurora-chat.css)
+   ─────────────────────────────────────────────────────────────────────────
+   Pulls the assistant markdown ANSWER and the user bubble toward the Aurora
+   mockup (reference/aurora.css .answer ≈440-470 + .user-msg / .who treatment).
+   Not class names — LOOK is ported; markup/JS/id/class never change.
+
+   CONTRACT (akana-markdown.js + akana-chat-render.js):
+     .row.row-assistant > .msg-avatar("J") + .msg-body(.msg-label.meta +
+       .bubble-assistant.bubble-bot > .md-content[...])
+     Inside md-content: .md-h.md-h3 / .md-h4 headings, p, strong, ul/ol>li,
+       .md-lead, .md-task(.md-task-box), .md-quote, .md-inline-code,
+       .md-table-wrap>table.md-table, pre.md-code (at runtime .md-code-shell >
+       .md-code-head(.md-code-lang + .md-code-copy) + pre).
+     User: .bubble-user.
+
+   WHY THIS FILE: the BASE polish for the markdown body lives in akana-chat.css
+   (`.log .bubble-bot .md-*`, 0-2-1). This file loads AFTER aurora-chat.css and
+   targets rules with `body .log .row-assistant .bubble-assistant .md-content …`
+   specificity (overrides base rules; on ties, LAST loaded wins).
+
+   Principles:
+   - Colors/spacing/radius/shadow only via var(--j-*) (tokens.css). No raw hex.
+   - New helper classes are prefixed `aur-` (not needed in this file —
+     only existing contract classes are re-painted).
+   - Motion: only opacity/transform; disabled under prefers-reduced-motion.
+   - No flicker during stream (md-content--stream): color/spacing only, no rule
+     triggering reflow; caret rules (chat.css) are preserved.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   1 · ASSISTANT ROW — "J" gradient avatar + name + right-aligned time
+   akana-chat.css hides the avatar (Gemini bubble-less flow). The Aurora mockup
+   brings back the small gradient "J" badge; body stays full-width.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Row: avatar (top-aligned) + body. */
+body .log .row-assistant {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--j-sp-3);
+}
+
+/* "J" badge — gradient square chip; reference .who .ava scale. */
+body .log .row-assistant .msg-avatar {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  margin-top: 0.15rem;
+  border: none;
+  border-radius: var(--j-r-sm);
+  background: var(--j-accent-grad);
+  color: var(--j-accent-ink);
+  font-family: var(--j-font-display);
+  font-weight: 700;
+  font-size: 0.78rem;
+  line-height: 1;
+  box-shadow:
+    var(--j-glow-soft),
+    0 6px 16px -8px color-mix(in srgb, var(--j-accent) 70%, transparent);
+}
+
+/* On consecutive assistant rows the badge slot is preserved but invisible
+   (matches chat.css visibility:hidden) — layout doesn't shift. */
+body .log .row-assistant + .row-assistant .msg-avatar {
+  visibility: hidden;
+}
+
+/* Meta label ("Assistant · …"): readable small heading rhythm. */
+body .log .row-assistant .msg-body .msg-label {
+  margin-bottom: var(--j-sp-2);
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+  letter-spacing: 0.04em;
+  color: var(--j-ink-faint);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   2 · MD-CONTENT — body typography rhythm
+   reference .answer: 1rem / 1.7 line; comfortable gap between blocks.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+body .log .row-assistant .bubble-assistant .md-content,
+body .log .row-assistant .bubble-bot .md-content {
+  font-size: var(--j-fs-md);
+  line-height: 1.72;
+  color: var(--j-ink);
+}
+
+/* Block rhythm: first block has zero top-margin, later ones a comfortable gap. */
+body .log .row-assistant .bubble-assistant .md-content > *,
+body .log .row-assistant .bubble-bot .md-content > * {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+body .log .row-assistant .bubble-assistant .md-content > * + *,
+body .log .row-assistant .bubble-bot .md-content > * + * {
+  margin-top: 0.9rem;
+}
+
+body .log .row-assistant .bubble-assistant .md-content p,
+body .log .row-assistant .bubble-bot .md-content p {
+  color: var(--j-ink);
+}
+
+body .log .row-assistant .bubble-assistant .md-content strong,
+body .log .row-assistant .bubble-bot .md-content strong {
+  font-weight: 650;
+  color: var(--j-ink);
+}
+
+body .log .row-assistant .bubble-assistant .md-content em,
+body .log .row-assistant .bubble-bot .md-content em {
+  font-style: italic;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   3 · HEADINGS — h3 gradient text (iris→cyan→violet), h4 plain strong
+   reference .answer h3: var(--title-grad) → ours is var(--j-title-grad).
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+body .log .row-assistant .bubble-assistant .md-content .md-h,
+body .log .row-assistant .bubble-bot .md-content .md-h {
+  font-family: var(--j-font-display);
+  font-weight: 700;
+  letter-spacing: var(--j-tracking-tight);
+  line-height: 1.25;
+}
+
+/* h1/h2/h3 → flowing aurora gradient text (stage-title look). */
+body .log .row-assistant .bubble-assistant .md-content .md-h1,
+body .log .row-assistant .bubble-assistant .md-content .md-h2,
+body .log .row-assistant .bubble-assistant .md-content .md-h3,
+body .log .row-assistant .bubble-bot .md-content .md-h1,
+body .log .row-assistant .bubble-bot .md-content .md-h2,
+body .log .row-assistant .bubble-bot .md-content .md-h3 {
+  margin-top: 1.4rem;
+  font-size: 1.16rem;
+  background: var(--j-title-grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  /* no thin fallback color for selection visibility on gradient text — the
+     token gradient is already high-contrast; global ::selection rule stands. */
+}
+
+body .log .row-assistant .bubble-assistant .md-content .md-h1,
+body .log .row-assistant .bubble-bot .md-content .md-h1 {
+  font-size: 1.34rem;
+}
+
+body .log .row-assistant .bubble-assistant .md-content .md-h2,
+body .log .row-assistant .bubble-bot .md-content .md-h2 {
+  font-size: 1.24rem;
+}
+
+/* h4-h6: not gradient; strong ink heading. */
+body .log .row-assistant .bubble-assistant .md-content .md-h4,
+body .log .row-assistant .bubble-assistant .md-content .md-h5,
+body .log .row-assistant .bubble-assistant .md-content .md-h6,
+body .log .row-assistant .bubble-bot .md-content .md-h4,
+body .log .row-assistant .bubble-bot .md-content .md-h5,
+body .log .row-assistant .bubble-bot .md-content .md-h6 {
+  margin-top: 1.1rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--j-ink);
+}
+
+/* Lead paragraph (**...** single line) — slightly heavier/prominent intro. */
+body .log .row-assistant .bubble-assistant .md-content .md-lead,
+body .log .row-assistant .bubble-bot .md-content .md-lead {
+  font-size: 1.02rem;
+  color: var(--j-ink);
+}
+
+body .log .row-assistant .bubble-assistant .md-content .md-lead strong,
+body .log .row-assistant .bubble-bot .md-content .md-lead strong {
+  font-weight: 650;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   4 · LISTS — roomy rhythm, iris ::marker, bold head segment
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+body .log .row-assistant .bubble-assistant .md-content ul,
+body .log .row-assistant .bubble-assistant .md-content ol,
+body .log .row-assistant .bubble-bot .md-content ul,
+body .log .row-assistant .bubble-bot .md-content ol {
+  margin: 0;
+  padding-left: 1.35rem;
+  /* CAUTION: `display: flex` breaks ::marker counters — every row stayed as
+     "1." (in the browser, flex children fall out of list-item flow, so the
+     counter doesn't advance). We give the same roomy rhythm with block +
+     margin-top on each li, and use a manual counter for ol (below). */
+  display: block;
+}
+
+/* Nested lists keep their own rhythm (top gap only at block level). */
+body .log .row-assistant .bubble-assistant .md-content li > ul,
+body .log .row-assistant .bubble-assistant .md-content li > ol,
+body .log .row-assistant .bubble-bot .md-content li > ul,
+body .log .row-assistant .bubble-bot .md-content li > ol {
+  margin-top: 0.45rem;
+}
+
+body .log .row-assistant .bubble-assistant .md-content li,
+body .log .row-assistant .bubble-bot .md-content li {
+  line-height: 1.6;
+  padding-left: 0.15rem;
+}
+
+/* Instead of flex, margin gives roomy gaps between rows (except first item). */
+body .log .row-assistant .bubble-assistant .md-content li + li,
+body .log .row-assistant .bubble-bot .md-content li + li {
+  margin-top: 0.45rem;
+}
+
+/* OL: manual counter instead of native ::marker (flex/counter interaction is
+   buggy). Each ol resets its own counter, each li increments by 1, ::before
+   draws it as "n.". Native `list-style: none` avoids a double marker. */
+body .log .row-assistant .bubble-assistant .md-content ol,
+body .log .row-assistant .bubble-bot .md-content ol {
+  counter-reset: aur-ol;
+  list-style: none;
+}
+
+body .log .row-assistant .bubble-assistant .md-content ol > li,
+body .log .row-assistant .bubble-bot .md-content ol > li {
+  counter-increment: aur-ol;
+  position: relative;
+  padding-left: 1.3rem;
+}
+
+body .log .row-assistant .bubble-assistant .md-content ol > li::before,
+body .log .row-assistant .bubble-bot .md-content ol > li::before {
+  content: counter(aur-ol) ".";
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: var(--j-accent);
+  font-weight: 700;
+}
+
+/* UL keeps native ::marker (no issue for the bullet). */
+body .log .row-assistant .bubble-assistant .md-content ul > li::marker,
+body .log .row-assistant .bubble-bot .md-content ul > li::marker {
+  color: var(--j-accent);
+  font-weight: 700;
+}
+
+/* Task list (- [ ] / - [x]) — custom checkbox chip. */
+body .log .row-assistant .bubble-assistant .md-content ul.md-task-list,
+body .log .row-assistant .bubble-bot .md-content ul.md-task-list {
+  padding-left: 0;
+  list-style: none;
+}
+
+body .log .row-assistant .bubble-assistant .md-content .md-task,
+body .log .row-assistant .bubble-bot .md-content .md-task {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--j-sp-2);
+  padding-left: 0;
+}
+
+body .log .row-assistant .bubble-assistant .md-content .md-task-box,
+body .log .row-assistant .bubble-bot .md-content .md-task-box {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 1.05em;
+  height: 1.05em;
+  margin-top: 0.32em;
+  border: 1.5px solid color-mix(in srgb, var(--j-accent) 45%, var(--j-border-strong));
+  border-radius: 5px;
+  background: var(--j-accent-soft);
+  color: var(--j-accent-ink);
+  font-size: 0.74em;
+  line-height: 1;
+}
+
+body .log .row-assistant .bubble-assistant .md-content .md-task--done .md-task-box,
+body .log .row-assistant .bubble-bot .md-content .md-task--done .md-task-box {
+  background: var(--j-accent);
+  border-color: var(--j-accent);
+}
+
+body .log .row-assistant .bubble-assistant .md-content .md-task--done,
+body .log .row-assistant .bubble-bot .md-content .md-task--done {
+  color: var(--j-ink-dim);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   5 · INLINE CODE — iris-soft chip
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+body .log .row-assistant .bubble-assistant .md-content .md-inline-code,
+body .log .row-assistant .bubble-bot .md-content .md-inline-code {
+  font-family: var(--j-font-mono);
+  font-size: 0.86em;
+  padding: 0.12em 0.42em;
+  border-radius: 7px;
+  background: var(--j-accent-soft);
+  color: color-mix(in srgb, var(--j-accent) 72%, var(--j-ink));
+  border: 1px solid color-mix(in srgb, var(--j-accent) 22%, var(--j-border-strong));
+}
+
+/* Link — accent underline with offset. */
+body .log .row-assistant .bubble-assistant .md-content a.md-link,
+body .log .row-assistant .bubble-bot .md-content a.md-link {
+  color: var(--j-accent-strong);
+  text-underline-offset: 0.18em;
+  text-decoration-color: color-mix(in srgb, var(--j-accent) 45%, transparent);
+}
+
+body .log .row-assistant .bubble-assistant .md-content a.md-link:hover,
+body .log .row-assistant .bubble-bot .md-content a.md-link:hover {
+  text-decoration-color: var(--j-accent);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   6 · QUOTE (blockquote) — left 3px iris edge + iris-soft rounded callout
+   reference: the "142 tests passed…" box.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+body .log .row-assistant .bubble-assistant .md-content .md-quote,
+body .log .row-assistant .bubble-bot .md-content .md-quote {
+  margin: 0;
+  padding: 0.7rem 1rem 0.7rem 1.05rem;
+  border: 1px solid color-mix(in srgb, var(--j-accent) 18%, var(--j-border));
+  border-left: 3px solid var(--j-accent);
+  border-radius: var(--j-r-md);
+  background: color-mix(in srgb, var(--j-accent) 8%, transparent);
+  color: var(--j-ink-dim);
+}
+
+body .log .row-assistant .bubble-assistant .md-content .md-quote > * + *,
+body .log .row-assistant .bubble-bot .md-content .md-quote > * + * {
+  margin-top: 0.5rem;
+}
+
+body .log .row-assistant .bubble-assistant .md-content .md-quote p,
+body .log .row-assistant .bubble-bot .md-content .md-quote p {
+  color: var(--j-ink-dim);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   7 · TABLE — rounded frame, iris-soft header, hairline divider + zebra
+   reference: the "System status" table.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+body .log .row-assistant .bubble-assistant .md-content .md-table-wrap,
+body .log .row-assistant .bubble-bot .md-content .md-table-wrap {
+  margin: 0;
+  border: 1px solid var(--j-border-strong);
+  border-radius: var(--j-r-md);
+  overflow: hidden;
+  overflow-x: auto;
+  box-shadow: var(--j-shadow-1);
+}
+
+body .log .row-assistant .bubble-assistant .md-content table.md-table,
+body .log .row-assistant .bubble-bot .md-content table.md-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--j-fs-sm);
+  line-height: 1.5;
+}
+
+/* Header row: iris-soft tint + bold. */
+body .log .row-assistant .bubble-assistant .md-content table.md-table th,
+body .log .row-assistant .bubble-bot .md-content table.md-table th {
+  text-align: left;
+  padding: 0.55rem 0.8rem;
+  font-weight: 650;
+  color: var(--j-ink);
+  background: color-mix(in srgb, var(--j-accent) 13%, var(--j-raised));
+  border: none;
+  border-bottom: 1px solid var(--j-border-strong);
+}
+
+/* Body cells: hairline divider. */
+body .log .row-assistant .bubble-assistant .md-content table.md-table td,
+body .log .row-assistant .bubble-bot .md-content table.md-table td {
+  padding: 0.5rem 0.8rem;
+  color: var(--j-ink);
+  border: none;
+  border-bottom: 1px solid var(--j-border);
+}
+
+body .log .row-assistant .bubble-assistant .md-content table.md-table tbody tr:last-child td,
+body .log .row-assistant .bubble-bot .md-content table.md-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* Thin zebra striping. */
+body .log .row-assistant .bubble-assistant .md-content table.md-table tbody tr:nth-child(even) td,
+body .log .row-assistant .bubble-bot .md-content table.md-table tbody tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--j-panel) 55%, transparent);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   8 · CODE BLOCKS — framed panel + header strip (lang + Copy)
+   .md-code-shell > .md-code-head(.md-code-lang + .md-code-copy) + pre.md-code
+   reference .answer pre + .ph treatment.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+body .log .row-assistant .bubble-assistant .md-code-shell,
+body .log .row-assistant .bubble-bot .md-code-shell {
+  margin: 0;
+  border: 1px solid var(--j-border-strong);
+  border-radius: var(--j-r-md);
+  background: color-mix(in srgb, var(--j-bg) 78%, var(--j-raised));
+  box-shadow: var(--j-shadow-1);
+  overflow: hidden;
+}
+
+/* Header strip: slightly raised background + bottom hairline. */
+body .log .row-assistant .bubble-assistant .md-code-shell .md-code-head,
+body .log .row-assistant .bubble-bot .md-code-shell .md-code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--j-sp-2);
+  padding: 0.42rem 0.55rem 0.42rem 0.8rem;
+  background: color-mix(in srgb, var(--j-raised) 88%, var(--j-bg));
+  border-bottom: 1px solid var(--j-border);
+}
+
+body .log .row-assistant .bubble-assistant .md-code-shell .md-code-lang,
+body .log .row-assistant .bubble-bot .md-code-shell .md-code-lang {
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+  letter-spacing: 0.1em;
+  text-transform: lowercase;
+  color: var(--j-accent-strong);
+}
+
+body .log .row-assistant .bubble-assistant .md-code-shell .md-code-copy,
+body .log .row-assistant .bubble-bot .md-code-shell .md-code-copy {
+  appearance: none;
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+  color: var(--j-ink-dim);
+  background: transparent;
+  border: 1px solid var(--j-border);
+  border-radius: 7px;
+  padding: 0.12rem 0.5rem;
+  cursor: pointer;
+  transition:
+    color var(--j-dur-fast) var(--j-ease),
+    border-color var(--j-dur-fast) var(--j-ease),
+    background var(--j-dur-fast) var(--j-ease);
+}
+
+body .log .row-assistant .bubble-assistant .md-code-shell .md-code-copy:hover,
+body .log .row-assistant .bubble-bot .md-code-shell .md-code-copy:hover {
+  color: var(--j-ink);
+  border-color: var(--j-border-strong);
+  background: var(--j-accent-soft);
+}
+
+body .log .row-assistant .bubble-assistant .md-code-shell .md-code-copy.is-copied,
+body .log .row-assistant .bubble-bot .md-code-shell .md-code-copy.is-copied {
+  color: var(--j-energy);
+  border-color: color-mix(in srgb, var(--j-energy) 45%, var(--j-border));
+  background: color-mix(in srgb, var(--j-energy) 10%, transparent);
+}
+
+body .log .row-assistant .bubble-assistant .md-code-shell .md-code-copy.is-failed,
+body .log .row-assistant .bubble-bot .md-code-shell .md-code-copy.is-failed {
+  color: var(--j-danger);
+  border-color: color-mix(in srgb, var(--j-danger) 45%, var(--j-border));
+}
+
+/* pre inside the strip: no frame; long blocks scroll inside. */
+body .log .row-assistant .bubble-assistant .md-code-shell pre.md-code,
+body .log .row-assistant .bubble-bot .md-code-shell pre.md-code {
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+
+body .log .row-assistant .bubble-assistant .md-code-shell pre.md-code code,
+body .log .row-assistant .bubble-bot .md-code-shell pre.md-code code {
+  display: block;
+  padding: 0.8rem 0.85rem;
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-sm);
+  line-height: 1.6;
+  white-space: pre;
+  overflow-x: auto;
+  color: color-mix(in srgb, var(--j-ink) 92%, var(--j-accent));
+}
+
+/* Not-yet-closed (stream) block — strip-less, dashed frame (matches chat.css). */
+body .log .row-assistant .bubble-assistant .md-content pre.md-code--partial,
+body .log .row-assistant .bubble-bot .md-content pre.md-code--partial {
+  margin: 0;
+  border: 1px dashed color-mix(in srgb, var(--j-accent) 30%, var(--j-border));
+  border-radius: var(--j-r-md);
+  background: color-mix(in srgb, var(--j-bg) 78%, var(--j-raised));
+  opacity: 0.94;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   9 · USER BUBBLE — right-aligned aurora-soft (iris tint) rounded capsule
+   reference .user-msg.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+body .log .bubble-user {
+  max-width: min(34rem, 86%);
+  margin-left: auto;
+  padding: 0.8rem 1.1rem;
+  border: 1px solid color-mix(in srgb, var(--j-accent) 26%, var(--j-border));
+  border-radius: var(--j-r-lg) var(--j-r-lg) var(--j-r-sm) var(--j-r-lg);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--j-accent) 15%, transparent),
+    color-mix(in srgb, var(--j-accent-2) 13%, transparent)
+  );
+  color: var(--j-ink);
+  font-size: var(--j-fs-md);
+  line-height: 1.6;
+  /* Preserve the line breaks / indentation the user typed in their own message:
+     the bubble is filled via escapeHtml(text) (safe), but without pre-wrap a
+     multi-line / formatted prompt collapses into one flat paragraph (format loss).
+     overflow-wrap keeps very long unbroken tokens (URLs) from overflowing. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  box-shadow: inset 0 1px 0 var(--j-hairline), var(--j-shadow-1);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   10 · REDUCED MOTION
+   ═══════════════════════════════════════════════════════════════════════════ */
+@media (prefers-reduced-motion: reduce) {
+  body .log .row-assistant .bubble-assistant .md-code-shell .md-code-copy,
+  body .log .row-assistant .bubble-bot .md-code-shell .md-code-copy,
+  body .log .row-assistant .bubble-assistant .md-content a.md-link,
+  body .log .row-assistant .bubble-bot .md-content a.md-link {
+    transition: none !important;
+  }
+}

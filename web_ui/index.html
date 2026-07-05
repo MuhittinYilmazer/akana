@@ -1,0 +1,1049 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light" data-cockpit="off" data-accent="cyan">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+  <meta name="color-scheme" content="dark light" />
+  <meta name="theme-color" content="#06080d" />
+  <!-- PWA: "Add to home screen" on mobile → full-screen standalone cockpit -->
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="application-name" content="Akana" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="Akana" />
+  <link rel="icon" type="image/svg+xml" href="/static/icons/favicon.svg?v=3" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/icons/favicon-32.png?v=3" />
+  <link rel="apple-touch-icon" href="/static/icons/icon-192.png?v=3" />
+  <script>
+    // PHONE PAIRING: the desktop cockpit's QR carries `/#token=<bearer>`.
+    // When the phone scans it and opens `/`, the token is written to localStorage
+    // and the fragment is stripped from the URL — no typing required. CRITICAL:
+    // Must run BEFORE Service Worker registration; otherwise the SW may cache
+    // the token-less `/` response and break future loads. The hash never reaches
+    // the server (fragment) and is cleaned from history via replaceState.
+    try {
+      var _ht = location.hash.match(/token=([^&]+)/);
+      if (_ht) {
+        localStorage.setItem("akana.apiToken", decodeURIComponent(_ht[1]));
+        history.replaceState(null, "", location.pathname + location.search);
+      }
+    } catch (e) {}
+  </script>
+  <script>
+    // Service worker only registers in a SECURE CONTEXT (HTTPS / localhost).
+    // Tailscale Serve over HTTPS makes PWA installation possible; over plain
+    // http (Tailscale IP) navigator.serviceWorker is undefined → silently
+    // skipped, the app still works.
+    if ("serviceWorker" in navigator) {
+      // Post-deploy stale-UI fix: when a NEW service worker takes over
+      // (controllerchange) reload the page ONCE → fresh HTML/JS arrives,
+      // the user doesn't need to manually "Clear Site Data" / hard-reload.
+      // `hadController` excludes the very first install (otherwise there
+      // would be a pointless reload on first visit); the guard prevents
+      // reload loops.
+      const hadController = !!navigator.serviceWorker.controller;
+      let reloading = false;
+      navigator.serviceWorker.addEventListener("controllerchange", () => {
+        if (!hadController || reloading) return;
+        reloading = true;
+        location.reload();
+      });
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {});
+      });
+    }
+  </script>
+  <title>Akana</title>
+  <!-- FOUC prevention: saved theme (akana.theme) is applied BEFORE the first
+       paint; the same key is used by the persistent source akana-settings.js
+       (applyThemePreference). -->
+  <script>
+    (() => {
+      // EMERGENCY RESET GATE: when navigating with `?reset=1`, ALL akana.*
+      // local state (localStorage + sessionStorage) is cleared. If a broken/dev
+      // stored-state freezes the boot, the user can start fresh with a single
+      // URL — no need to fight "Clear Site Data" in the browser. Also, since
+      // `/?reset=1` is a NEW URL the cached index.html cannot be used →
+      // fresh HTML + fresh JS also arrive (solves cache + state together).
+      // Runs BEFORE everything, with no modules loaded.
+      try {
+        if (/[?&]reset\b/i.test(location.search)) {
+          for (let i = localStorage.length - 1; i >= 0; i -= 1) {
+            const k = localStorage.key(i);
+            if (k && k.indexOf("akana.") === 0) localStorage.removeItem(k);
+          }
+          try { sessionStorage.clear(); } catch (e) { /* ignore */ }
+          // Nuclear reset: in addition to local state, unregister the service
+          // worker + delete all caches (fire-and-forget). Since `/?reset=1` is
+          // already a new URL this load gets fresh HTML/JS; this cleanup also
+          // leaves the NEXT load SW-free/cache-free → stale shell fully resolved.
+          try {
+            if ("serviceWorker" in navigator) {
+              navigator.serviceWorker.getRegistrations()
+                .then((rs) => rs.forEach((r) => r.unregister()))
+                .catch(() => {});
+            }
+            if (window.caches && caches.keys) {
+              caches.keys().then((ks) => ks.forEach((k) => caches.delete(k))).catch(() => {});
+            }
+          } catch (e) { /* ignore */ }
+        }
+      } catch (e) {
+        /* localStorage closed/inaccessible — ignore */
+      }
+      try {
+        const root = document.documentElement;
+        const saved = localStorage.getItem("akana.theme");
+        // Aurora: light-first — if no saved preference, open as LIGHT.
+        const resolved = saved === "light" || saved === "dark" ? saved : "light";
+        root.dataset.theme = resolved;
+        // ACCENT is also applied BEFORE the first paint — otherwise the default
+        // accent in HTML would briefly flash until aurora-ui.js (defer)
+        // runs. For 'custom', the pre-computed derived variables that aurora-ui.js
+        // stores per-theme are read (no colour math needed here).
+        const accent = localStorage.getItem("cockpit:accent") || "cyan";
+        root.dataset.accent = accent;
+        if (accent === "custom") {
+          const fam = (JSON.parse(localStorage.getItem("cockpit:accentCustomCss") || "{}") || {})[resolved];
+          if (fam) {
+            root.style.setProperty("--j-accent", fam.accent);
+            root.style.setProperty("--j-accent-strong", fam.strong);
+            root.style.setProperty("--j-accent-2", fam.a2);
+            root.style.setProperty("--j-accent-3", fam.a3);
+            root.style.setProperty("--j-accent-ink", fam.ink);
+          }
+        }
+      } catch {
+        /* if localStorage is unavailable the default theme/accent remains */
+      }
+    })();
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap"
+    rel="stylesheet"
+  />
+  <!-- ?v=auto is a placeholder: the server rewrites every /static ?v= to a
+       content hash at render time (render_versioned_html). Do not bump by hand. -->
+  <link rel="stylesheet" href="/static/tokens.css?v=auto" />
+  <link rel="stylesheet" href="/static/styles.css?v=auto" />
+  <link rel="stylesheet" href="/static/akana-chat.css?v=auto" />
+  <!-- NEBULA v2 skin — loaded LAST, overrides the old shell (full rewrite) -->
+  <link rel="stylesheet" href="/static/akana-v2.css?v=auto" />
+  <link rel="stylesheet" href="/static/akana-v2-surfaces.css?v=auto" />
+  <link rel="stylesheet" href="/static/aurora-skin.css?v=auto" />
+  <link rel="stylesheet" href="/static/aurora-chat.css?v=auto" />
+  <link rel="stylesheet" href="/static/aurora-answer.css?v=auto" />
+  <link rel="stylesheet" href="/static/aurora-shell.css?v=auto" />
+  <link rel="stylesheet" href="/static/aurora-settings.css?v=auto" />
+  <link rel="stylesheet" href="/static/aurora-voice.css?v=auto" />
+  <link rel="stylesheet" href="/static/aurora-overlays.css?v=auto" />
+  <link rel="stylesheet" href="/static/aurora-motion.css?v=auto" />
+  <link rel="stylesheet" href="/static/aurora-states.css?v=auto" />
+  <link rel="stylesheet" href="/static/aurora-responsive.css?v=auto" />
+  <!-- Mobile bottom tab strip — AFTER aurora-responsive, BEFORE onboard
+       (same specificity; loaded later → wins without !important). -->
+  <link rel="stylesheet" href="/static/aurora-mobile.css?v=auto" />
+  <link rel="stylesheet" href="/static/aurora-onboard.css?v=auto" />
+  <link rel="stylesheet" href="/static/akana-artifacts.css?v=auto" />
+  <link rel="stylesheet" href="/static/akana-pair.css?v=auto" />
+  <!-- PREMIUM SKIN — "Paper & Iris": MUST load LAST so its token retone wins by
+       cascade order over every layer above. Load-bearing contract: keep this the
+       final stylesheet, and keep akana-premium.css's --j-accent* bucket-scoped
+       (cyan/azure) — hoisting those to :root would clobber the accent presets. -->
+  <link rel="stylesheet" href="/static/akana-premium.css?v=auto" />
+</head>
+<body>
+  <div class="app-bg" aria-hidden="true">
+    <span class="app-bg-grid"></span>
+    <span class="app-bg-orb app-bg-orb-a"></span>
+    <span class="app-bg-orb app-bg-orb-b"></span>
+  </div>
+
+  <!-- NEBULA COMMAND CENTER frame: full-height sidebar + stage.
+       JS contract: all ids are preserved; only their positions changed. -->
+  <div class="app-frame">
+    <aside class="chat-archive panel sidebar" id="chat-archive" aria-label="Chat history" data-i18n-aria-label="nav.history_aria">
+      <div class="sidebar-brand">
+        <span class="brand-mark" aria-hidden="true">
+          <span id="orb" class="orb orb-idle"></span>
+        </span>
+        <div class="brand-text">
+          <h1>Akana</h1>
+        </div>
+      </div>
+      <button type="button" id="btn-new-conv" class="btn-ghost btn-new-chat sidebar-new-chat" title="New chat" aria-label="New chat" data-i18n-title="nav.new_chat" data-i18n-aria-label="nav.new_chat">
+        <svg class="btn-new-chat-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 5v14M5 12h14" />
+        </svg>
+        <span class="btn-label-full" data-i18n="nav.new_chat">New chat</span>
+      </button>
+      <div class="chat-archive-head">
+        <div class="chat-archive-head-row">
+          <h2 class="chat-archive-title" data-i18n="nav.conversations">Conversations</h2>
+          <div class="chat-archive-head-actions">
+            <button type="button" id="btn-archive-close" class="btn-icon btn-archive-close" aria-label="Close list" data-i18n-aria-label="chat.archive_close_aria" title="Close" data-i18n-title="chat.archive_close_title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M18 6L6 18M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div class="chat-archive-tabs" role="tablist" aria-label="Chat view" data-i18n-aria-label="nav.history_view_aria">
+          <button type="button" class="chat-archive-tab is-active" data-archive-view="active" role="tab" aria-selected="true" data-i18n="nav.active">Active</button>
+          <button type="button" class="chat-archive-tab" data-archive-view="archived" role="tab" aria-selected="false" data-i18n="nav.archive">Archive</button>
+        </div>
+        <label class="chat-archive-search-wrap">
+          <span class="sr-only" data-i18n="chat.archive_search_ph">Search chats…</span>
+          <svg class="chat-archive-search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2" />
+            <path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M20 20l-3-3" />
+          </svg>
+          <input type="search" id="chat-archive-search" class="chat-archive-search" placeholder="Search chats…" autocomplete="off" data-i18n-placeholder="chat.archive_search_ph" />
+        </label>
+      </div>
+      <ul id="chat-archive-list" class="chat-archive-list" role="listbox" aria-label="Saved chats" data-i18n-aria-label="nav.saved_chats_aria"></ul>
+      <div class="sidebar-foot">
+        <a href="/memory" id="btn-memory-studio" class="btn-ghost btn-memory-nav sidebar-foot-link" title="Memory Studio" data-i18n-title="nav.memory_link_title">
+          <span class="memory-nav-badge" id="memory-nav-badge" aria-hidden="true" hidden></span>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 3.2 3.6 7.7 12 12.2l8.4-4.5L12 3.2ZM3.6 12.2 12 16.7l8.4-4.5M3.6 16.6 12 21.1l8.4-4.5" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+          </svg>
+          <span data-i18n="nav.memory_link_label">Memory</span>
+        </a>
+        <span class="sidebar-foot-spacer" aria-hidden="true"></span>
+        <button
+          type="button"
+          id="btn-settings"
+          class="btn-icon btn-settings-toggle"
+          aria-label="Open settings" data-i18n-aria-label="nav.settings_open_aria"
+          aria-expanded="false"
+          title="Settings" data-i18n-title="nav.settings_title"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 15a3 3 0 100-6 3 3 0 000 6z" />
+            <path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
+          </svg>
+        </button>
+        <button type="button" id="btn-theme" class="btn-icon" aria-label="Toggle theme" data-i18n-aria-label="nav.theme_toggle_aria" title="Theme" data-i18n-title="nav.theme_toggle_title">
+          <svg class="icon-theme-sun" width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="2" />
+            <path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M19.07 4.93l-1.41 1.41M4.93 19.07l1.41-1.41" />
+          </svg>
+          <svg class="icon-theme-moon" width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+            <path fill="currentColor" d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z" />
+          </svg>
+        </button>
+      </div>
+    </aside>
+
+    <div class="stage">
+      <header class="top top-bar">
+        <!-- Chat title + actions in ONE bar (separate toolbar strip removed) -->
+        <div class="chat-panel-toolbar" id="chat-thread-bar">
+          <button
+            type="button"
+            id="btn-toggle-archive"
+            class="btn-icon btn-archive-toggle"
+            aria-label="Open chat list" data-i18n-aria-label="chat.toggle_archive_aria"
+            aria-expanded="false"
+            title="Chats" data-i18n-title="chat.toggle_archive_title"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4 6h16M4 12h16M4 18h10" />
+            </svg>
+          </button>
+          <h2 class="chat-thread-title" id="chat-thread-title" title=""></h2>
+          <div class="chat-thread-actions">
+            <button type="button" id="btn-thread-rename" class="btn-icon btn-thread-action" title="Rename" data-i18n-title="chat.rename_title" aria-label="Rename" data-i18n-aria-label="chat.rename_title">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 20h9M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4 12.5-12.5z" /></svg>
+            </button>
+            <button type="button" id="btn-thread-export" class="btn-icon btn-thread-action" title="Download as Markdown" data-i18n-title="chat.export_title" aria-label="Download chat" data-i18n-aria-label="chat.export_aria">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" /></svg>
+            </button>
+            <button type="button" id="btn-thread-pin" class="btn-icon btn-thread-action" title="Pin" data-i18n-title="chat.pin_title" aria-label="Pin" data-i18n-aria-label="chat.pin_title" aria-pressed="false">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 17v5M9 10.76a2 2 0 01-1.11 1.79l-1.78.9A2 2 0 005 15.24V16a1 1 0 001 1h12a1 1 0 001-1v-.76a2 2 0 00-1.11-1.79l-1.78-.9A2 2 0 0115 10.76V7a1 1 0 011-1 2 2 0 000-4H8a2 2 0 000 4 1 1 0 011 1z" /></svg>
+            </button>
+            <button type="button" id="btn-thread-telegram" class="btn-icon btn-thread-action" title="Continue on Telegram" data-i18n-title="chat.telegram_title" aria-label="Continue on Telegram" data-i18n-aria-label="chat.telegram_title">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M21 3L2 11.5l7 2.5M21 3l-3.5 17L9 14M21 3L9 14m0 0v6l3-3.4" /></svg>
+            </button>
+            <button type="button" id="btn-thread-delete" class="btn-icon btn-thread-action btn-thread-delete" title="Delete chat" data-i18n-title="chat.delete_title" aria-label="Delete chat" data-i18n-aria-label="chat.delete_title">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2M10 11v6M14 11v6" /></svg>
+            </button>
+          </div>
+        </div>
+        <nav class="top-nav" aria-label="Top menu" data-i18n-aria-label="chat.top_nav_aria">
+          <div class="status-group" role="group" aria-label="Connection status" data-i18n-aria-label="chat.connection_status_aria">
+            <span class="status-pill" id="model-pill" role="status" title="Active model" data-i18n-title="chat.model_pill_title" data-state="warn">
+              <span class="status-dot" aria-hidden="true"></span>
+              <span class="status-text">…</span>
+            </span>
+            <span class="status-pill status-pill-muted" id="ws-status" role="status" data-state="warn">
+              <span class="status-dot" aria-hidden="true"></span>
+              <span class="status-text">WS …</span>
+            </span>
+          </div>
+          <div class="top-actions">
+            <button type="button" id="btn-wake" class="btn-icon btn-wake" aria-pressed="false" title="Hey Akana" aria-label="Hey Akana">
+              <span class="btn-chip-dot" aria-hidden="true"></span>
+              <span class="btn-label-full">Hey Akana</span>
+            </button>
+          </div>
+        </nav>
+      </header>
+
+      <main class="layout layout-with-archive" id="layout">
+        <div id="chat-archive-backdrop" class="chat-archive-backdrop" aria-hidden="true"></div>
+        <section class="panel chat-panel" aria-label="Chat" data-i18n-aria-label="chat.panel_aria">
+      <div id="setup-banner" class="setup-banner" hidden role="status">
+        <div class="setup-banner-inner">
+          <p class="setup-banner-text" id="setup-banner-text"></p>
+          <button type="button" id="setup-banner-dismiss" class="btn-ghost btn-sm" data-i18n="composer.setup_dismiss">Close</button>
+        </div>
+      </div>
+      <div class="log-scroll" id="log-scroll">
+        <div id="log-empty" class="log-empty">
+          <div class="log-empty-icon" aria-hidden="true">
+            <svg width="44" height="44" viewBox="0 0 24 24" fill="none">
+              <path d="M12 3c4.97 0 9 3.13 9 7s-4.03 7-9 7c-.55 0-1.09-.04-1.62-.11L5 21l1.39-3.47C4.52 16.17 3 14.23 3 12c0-3.87 4.03-7 9-7z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
+            </svg>
+          </div>
+          <h2 class="log-empty-title" data-i18n="empty.greeting">Hello, I'm Akana</h2>
+          <p class="log-empty-sub" data-i18n="empty.sub">Provider and model dependent — Claude (subscription) or Cursor (API); select in Settings → Provider.</p>
+          <div class="prompt-chips" role="group" aria-label="Example prompts" data-i18n-aria-label="chat.example_prompts_aria">
+            <button type="button" class="prompt-chip" data-prompt="What do you recommend I do today?" data-i18n="prompt.plan">Suggest a plan</button>
+            <button type="button" class="prompt-chip" data-prompt="Summarise the system status." data-i18n="prompt.system_summary">System summary</button>
+            <button type="button" class="prompt-chip" data-prompt="Tell me a short joke." data-i18n="prompt.joke">Joke</button>
+          </div>
+          <p class="log-empty-keys" aria-label="Shortcuts" data-i18n-aria-label="chat.shortcuts_aria">
+            <span><span class="lk-keys"><kbd>Enter</kbd></span> <span data-i18n="empty.shortcut_send">send</span></span>
+            <span><span class="lk-keys"><kbd>Shift</kbd><kbd>Enter</kbd></span> <span data-i18n="empty.shortcut_newline">new line</span></span>
+            <span><span class="lk-keys"><kbd>Alt</kbd><kbd>N</kbd></span> <span data-i18n="idx.shortcut_new_chat">new chat</span></span>
+            <span><span class="lk-keys"><kbd>?</kbd></span> <span data-i18n="empty.shortcut_help">help</span></span>
+          </p>
+        </div>
+        <div id="log" class="log" role="log" aria-live="polite" aria-relevant="additions"></div>
+      </div>
+
+      <form id="chat-form" class="composer" autocomplete="off">
+        <div id="composer-attachments" class="composer-attachments" role="list" aria-label="Attachments" data-i18n-aria-label="composer.attachments_aria" hidden></div>
+        <div class="composer-inner">
+          <button type="button" id="btn-mic" class="btn-mic" aria-pressed="false" aria-label="Microphone" data-i18n-aria-label="composer.mic_aria" title="Record" data-i18n-title="composer.mic_title">
+            <svg class="mic-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="currentColor" d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3.2 3.21 5.86 6.91 6.35V20H9v2h6v-2h-2v-2.51c3.7-.48 6.42-3.15 6.91-6.35.1-.6-.39-1.14-1-1.14z" />
+            </svg>
+          </button>
+          <button type="button" id="btn-attach" class="btn-attach" aria-label="Attach file" data-i18n-aria-label="composer.attach_aria" title="Attach file (image / pdf / text …) — drag & drop also works" data-i18n-title="composer.attach_title">
+            <svg class="attach-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
+            </svg>
+          </button>
+          <input type="file" id="attach-input" accept=".png,.jpg,.jpeg,.webp,.gif,.pdf,.docx,.xlsx,.txt,.md,.csv,.json,image/*,application/pdf,text/plain" multiple hidden />
+          <div class="composer-field">
+            <label class="sr-only" for="msg" data-i18n="composer.msg_label">Message</label>
+            <textarea id="msg" rows="1" maxlength="32000" placeholder="Ask Akana anything…" data-i18n-placeholder="composer.placeholder"></textarea>
+          </div>
+          <div class="effort-menu" id="effort-menu">
+            <button
+              type="button"
+              id="btn-effort"
+              class="btn-effort"
+              aria-haspopup="listbox"
+              aria-expanded="false"
+              aria-controls="thinking-mode"
+              title="Thinking mode — Deep/Normal shows thinking steps in Claude; Fast skips planning" data-i18n-title="composer.effort_title"
+            >
+              <svg class="btn-effort-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path fill="currentColor" d="M12 2a7 7 0 00-7 7c0 2.4 1.2 4.5 3 5.7V17a2 2 0 002 2h4a2 2 0 002-2v-2.3c1.8-1.2 3-3.3 3-5.7a7 7 0 00-7-7zm-1 18h2v1h-2v-1z"/>
+              </svg>
+              <span class="btn-effort-label" id="effort-btn-label">Normal</span>
+            </button>
+            <div class="effort-popover" id="thinking-mode" role="listbox" aria-label="Thinking mode" data-i18n-aria-label="composer.effort_menu_aria" hidden>
+              <button type="button" class="effort-opt" data-mode="hizli" role="option" data-i18n="composer.effort_fast">Fast</button>
+              <button type="button" class="effort-opt is-active" data-mode="normal" role="option" aria-selected="true" data-i18n="composer.effort_normal">Normal</button>
+              <button type="button" class="effort-opt" data-mode="derin" role="option" data-i18n="composer.effort_deep">Deep</button>
+              <button type="button" class="effort-opt" data-mode="yogun" role="option" data-i18n="composer.effort_intense">Intense</button>
+              <button type="button" class="effort-opt" data-mode="azami" role="option" data-i18n="composer.effort_max">Max</button>
+              <button type="button" class="effort-opt" data-mode="ultra" role="option" data-i18n="composer.effort_ultra" hidden>Ultra</button>
+            </div>
+          </div>
+          <button type="button" id="btn-voice-stop" class="btn-voice-stop" aria-label="Cancel voice action (Esc)" title="Cancel — Esc" data-i18n-aria-label="composer.voice_cancel_aria" data-i18n-title="composer.voice_cancel_title" hidden>
+            <svg class="btn-voice-stop-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" />
+            </svg>
+            <span class="btn-voice-stop-label" data-i18n="composer.voice_cancel">Cancel</span>
+          </button>
+          <button type="submit" id="send" class="btn-send" aria-label="Send" data-mode="send" data-i18n-aria-label="composer.send_aria">
+            <svg class="btn-send-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="currentColor" d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+            </svg>
+            <svg class="btn-stop-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="6" y="6" width="12" height="12" rx="2.5" fill="currentColor" />
+            </svg>
+          </button>
+        </div>
+        <div class="composer-meta">
+          <p class="composer-hint" id="composer-hint" data-i18n="composer.hint_pick_model">Pick a model in Settings</p>
+          <span id="tts-queue-chip" class="tts-queue-chip" hidden role="status" aria-live="polite" title="TTS sentences queued" data-i18n-title="composer.tts_chip_title">
+            <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="currentColor" d="M3 9v6h4l5 5V4L7 9H3zm13.5 3a4.5 4.5 0 00-2.5-4v8a4.5 4.5 0 002.5-4z"/>
+            </svg>
+            <span id="tts-queue-count">0</span>
+          </span>
+        </div>
+      </form>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <div id="settings-backdrop" class="settings-backdrop" aria-hidden="true"></div>
+
+  <aside
+    class="panel settings-panel"
+    id="settings-panel"
+    aria-label="Settings" data-i18n-aria-label="settings.aria"
+    aria-modal="true"
+    aria-hidden="true"
+  >
+      <header class="settings-panel-head">
+        <div class="settings-panel-head-text">
+          <p class="settings-panel-eyebrow">Akana</p>
+          <h2 id="settings-dialog-title" data-i18n="settings.title">Settings</h2>
+          <p class="settings-panel-sub" data-i18n="settings.subtitle">Configure how Akana works</p>
+        </div>
+        <div class="settings-panel-head-actions">
+          <div class="settings-search" id="settings-search" role="search">
+            <div class="settings-search-wrap">
+              <svg class="settings-search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+              <input type="search" id="settings-search-input" class="settings-search-input" autocomplete="off" spellcheck="false" placeholder="Search settings…" data-i18n-placeholder="settings.search.placeholder" aria-label="Search settings" data-i18n-aria-label="settings.search.aria" role="combobox" aria-expanded="false" aria-controls="settings-search-results" aria-autocomplete="list" />
+              <button type="button" class="settings-search-clear" id="settings-search-clear" aria-label="Clear search" data-i18n-aria-label="settings.search.clear" hidden>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M18 6L6 18M6 6l12 12"/></svg>
+              </button>
+            </div>
+            <div class="settings-search-results" id="settings-search-results" role="listbox" aria-label="Search results" data-i18n-aria-label="settings.search.results_aria" hidden></div>
+          </div>
+          <button type="button" id="btn-settings-close" class="btn-icon btn-settings-close" aria-label="Close" data-i18n-aria-label="settings.close_aria">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M18 6L6 18M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <div class="settings-body">
+        <nav class="settings-nav" role="tablist" aria-label="Settings sections" data-i18n-aria-label="settings.nav_aria">
+        <button type="button" class="settings-tab is-active" role="tab" aria-selected="true" data-tab="overview" data-search="genel durum sistem özet sağlık">
+          <span class="settings-tab-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></svg></span>
+          <span class="settings-tab-text"><span class="settings-tab-label" data-i18n="settings.nav.overview">General</span><span class="settings-tab-desc" data-i18n="settings.nav.overview_desc">Status & shortcuts</span></span>
+          <span class="settings-tab-badge" data-nav-badge="overview" hidden></span>
+        </button>
+        <button type="button" class="settings-tab" role="tab" aria-selected="false" data-tab="llm" data-search="llm model sağlayıcı provider cursor claude geçmiş tur composer">
+          <span class="settings-tab-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2"/><path d="M15 20v2"/><path d="M2 15h2"/><path d="M2 9h2"/><path d="M20 15h2"/><path d="M20 9h2"/><path d="M9 2v2"/><path d="M9 20v2"/></svg></span>
+          <span class="settings-tab-text"><span class="settings-tab-label" data-i18n="settings.nav.llm">Provider</span><span class="settings-tab-desc" data-i18n="settings.nav.llm_desc">Provider & model</span></span>
+          <span class="settings-tab-badge" data-nav-badge="llm" hidden></span>
+        </button>
+        <button type="button" class="settings-tab" role="tab" aria-selected="false" data-tab="credentials" data-search="kimlik anahtar api key cursor claude token setup oauth">
+          <span class="settings-tab-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L21 4"/><path d="m21 2-9.6 9.6"/><circle cx="7.5" cy="15.5" r="5.5"/></svg></span>
+          <span class="settings-tab-text"><span class="settings-tab-label" data-i18n="settings.nav.credentials">Credentials</span><span class="settings-tab-desc" data-i18n="settings.nav.credentials_desc">API keys</span></span>
+          <span class="settings-tab-badge" data-nav-badge="credentials" hidden></span>
+        </button>
+        <button type="button" class="settings-tab" role="tab" aria-selected="false" data-tab="vault" data-search="vault kasa secure güvenli şifre parola hesap kimlik gizli secret reddit">
+          <span class="settings-tab-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
+          <span class="settings-tab-text"><span class="settings-tab-label" data-i18n="settings.nav.vault">Vault</span><span class="settings-tab-desc" data-i18n="settings.nav.vault_desc">Encrypted vault</span></span>
+        </button>
+        <button type="button" class="settings-tab" role="tab" aria-selected="false" data-tab="persona" data-search="persona kişilik sistem prompt system prompt karakter ton asistan">
+          <span class="settings-tab-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" x2="9.01" y1="9" y2="9"/><line x1="15" x2="15.01" y1="9" y2="9"/></svg></span>
+          <span class="settings-tab-text"><span class="settings-tab-label" data-i18n="settings.nav.persona">Persona</span><span class="settings-tab-desc" data-i18n="settings.nav.persona_desc">Personality & system prompt</span></span>
+        </button>
+        <button type="button" class="settings-tab" role="tab" aria-selected="false" data-tab="packs" data-search="pack paket beceri skill yetenek persona eklenti plugin kur aktif pasif">
+          <span class="settings-tab-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg></span>
+          <span class="settings-tab-text"><span class="settings-tab-label" data-i18n="settings.nav.packs">Packs</span><span class="settings-tab-desc" data-i18n="settings.nav.packs_desc">Capability packs</span></span>
+        </button>
+        <button type="button" class="settings-tab" role="tab" aria-selected="false" data-tab="voice" data-search="ses tts piper mikrofon wake uyandırma">
+          <span class="settings-tab-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg></span>
+          <span class="settings-tab-text"><span class="settings-tab-label" data-i18n="settings.nav.voice">Voice</span><span class="settings-tab-desc" data-i18n="settings.nav.voice_desc">TTS & microphone</span></span>
+          <span class="settings-tab-badge" data-nav-badge="voice" hidden></span>
+        </button>
+        <button type="button" class="settings-tab" role="tab" aria-selected="false" data-tab="appearance" data-search="görünüm tema koyu açık arayüz">
+          <span class="settings-tab-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path fill="currentColor" stroke="none" d="M12 3a9 9 0 0 1 0 18Z"/></svg></span>
+          <span class="settings-tab-text"><span class="settings-tab-label" data-i18n="settings.nav.appearance">Appearance</span><span class="settings-tab-desc" data-i18n="settings.nav.appearance_desc">Theme & layout</span></span>
+        </button>
+        <button type="button" class="settings-tab" role="tab" aria-selected="false" data-tab="connection" data-search="bağlantı api token websocket adres tailscale uzaktan erişim uzak vpn tailnet remote access qr funnel serve">
+          <span class="settings-tab-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect width="20" height="8" x="2" y="14" rx="2" ry="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/></svg></span>
+          <span class="settings-tab-text"><span class="settings-tab-label" data-i18n="settings.nav.connection">Connection</span><span class="settings-tab-desc" data-i18n="settings.nav.connection_desc">Server address</span></span>
+          <span class="settings-tab-badge" data-nav-badge="connection" hidden></span>
+        </button>
+        <a href="/memory" class="settings-tab settings-tab-link" data-search="hafıza bilgi inbox staging arama memory studio">
+          <span class="settings-tab-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></svg></span>
+          <span class="settings-tab-text"><span class="settings-tab-label" data-i18n="settings.nav.memory">Open Memory</span><span class="settings-tab-desc" data-i18n="settings.nav.memory_desc">Memory Studio</span></span>
+        </a>
+      </nav>
+
+        <div class="settings-main">
+      <div class="settings-pane-toolbar" aria-live="polite">
+        <nav class="settings-breadcrumb" aria-label="Location" data-i18n-aria-label="settings.breadcrumb_aria">
+          <span data-i18n="settings.breadcrumb_root">Settings</span>
+          <span class="settings-breadcrumb-sep" aria-hidden="true">/</span>
+          <span id="settings-breadcrumb-current" data-i18n="settings.breadcrumb_current_default">General</span>
+        </nav>
+        <p class="settings-pane-toolbar-desc" id="settings-toolbar-desc" data-i18n="settings.overview_toolbar_desc">Server status, health indicators and quick actions</p>
+      </div>
+      <div class="settings-scroll">
+        <section class="settings-pane is-active" id="settings-pane-overview" data-pane="overview" data-toolbar-desc-key="settings.overview_toolbar_desc" role="tabpanel">
+          <div class="settings-health-strip" id="settings-health-strip" aria-live="polite">
+            <span class="settings-health-pill" id="settings-health-overall" data-i18n="settings.overview_checking">Checking system…</span>
+          </div>
+          <div class="settings-hero settings-hero-rich" id="settings-hero">
+            <div class="settings-hero-main">
+              <p class="settings-hero-label" data-i18n="settings.hero_active_model">Active model</p>
+              <p class="settings-hero-value" id="settings-hero-model">…</p>
+              <p class="settings-hero-sub" id="settings-hero-profile">…</p>
+            </div>
+          </div>
+          <dl class="settings-meta-list settings-meta-list-rich" id="settings-overview-meta" hidden></dl>
+          <div class="stat-grid stat-grid-rich" id="settings-status-grid" aria-live="polite"><p class="hint" data-i18n="settings.loading_hint">Loading status…</p></div>
+          <div class="settings-block">
+            <h3 class="settings-block-title" data-i18n="settings.language.title">Language</h3>
+            <label class="field">
+              <span class="sr-only" data-i18n="settings.language.title">Language</span>
+              <select id="settings-language-select" class="settings-language-select">
+                <option value="en">English</option>
+                <option value="tr">Türkçe</option>
+              </select>
+            </label>
+            <p class="field-hint" data-i18n="settings.language.hint">The interface, voice, and Akana's default persona use this language.</p>
+          </div>
+        </section>
+        <section class="settings-pane" id="settings-pane-llm" data-pane="llm" data-toolbar-desc-key="settings.llm.toolbar_desc" role="tabpanel" hidden>
+          <header class="settings-pane-header settings-pane-header-compact">
+            <h3 data-i18n="settings.llm.title">Provider</h3>
+            <p class="settings-pane-desc" data-i18n="settings.llm.desc">LLM provider, model and context window</p>
+          </header>
+          <p class="hint settings-lead" id="model-profile-hint">…</p>
+
+          <div class="settings-block">
+            <h3 class="settings-block-title" data-i18n="settings.llm.provider_title">Provider</h3>
+            <label for="llm-provider" data-i18n="settings.llm.provider_label">Active provider</label>
+            <select id="llm-provider"></select>
+            <p class="field-hint" id="llm-provider-hint" data-i18n="settings.llm.provider_hint">Cursor = API key; Claude = subscription (setup-token). Keys are entered in the Credentials tab.<strong>Kimlik</strong> sekmesinden girilir.</p>
+          </div>
+
+          <div class="settings-block" id="llm-model-block">
+            <h3 class="settings-block-title" data-i18n="settings.llm.model_title">Model</h3>
+            <label for="llm-model" data-i18n="settings.llm.model_label">Active model</label>
+            <select id="llm-model"></select>
+            <p class="field-hint" id="llm-model-hint" data-i18n="settings.llm.model_hint">Models for the selected provider — fetched live; keys are entered in the Credentials tab.</p>
+          </div>
+
+          <div class="settings-block">
+            <h3 class="settings-block-title" data-i18n="settings.llm.context_title">Context</h3>
+            <label for="llm-chat-turns" data-i18n="settings.llm.turns_label">History (turns)</label>
+            <div class="input-row inline-save-row" id="llm-chat-turns-row">
+              <input id="llm-chat-turns" type="number" min="2" max="64" step="2" />
+              <button type="button" id="llm-save" class="btn-primary btn-sm inline-save" data-i18n="settings.runtime.save_btn">Save</button>
+            </div>
+            <p class="field-hint" data-i18n="settings.llm.turns_hint">How many recent turns Akana keeps. Re-sent to the LLM only when a session can't be resumed — otherwise the provider continues it server-side. More = more context + more expensive.</p>
+            <p class="hint llm-save-status" id="llm-save-status" role="status"></p>
+          </div>
+        </section>
+
+        <section class="settings-pane" id="settings-pane-persona" data-pane="persona" data-toolbar-desc-key="settings.persona.toolbar_desc" role="tabpanel" hidden>
+          <header class="settings-pane-header settings-pane-header-compact">
+            <h3 data-i18n="settings.persona.title">Persona</h3>
+            <p class="settings-pane-desc" data-i18n="settings.persona.desc">Assistant personality, tone and system prompt</p>
+          </header>
+          <div id="persona-root" aria-live="polite"></div>
+        </section>
+        <section class="settings-pane" id="settings-pane-packs" data-pane="packs" data-toolbar-desc-key="settings.packs.toolbar_desc" role="tabpanel" hidden>
+          <header class="settings-pane-header settings-pane-header-compact">
+            <h3 data-i18n="settings.packs.title">Packs</h3>
+            <p class="settings-pane-desc" data-i18n="settings.packs.desc">Installed capability packs — enable/disable, inspect contents</p>
+          </header>
+          <div id="packs-root" aria-live="polite"></div>
+        </section>
+
+        <section class="settings-pane" id="settings-pane-vault" data-pane="vault" data-toolbar-desc-key="settings.vault.toolbar_desc" role="tabpanel" hidden>
+          <header class="settings-pane-header settings-pane-header-compact">
+            <h3 data-i18n="settings.vault.title">Secure Vault</h3>
+            <p class="settings-pane-desc" data-i18n="settings.vault.desc">Sensitive data stored encrypted — view, add, edit, delete</p>
+          </header>
+          <div id="vault-root"><p class="field-hint" data-i18n="settings.vault.loading">Loading…</p></div>
+        </section>
+
+        <section class="settings-pane" id="settings-pane-credentials" data-pane="credentials" data-toolbar-desc-key="settings.cred.toolbar_desc" role="tabpanel" hidden>
+          <header class="settings-pane-header settings-pane-header-compact">
+            <h3 data-i18n="settings.cred.title">Credentials</h3>
+            <p class="settings-pane-desc" data-i18n="settings.cred.desc">Provider keys — stored on server, responses are masked</p>
+          </header>
+          <div class="info-callout settings-info-callout" data-i18n-html="settings.cred.callout">Keys are stored <strong>encrypted</strong> on the server and shown masked («set / …last4»). Click <strong>Show</strong> to reveal a stored key — every reveal is logged to the audit trail. A field left blank keeps its current value.</div>
+          <div class="settings-block">
+            <h3 class="settings-block-title" data-i18n="settings.cred.cursor_title">Cursor API key</h3>
+            <p class="field-hint cred-state" id="cred-cursor-state" data-i18n="settings.cred.cursor_checking">Checking status…</p>
+            <div class="cred-reveal-row">
+              <button type="button" id="btn-reveal-cred-cursor" class="btn-ghost btn-sm" data-i18n="settings.cred.reveal_btn" hidden>Show</button>
+              <code class="cred-revealed" id="cred-cursor-revealed" hidden></code>
+            </div>
+            <label for="cred-cursor-key"><span data-i18n="settings.cred.cursor_label">New key</span> <span class="label-optional">CURSOR_API_KEY</span></label>
+            <div class="input-row">
+              <input id="cred-cursor-key" type="password" autocomplete="off" spellcheck="false" placeholder="key_…" />
+              <button type="button" id="btn-toggle-cred-cursor" class="btn-ghost btn-sm" title="Show/hide" data-i18n-title="settings.cred.show_hide_title">👁</button>
+            </div>
+            <p class="field-hint" data-i18n="settings.cred.cursor_hint">Required for Cursor chat and tool calls — cursor.com/settings → API Keys.</p>
+          </div>
+          <div class="settings-block">
+            <h3 class="settings-block-title" data-i18n="settings.cred.claude_title">Claude setup-token</h3>
+            <p class="field-hint cred-state" id="cred-claude-state" data-i18n="settings.cred.claude_checking">Checking status…</p>
+            <div class="cred-reveal-row">
+              <button type="button" id="btn-reveal-cred-claude" class="btn-ghost btn-sm" data-i18n="settings.cred.reveal_btn" hidden>Show</button>
+              <code class="cred-revealed" id="cred-claude-revealed" hidden></code>
+            </div>
+            <label for="cred-claude-token"><span data-i18n="settings.cred.claude_label">New token</span> <span class="label-optional">claude setup-token</span></label>
+            <div class="input-row">
+              <input id="cred-claude-token" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…" />
+              <button type="button" id="btn-toggle-cred-claude" class="btn-ghost btn-sm" title="Show/hide" data-i18n-title="settings.cred.show_hide_title">👁</button>
+            </div>
+            <p class="field-hint" data-i18n-html="settings.cred.claude_hint">For use with Claude subscription: run <code>claude setup-token</code> in a terminal and paste the output here.</p>
+          </div>
+          <div class="settings-block">
+            <h3 class="settings-block-title" data-i18n="settings.cred.gemini_title">Gemini API key</h3>
+            <p class="field-hint cred-state" id="cred-gemini-state" data-i18n="settings.cred.gemini_checking">Checking status…</p>
+            <div class="cred-reveal-row">
+              <button type="button" id="btn-reveal-cred-gemini" class="btn-ghost btn-sm" data-i18n="settings.cred.reveal_btn" hidden>Show</button>
+              <code class="cred-revealed" id="cred-gemini-revealed" hidden></code>
+            </div>
+            <label for="cred-gemini-key"><span data-i18n="settings.cred.gemini_label">New key</span> <span class="label-optional">GEMINI_API_KEY</span></label>
+            <div class="input-row">
+              <input id="cred-gemini-key" type="password" autocomplete="off" spellcheck="false" placeholder="AIza…" />
+              <button type="button" id="btn-toggle-cred-gemini" class="btn-ghost btn-sm" title="Show/hide" data-i18n-title="settings.cred.show_hide_title">👁</button>
+            </div>
+            <p class="field-hint" data-i18n-html="settings.cred.gemini_hint_html">For the Gemini provider (direct Google API) + real-time Live voice — get the key from <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>.</p>
+          </div>
+          <div class="settings-block">
+            <h3 class="settings-block-title" data-i18n="settings.cred.openai_title">OpenAI API key</h3>
+            <p class="field-hint cred-state" id="cred-openai-state" data-i18n="settings.cred.openai_checking">Checking status…</p>
+            <div class="cred-reveal-row">
+              <button type="button" id="btn-reveal-cred-openai" class="btn-ghost btn-sm" data-i18n="settings.cred.reveal_btn" hidden>Show</button>
+              <code class="cred-revealed" id="cred-openai-revealed" hidden></code>
+            </div>
+            <label for="cred-openai-key"><span data-i18n="settings.cred.openai_label">New key</span> <span class="label-optional">OPENAI_API_KEY</span></label>
+            <div class="input-row">
+              <input id="cred-openai-key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…" />
+              <button type="button" id="btn-toggle-cred-openai" class="btn-ghost btn-sm" title="Show/hide" data-i18n-title="settings.cred.show_hide_title">👁</button>
+            </div>
+            <p class="field-hint" data-i18n-html="settings.cred.openai_hint_html">For the OpenAI provider (direct API) — get the key from <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com/api-keys</a>. Use <code>OPENAI_BASE_URL</code> for a compatible/custom endpoint.</p>
+          </div>
+          <div class="settings-row-actions">
+            <button type="button" id="cred-save" class="btn-primary" data-i18n="settings.cred.save">Save keys</button>
+            <p class="field-hint" id="cred-status" role="status"></p>
+          </div>
+        </section>
+
+        <section class="settings-pane" id="settings-pane-connection" data-pane="connection" data-toolbar-desc-key="settings.conn.toolbar_desc" role="tabpanel" hidden>
+          <header class="settings-pane-header settings-pane-header-compact">
+            <h3 data-i18n="settings.conn.title">Connection</h3>
+            <p class="settings-pane-desc" data-i18n="settings.conn.desc">API address and authentication</p>
+          </header>
+          <div class="info-callout settings-info-callout" data-i18n-html="settings.conn.callout_html"><strong>Browser</strong> stores only the API address and optional token (localStorage). Provider keys (Cursor / Claude) are saved to the server from the <strong>Credentials</strong> tab.</div>
+          <div class="endpoint-card" id="connection-endpoint-card">
+            <p class="endpoint-card-label" data-i18n="settings.conn.endpoint_label">Active endpoint</p>
+            <p class="endpoint-card-url" id="connection-effective-url">—</p>
+            <p class="endpoint-card-meta" id="connection-effective-meta">Token: — · WS: —</p>
+          </div>
+          <div class="settings-block">
+            <h3 class="settings-block-title" data-i18n="settings.conn.api_title">Akana API</h3>
+            <label for="base-url" data-i18n="settings.conn.url_label">Server address</label>
+            <div class="input-row">
+              <input id="base-url" type="url" autocomplete="off" spellcheck="false" />
+              <button type="button" id="btn-copy-base-url" class="btn-ghost btn-sm" title="Copy address" data-i18n-title="settings.conn.copy_url_title" data-i18n="settings.conn.copy_url">Copy</button>
+            </div>
+            <label for="api-token">API token <span class="label-optional">AKANA_TOKEN</span></label>
+            <div class="input-row">
+              <input id="api-token" type="password" autocomplete="off" placeholder="Empty = no token" data-i18n-placeholder="settings.conn.token_ph" />
+              <button type="button" id="btn-toggle-token" class="btn-ghost btn-sm" title="Show/hide" data-i18n-title="settings.cred.show_hide_title">👁</button>
+            </div>
+            <p class="field-hint" data-i18n-html="settings.conn.token_help_html">The API token gates who may talk to this server. It is the <code>AKANA_TOKEN</code> value from your <code>.env</code> file — the browser sends it with every request. Leave it blank only if the server was started with tokens disabled. On another device (e.g. your phone) enter the same value here.</p>
+            <div class="settings-row-actions">
+              <button type="button" id="btn-test-connection" class="btn-ghost btn-ghost-block" data-i18n="settings.conn.test_btn">Test connection</button>
+              <button type="button" id="btn-reconnect-ws" class="btn-ghost btn-ghost-block" data-i18n="settings.conn.reconnect_ws">Reconnect WebSocket</button>
+            </div>
+            <p class="field-hint" id="connection-save-status" role="status"></p>
+            <p class="field-hint" id="connection-test-result" role="status"></p>
+          </div>
+
+          <!-- Tailscale remote-access card. MUST stay STATIC markup here (do not lazily
+               inject): the ts-* listeners bind once by id at boot in akana-settings.js
+               wireSettingsChrome(); lazy injection would silently leave them unbound.
+               Live state is filled by renderTailscaleSnapshot(), loaded when the
+               Connection tab opens (switchSettingsTab → loadTailscale). -->
+          <div id="tailscale-panel" class="tailscale-panel">
+            <div class="settings-block ts-card">
+              <div class="connector-card-head">
+                <span class="connector-dot is-off" id="ts-dot"></span>
+                <span class="connector-card-id" data-i18n="settings.ts.title">Tailscale remote access</span>
+                <span class="connector-card-state" id="ts-state">Checking Tailscale…</span>
+              </div>
+              <p class="field-hint" data-i18n="settings.ts.desc">Reach Akana from your phone or another device over your private tailnet — no port-forwarding.</p>
+              <p class="field-hint ts-guidance" id="ts-guidance" hidden></p>
+              <a class="btn-ghost btn-sm ts-install-link" id="ts-install-link" target="_blank" rel="noopener" hidden data-i18n="settings.ts.install_link">Download Tailscale</a>
+              <div class="ts-controls" id="ts-controls" hidden>
+                <label class="ts-mode-label" for="ts-mode" data-i18n="settings.ts.mode_label">Exposure</label>
+                <select id="ts-mode" class="ts-mode-select">
+                  <option value="off" data-i18n="settings.ts.mode_off">Off</option>
+                  <option value="serve" data-i18n="settings.ts.mode_serve">Tailnet only (private)</option>
+                  <option value="funnel" id="ts-mode-funnel-opt" data-i18n="settings.ts.mode_funnel">Public internet (Funnel)</option>
+                </select>
+                <p class="connector-card-error ts-funnel-warning" id="ts-funnel-warning" hidden data-i18n="settings.ts.funnel_warning">⚠ Funnel publishes this instance on the PUBLIC internet. Anyone with the URL can reach the login — keep your access token strong.</p>
+                <p class="field-hint ts-funnel-needs-token" id="ts-funnel-needs-token" hidden data-i18n="settings.ts.funnel_needs_token">Funnel is disabled because no access token is set. Add one in the API token field above first.</p>
+                <div class="ts-url-row" id="ts-url-row" hidden>
+                  <span class="ts-url-label" data-i18n="settings.ts.url_label">Tailnet address</span>
+                  <code class="ts-url" id="ts-url"></code>
+                  <button type="button" id="ts-copy-url" class="btn-ghost btn-sm" data-i18n="settings.ts.copy_url">Copy</button>
+                </div>
+                <div class="ts-qr" id="ts-qr" hidden aria-hidden="true"></div>
+                <p class="field-hint" id="ts-qr-hint" hidden></p>
+              </div>
+              <div class="settings-row-actions ts-card-foot">
+                <button type="button" id="ts-refresh" class="btn-ghost btn-sm" data-i18n="settings.ts.refresh">Refresh</button>
+                <p class="field-hint" id="ts-status" role="status"></p>
+              </div>
+            </div>
+          </div>
+
+          <details class="settings-advanced conn-help">
+            <summary data-i18n="settings.conn.tailscale_title">How Tailscale works &amp; manual setup</summary>
+            <div class="conn-help-body" data-i18n-html="settings.conn.tailscale_html"><p>Akana runs locally on this machine — it is not published to the public internet. <strong>Tailscale</strong> is a private, encrypted network (a personal VPN) that lets your phone and other devices reach this machine directly, as if they were on the same home network — no port-forwarding or exposing the server.</p><p class="conn-help-steps-label">One-time setup:</p><ol class="conn-help-steps"><li>Install Tailscale on <strong>this machine</strong> and on <strong>your phone</strong>, then sign in to the <strong>same account</strong> on both.</li><li>Find this machine's Tailscale address — its name (e.g. <code>your-host.tailnet.ts.net</code>) or its <code>100.x.y.z</code> IP, shown in the Tailscale app.</li><li>On the phone's browser open <code>http://&lt;tailscale-address&gt;:&lt;port&gt;</code> (the port is shown in the effective endpoint above).</li><li>When asked to authenticate, enter the <strong>API token</strong> from the field above.</li><li>Tip: from the browser menu choose <em>Add to Home Screen</em> so Akana opens like an app.</li></ol><p>Prefer not to type the token on the phone? Use <strong>Connect your phone</strong> below to scan a QR that loads it automatically.</p></div>
+          </details>
+          <div class="settings-block pair-settings-block">
+            <h3 class="settings-block-title" data-i18n="settings.conn.pair_title">Connect phone</h3>
+            <p class="field-hint" data-i18n="settings.conn.pair_hint">Connect your phone without typing a token: scan the QR code with your phone's camera and the token loads automatically. (The QR is generated entirely locally; the token is not sent anywhere.)</p>
+            <label for="pair-host"><span data-i18n="settings.conn.pair_host_label">Tailscale address</span> <span class="label-optional">akana.pairHost</span></label>
+            <input id="pair-host" class="pair-host-input" type="text" autocomplete="off" spellcheck="false" placeholder="e.g. your-host.tailnet.ts.net" data-i18n-placeholder="idx.pair_host_ph" />
+            <div class="settings-row-actions">
+              <button type="button" id="btn-pair-phone" class="btn-primary">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M4 4h6v6H4V4Zm0 10h6v6H4v-6ZM14 4h6v6h-6V4Zm0 10h2v2h-2v-2Zm4 0h2v2h-2v-2Zm-4 4h2v2h-2v-2Zm4 0h2v2h-2v-2Z" />
+                </svg>
+                <span data-i18n="settings.conn.pair_btn">Connect phone</span>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-pane" id="settings-pane-appearance" data-pane="appearance" data-toolbar-desc-key="settings.appearance.toolbar_desc" role="tabpanel" hidden>
+          <header class="settings-pane-header settings-pane-header-compact">
+            <h3 data-i18n="settings.appearance.title">Appearance</h3>
+            <p class="settings-pane-desc" data-i18n="settings.appearance.desc">Theme and chat layout</p>
+          </header>
+          <div class="settings-block">
+            <h3 class="settings-block-title" data-i18n="settings.appearance.theme_title">Theme</h3>
+            <div class="theme-picker" role="radiogroup" aria-label="Color theme" data-i18n-aria-label="settings.appearance.theme_aria">
+              <label class="theme-picker-option">
+                <input type="radio" name="theme-pref" value="dark" />
+                <span data-i18n="settings.appearance.theme_dark">Dark</span>
+              </label>
+              <label class="theme-picker-option">
+                <input type="radio" name="theme-pref" value="light" />
+                <span data-i18n="settings.appearance.theme_light">Light</span>
+              </label>
+              <label class="theme-picker-option">
+                <input type="radio" name="theme-pref" value="system" />
+                <span data-i18n="settings.appearance.theme_system">System</span>
+              </label>
+            </div>
+            <p class="field-hint" id="theme-resolved-hint" data-i18n="settings.appearance.theme_resolved_prefix">Applied: dark</p>
+          </div>
+          <div class="settings-block">
+            <h3 class="settings-block-title" data-i18n="settings.appearance.accent_title">Accent color</h3>
+            <!-- Aksan preset'leri — tokens.css [data-accent] ailesi; tercih
+                 localStorage 'cockpit:accent' (boot script + aurora-ui.js uygular) -->
+            <div class="accent-swatch-row" role="group" aria-label="Accent color" data-i18n-aria-label="settings.appearance.accent_aria">
+              <button type="button" class="accent-swatch" data-accent-choice="azure" aria-label="Accent color: Azure (default)" data-i18n-aria-label="settings.appearance.accent_azure_aria" aria-pressed="false">
+                <span class="accent-swatch-dot" aria-hidden="true"></span><span data-i18n="settings.appearance.accent_azure">Azure</span>
+              </button>
+              <button type="button" class="accent-swatch" data-accent-choice="violet" aria-label="Accent color: Violet" data-i18n-aria-label="settings.appearance.accent_violet_aria" aria-pressed="false">
+                <span class="accent-swatch-dot" aria-hidden="true"></span><span data-i18n="settings.appearance.accent_violet">Violet</span>
+              </button>
+              <button type="button" class="accent-swatch" data-accent-choice="teal" aria-label="Accent color: Teal" data-i18n-aria-label="settings.appearance.accent_teal_aria" aria-pressed="false">
+                <span class="accent-swatch-dot" aria-hidden="true"></span><span data-i18n="settings.appearance.accent_teal">Teal</span>
+              </button>
+              <button type="button" class="accent-swatch" data-accent-choice="amber" aria-label="Accent color: Amber" data-i18n-aria-label="settings.appearance.accent_amber_aria" aria-pressed="false">
+                <span class="accent-swatch-dot" aria-hidden="true"></span><span data-i18n="settings.appearance.accent_amber">Amber</span>
+              </button>
+            </div>
+            <p class="field-hint" data-i18n="settings.appearance.accent_hint">Changes the interface accent family; preference is stored in this browser.</p>
+          </div>
+          <div class="settings-block">
+            <h3 class="settings-block-title" data-i18n="settings.appearance.ui_title">Interface</h3>
+            <label class="toggle" for="settings-compact-log">
+              <input id="settings-compact-log" type="checkbox" />
+              <span class="toggle-track" aria-hidden="true"></span>
+              <span class="toggle-label" data-i18n="settings.appearance.compact_label">Compact chat spacing</span>
+            </label>
+            <p class="field-hint" data-i18n="settings.appearance.compact_hint">Reduces the spacing between message bubbles.</p>
+            <label class="toggle" for="settings-artifact-autoopen">
+              <input id="settings-artifact-autoopen" type="checkbox" />
+              <span class="toggle-track" aria-hidden="true"></span>
+              <span class="toggle-label" data-i18n="settings.appearance.artifact_autoopen_label">Auto-open artifacts</span>
+            </label>
+            <p class="field-hint" data-i18n="settings.appearance.artifact_autoopen_hint">When a response finishes, the HTML/SVG/document preview inside opens automatically in the right panel. When off, it only opens when you click Preview.</p>
+            <label class="toggle" for="settings-show-usage">
+              <input id="settings-show-usage" type="checkbox" />
+              <span class="toggle-track" aria-hidden="true"></span>
+              <span class="toggle-label" data-i18n="settings.appearance.usage_label">Show token & cost</span>
+            </label>
+            <p class="field-hint" data-i18n="settings.appearance.usage_hint">Shows live token count and estimated cost ($) under each response. When off, only duration is shown.</p>
+          </div>
+        </section>
+
+        <section class="settings-pane" id="settings-pane-voice" data-pane="voice" data-toolbar-desc-key="settings.voice.toolbar_desc" role="tabpanel" hidden>
+          <header class="settings-pane-header settings-pane-header-compact">
+            <h3 data-i18n="settings.voice.title">Voice</h3>
+            <p class="settings-pane-desc" data-i18n="settings.voice.desc">TTS, microphone and wake word</p>
+          </header>
+          <div class="voice-capability-chips" id="voice-capability-chips" aria-live="polite"></div>
+          <div class="voice-status stat-strip" id="voice-status-strip" aria-live="polite" data-i18n="settings.voice.loading">Loading voice status…</div>
+
+          <!-- Gemini Live (full-duplex) toggle — shown ONLY when the provider is
+               Gemini + API key is set + Live setting is enabled (akana-voice-settings.js
+               shows/hides via /voice/config.live). -->
+          <div class="settings-block" id="voice-live-block" hidden>
+            <h3 class="settings-block-title" data-i18n="settings.voice.live_title">Real-time voice (Gemini Live)</h3>
+            <label class="toggle" for="voice-live-toggle">
+              <input id="voice-live-toggle" type="checkbox" />
+              <span class="toggle-track" aria-hidden="true"></span>
+              <span class="toggle-label" data-i18n="settings.voice.live_label">Live (realtime) voice chat</span>
+            </label>
+            <p class="field-hint" data-i18n="settings.voice.live_hint">When on, pressing the microphone starts a continuous two-way conversation with Gemini (Live instead of Whisper/TTS). When off, the classic turn-based voice is used. Audio streams to Google cloud — with your own API key.</p>
+          </div>
+
+          <div class="settings-block">
+            <h3 class="settings-block-title" data-i18n="settings.voice.tts_title">Output (Piper TTS)</h3>
+            <label class="toggle" for="tts-stream-toggle">
+              <input id="tts-stream-toggle" type="checkbox" />
+              <span class="toggle-track" aria-hidden="true"></span>
+              <span class="toggle-label" data-i18n="settings.voice.tts_label">Read responses aloud</span>
+            </label>
+            <p class="field-hint" data-i18n="settings.voice.tts_hint">When on, Piper generates audio per sentence; first audio arrives with LLM's first token.</p>
+            <label for="tts-voice" data-i18n="settings.voice.tts_model_label">Voice model</label>
+            <select id="tts-voice"></select>
+            <div class="settings-row-actions">
+              <button type="button" id="btn-tts-test" class="btn-ghost btn-sm" data-i18n="settings.voice.tts_test_btn">Test voice</button>
+              <span id="tts-test-status" class="field-hint" role="status"></span>
+            </div>
+          </div>
+
+          <div class="settings-block">
+            <h3 class="settings-block-title" data-i18n="settings.voice.mic_title">Input (microphone)</h3>
+            <p class="field-hint" id="voice-capability-hint" data-i18n="settings.voice.mic_hint">Checking browser support…</p>
+            <label for="mic-device" data-i18n="settings.voice.mic_device_label">Microphone</label>
+            <select id="mic-device">
+              <option value="" data-i18n="settings.voice.mic_default">System default</option>
+            </select>
+            <p class="field-hint" data-i18n="settings.voice.mic_hint2">May be empty until the browser grants permission — the full list loads when you press the microphone.</p>
+            <label for="speech-lang" data-i18n="settings.voice.speech_lang_label">Speech language (live transcript + Whisper)</label>
+            <select id="speech-lang">
+              <option value="tr-TR" data-i18n="settings.voice.lang_tr">Turkish</option>
+              <option value="en-US" data-i18n="settings.voice.lang_en">English</option>
+              <option value="auto" data-i18n="settings.voice.lang_auto">Auto-detect</option>
+            </select>
+          </div>
+
+          <div class="settings-block">
+            <h3 class="settings-block-title" data-i18n="settings.voice.wake_title">«Hey Akana» wake word</h3>
+            <p class="field-hint" id="wake-status-hint" data-i18n="settings.voice.wake_status">Loading status…</p>
+            <label class="toggle" for="settings-wake-autostart">
+              <input id="settings-wake-autostart" type="checkbox" />
+              <span class="toggle-track" aria-hidden="true"></span>
+              <span class="toggle-label" data-i18n="settings.voice.wake_autostart_label">Enable Hey Akana listening on startup</span>
+            </label>
+            <p class="field-hint" data-i18n="settings.voice.wake_autostart_hint">Automatically starts Hey Akana listening in the top bar when the page opens. If off, it only resumes after a page reload.</p>
+            <label for="wake-source" data-i18n="settings.voice.wake_source_label">Wake detection source</label>
+            <select id="wake-source">
+              <option value="model" data-i18n="settings.voice.wake_source_model">Model (Hey Akana)</option>
+              <option value="browser" data-i18n="settings.voice.wake_source_browser">Browser</option>
+            </select>
+            <p class="field-hint" data-i18n="settings.voice.wake_source_hint">Model uses the on-server «Hey Akana» detector (gated by the threshold below). Browser uses your browser's speech recognition to match the «Hey Akana» phrase. If the model isn't set up, it falls back to browser automatically.</p>
+            <label for="wake-threshold"><span data-i18n="settings.voice.wake_threshold_label">Threshold</span> <output id="wake-threshold-out" for="wake-threshold">0.15</output></label>
+            <input id="wake-threshold" type="range" min="0.01" max="1" step="0.01" value="0.15" />
+            <p class="field-hint" data-i18n="settings.voice.wake_threshold_hint">Applies to Model mode only. Low threshold = more sensitive (more false positives). Live score is shown in the top bar.</p>
+            <label for="wake-min-frames"><span data-i18n="settings.voice.wake_sustain_label">Strictness (sustain)</span> <output id="wake-min-frames-out" for="wake-min-frames">3</output></label>
+            <input id="wake-min-frames" type="range" min="1" max="10" step="1" value="3" />
+            <p class="field-hint" data-i18n="settings.voice.wake_sustain_hint">Applies to Model mode only. The score must stay above the threshold for this many consecutive frames (~80 ms each) before it triggers. Higher = stricter, far fewer false wakes; 1 = fire on a single peak. Use this when max threshold still over-detects.</p>
+          </div>
+
+          <div class="settings-block">
+            <h3 class="settings-block-title" data-i18n="settings.voice.conv_title">Conversational voice mode</h3>
+            <p class="field-hint" data-i18n="settings.voice.conv_hint">Hands-free conversation — Akana listens, responds, and goes back to listening when you pause. These settings are stored in the browser and apply to the next conversation.</p>
+
+            <label for="stt-source" data-i18n="settings.voice.stt_source_label">Speech-to-text engine</label>
+            <select id="stt-source">
+              <option value="browser" data-i18n="settings.voice.stt_source_browser">Browser (SpeechRecognition)</option>
+              <option value="whisper" data-i18n="settings.voice.stt_source_whisper">Whisper (server)</option>
+            </select>
+            <p class="field-hint" id="stt-source-hint" data-i18n="settings.voice.stt_source_hint">Browser uses your browser's built-in speech recognition and detects when you stop speaking on its own. Whisper records your turn and transcribes it on the server for one consistent engine — it needs the voice extra installed (faster-whisper). Applies to the next conversation.</p>
+
+            <label class="toggle" for="conv-wake-enters">
+              <input id="conv-wake-enters" type="checkbox" />
+              <span class="toggle-track" aria-hidden="true"></span>
+              <span class="toggle-label" data-i18n="settings.voice.conv_wake_label">«Hey Akana» enters conversation mode</span>
+            </label>
+            <p class="field-hint" data-i18n="settings.voice.conv_wake_hint">When on, the wake word directly starts hands-free conversation. When off, only a single command is taken.</p>
+
+            <label class="toggle" for="conv-barge-in">
+              <input id="conv-barge-in" type="checkbox" />
+              <span class="toggle-track" aria-hidden="true"></span>
+              <span class="toggle-label" data-i18n="settings.voice.barge_label">Barge-in</span>
+            </label>
+            <p class="field-hint" data-i18n="settings.voice.barge_hint">Off by default. When on, if you start speaking while Akana is talking it interrupts and listens to you (can self-trigger on speakers — raise the threshold below if so).</p>
+
+            <label for="conv-barge-rms"><span data-i18n="settings.voice.barge_rms_label">Barge-in sensitivity (threshold)</span> <output id="conv-barge-rms-out" for="conv-barge-rms">0.050</output></label>
+            <input id="conv-barge-rms" type="range" min="0.015" max="0.10" step="0.005" value="0.05" />
+            <p class="field-hint" data-i18n-html="settings.voice.barge_rms_hint">The voice threshold your voice must exceed to interrupt Akana. <strong>Low = easier/more sensitive barge-in; high = more noise-resistant</strong> (but you need to speak louder). Too low and Akana may trigger on its own voice. (Typical: your voice ~0.04, ambient ~0.005.)</p>
+
+            <label class="toggle" for="conv-earcons">
+              <input id="conv-earcons" type="checkbox" />
+              <span class="toggle-track" aria-hidden="true"></span>
+              <span class="toggle-label" data-i18n="settings.voice.earcon_label">Earcons (audio cues)</span>
+            </label>
+            <p class="field-hint" data-i18n="settings.voice.earcon_hint">Short sounds play when listening starts/stops. Default off.</p>
+
+            <label for="conv-silence-ms"><span data-i18n="settings.voice.silence_label">Silence detection time</span> <output id="conv-silence-ms-out" for="conv-silence-ms">1700</output> ms</label>
+            <input id="conv-silence-ms" type="range" min="1000" max="4000" step="100" value="1700" />
+            <p class="field-hint" data-i18n="settings.voice.silence_hint">How long of silence is assumed to mean you have finished speaking. Short = faster response, long = less likely to cut you off.</p>
+          </div>
+        </section>
+
+
+
+
+      </div>
+        </div>
+      </div>
+  </aside>
+
+  <div id="ui-toast-stack" class="ui-toast-stack" aria-live="polite" aria-atomic="true"></div>
+
+  <!-- Phone pairing modal (populated by akana-pair.js; opened by #btn-pair-phone). -->
+  <div id="pair-backdrop" class="pair-backdrop" aria-hidden="true">
+    <div class="pair-modal" role="dialog" aria-modal="true" aria-labelledby="pair-modal-title">
+      <header class="pair-modal-head">
+        <h3 id="pair-modal-title" data-i18n="pair.title">Connect phone</h3>
+        <button type="button" id="pair-modal-close" class="pair-modal-close" aria-label="Close" data-i18n-aria-label="pair.close_aria">✕</button>
+      </header>
+      <p class="pair-modal-desc" data-i18n="pair.desc">Scan this QR code with your phone's camera — the token loads automatically, no typing needed.</p>
+      <div class="pair-qr" id="pair-qr" aria-hidden="true"></div>
+      <label class="pair-host-label" for="pair-host-confirm" data-i18n="pair.host_label">Tailscale address</label>
+      <div class="pair-host-row">
+        <input id="pair-host-confirm" class="pair-host-input" type="text" autocomplete="off" spellcheck="false" />
+        <button type="button" id="pair-copy-url" class="btn-ghost btn-sm" title="Copy link" data-i18n-title="pair.copy_url_title" data-i18n="pair.copy_url">Copy</button>
+      </div>
+      <p class="pair-modal-foot field-hint" id="pair-modal-foot" role="status"></p>
+    </div>
+  </div>
+
+  <div id="kbd-help-backdrop" class="kbd-help-backdrop" aria-hidden="true"></div>
+  <dialog id="kbd-help" class="kbd-help" aria-label="Keyboard shortcuts" data-i18n-aria-label="kbd.title">
+    <header class="kbd-help-head">
+      <h2 data-i18n="kbd.title">Keyboard shortcuts</h2>
+      <button type="button" id="kbd-help-close" class="btn-icon" aria-label="Close" data-i18n-aria-label="kbd.close_aria">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M18 6L6 18M6 6l12 12" />
+        </svg>
+      </button>
+    </header>
+    <dl class="kbd-help-list">
+      <dt><kbd>Enter</kbd></dt><dd data-i18n="kbd.send">Send message</dd>
+      <dt><kbd>Shift</kbd> + <kbd>Enter</kbd></dt><dd data-i18n="kbd.newline">New line</dd>
+      <dt><kbd>Esc</kbd></dt><dd data-i18n="kbd.esc">Voice / TTS / cancel</dd>
+      <dt><kbd>?</kbd></dt><dd data-i18n="kbd.help">This window</dd>
+      <dt><kbd>Ctrl</kbd> + <kbd>,</kbd></dt><dd data-i18n="kbd.settings">Open settings</dd>
+    </dl>
+    <p class="kbd-help-foot" data-i18n="kbd.foot">Press Esc or click outside to close.</p>
+  </dialog>
+
+  <!-- Artifacts — live code preview panel (akana-artifacts.js) -->
+  <div id="artifact-backdrop" class="artifact-backdrop" aria-hidden="true"></div>
+  <section id="artifact-panel" class="artifact-panel" aria-label="Preview panel" data-i18n-aria-label="artifact.panel_aria" aria-hidden="true" data-tab="preview" tabindex="-1">
+    <div class="artifact-resize" id="artifact-resize" aria-hidden="true" title="Drag to resize" data-i18n-title="artifact.resize_title"></div>
+    <header class="artifact-head">
+      <div class="artifact-title-wrap">
+        <span class="artifact-icon" aria-hidden="true">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="16" rx="2" stroke="currentColor" stroke-width="2"/><path d="M3 9h18" stroke="currentColor" stroke-width="2"/></svg>
+        </span>
+        <h2 class="artifact-title" id="artifact-title" data-i18n="artifact.title_default">Preview</h2>
+        <span class="artifact-lang" id="artifact-lang"></span>
+      </div>
+      <div class="artifact-tabs" role="tablist" aria-label="View" data-i18n-aria-label="artifact.tabs_aria">
+        <button type="button" class="artifact-tab is-active" data-artifact-tab="preview" role="tab" aria-selected="true" data-i18n="artifact.tab_preview">Preview</button>
+        <button type="button" class="artifact-tab" data-artifact-tab="code" role="tab" aria-selected="false" data-i18n="artifact.tab_code">Code</button>
+      </div>
+      <div class="artifact-actions">
+        <button type="button" class="artifact-act" data-artifact-act="copy" title="Copy code" data-i18n-title="artifact.copy_title" data-i18n="artifact.copy">Copy</button>
+        <button type="button" class="artifact-act" data-artifact-act="download" title="Download" data-i18n-title="artifact.download_title" data-i18n="artifact.download">Download</button>
+        <button type="button" class="artifact-act" data-artifact-act="newtab" title="Open in new tab" data-i18n-title="artifact.newtab_title" aria-label="Open in new tab" data-i18n-aria-label="artifact.newtab_title">↗</button>
+        <button type="button" class="artifact-act" data-artifact-act="refresh" title="Refresh" data-i18n-title="artifact.refresh_title" aria-label="Refresh" data-i18n-aria-label="artifact.refresh_title">⟳</button>
+        <button type="button" class="artifact-act" data-artifact-act="maximize" title="Maximize / restore" data-i18n-title="artifact.maximize_title" aria-label="Maximize / restore" data-i18n-aria-label="artifact.maximize_title" aria-pressed="false">⤢</button>
+        <button type="button" class="artifact-close" id="artifact-close" aria-label="Close panel" data-i18n-aria-label="artifact.close_aria">✕</button>
+      </div>
+    </header>
+    <div class="artifact-body">
+      <div class="artifact-preview" id="artifact-preview"></div>
+      <pre class="artifact-code" id="artifact-code"><code></code></pre>
+    </div>
+  </section>
+
+  <!-- Mobile bottom tab strip slot — populated by akana-mobile-nav.js (starts
+       empty/hidden; visibility is controlled by aurora-mobile.css @media gate). -->
+  <nav id="mnav" hidden></nav>
+
+  <script src="/static/akana-core.js?v=auto" defer></script>
+  <script src="/static/akana-i18n-strings.js?v=auto" defer></script>
+  <script src="/static/akana-i18n-strings-chat.js?v=auto" defer></script>
+  <script src="/static/akana-i18n-strings-chat2.js?v=auto" defer></script>
+  <script src="/static/akana-i18n-strings-voice.js?v=auto" defer></script>
+  <script src="/static/akana-i18n-strings-settings.js?v=auto" defer></script>
+  <script src="/static/akana-i18n-strings-settings2.js?v=auto" defer></script>
+  <script src="/static/akana-i18n-strings-runtime.js?v=auto" defer></script>
+  <script src="/static/akana-i18n-strings-memory.js?v=auto" defer></script>
+  <script src="/static/akana-i18n-strings-misc.js?v=auto" defer></script>
+  <script src="/static/akana-i18n-strings-index.js?v=auto" defer></script>
+  <script src="/static/akana-i18n.js?v=auto" defer></script>
+  <script src="/static/akana-bus.js?v=auto" defer></script>
+  <script src="/static/akana-markdown.js?v=auto" defer></script>
+  <script src="/static/akana-chat-render.js?v=auto" defer></script>
+  <script src="/static/akana-chat-store.js?v=auto" defer></script>
+  <script src="/static/akana-chat-archive.js?v=auto" defer></script>
+  <script src="/static/akana-chat-threads.js?v=auto" defer></script>
+  <script src="/static/akana-turn-status.js?v=auto" defer></script>
+  <script src="/static/akana-chat-transport.js?v=auto" defer></script>
+  <script src="/static/akana-chat-panes.js?v=auto" defer></script>
+  <script src="/static/akana-shell.js?v=auto" defer></script>
+  <script src="/static/akana-voice-fsm.js?v=auto" defer></script>
+  <script src="/static/akana-voice-capture.js?v=auto" defer></script>
+  <script src="/static/akana-voice-pipeline.js?v=auto" defer></script>
+  <script src="/static/akana-voice-settings.js?v=auto" defer></script>
+  <script src="/static/akana-voice.js?v=auto" defer></script>
+  <script src="/static/akana-voice-live.js?v=auto" defer></script>
+  <script src="/static/akana-chat.js?v=auto" defer></script>
+  <script src="/static/akana-settings.js?v=auto" defer></script>
+  <!-- Mobile bottom tab strip + device-class detector (defer; all dependent
+       globals — AkanaChat/Shell/Voice/Settings — are defined BEFORE this). -->
+  <script src="/static/akana-mobile-nav.js?v=auto" defer></script>
+  <script src="/static/vendor/qrcode/qrcode.min.js" defer></script>
+  <script src="/static/akana-pair.js?v=auto" defer></script>
+  <script src="/static/akana-vault.js?v=auto" defer></script>
+  <script src="/static/akana-personas.js?v=auto" defer></script>
+  <script src="/static/akana-packs.js?v=auto" defer></script>
+  <script src="/static/akana-memory-api.js?v=auto" defer></script>
+  <script src="/static/akana-memory-render.js?v=auto" defer></script>
+  <script src="/static/akana-memory-studio.js?v=auto" defer></script>
+  <script src="/static/app.js?v=auto" defer></script>
+  <script src="/static/aurora-ui.js?v=auto" defer></script>
+  <script src="/static/aurora-voice.js?v=auto" defer></script>
+  <script src="/static/aurora-onboard.js?v=auto" defer></script>
+  <script src="/static/aurora-motion.js?v=auto" defer></script>
+  <script src="/static/akana-artifacts.js?v=auto" defer></script>
+</body>
+</html>

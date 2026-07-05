@@ -1,0 +1,890 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   AKANA · AURORA — Voice Mode · "Direction A · Stage" (self-contained fullscreen overlay)
+   The stage splits into two regions:
+     • LEFT "presence"   — orb + linear equalizer + status + Mute/End.
+     • RIGHT "conversation" — header + the current user utterance + live reply + tools.
+   So that on a long reply / many tools each region scrolls within itself and the
+   layout doesn't break. The markup is injected by aurora-voice.js; the state
+   machine + AkanaBus wiring is UNCHANGED (this is only a visual/DOM reorganization).
+
+   SELF-CONTAINED LAYER — it owns only the `aur-` namespace. Colors come from
+   tokens.css (var(--j-*)) → dark/light theme + 4 accent presets work with no extra
+   effort; NO raw hex on the stage. Animations stop in prefers-reduced-motion, the
+   stage stays calm but readable. rAF writes the live audio amplitude to --aur-amp (0‥1).
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── overlay root ──────────────────────────────────────────────────────────── */
+#aur-voice-overlay {
+  --aur-amp: 0.35;
+  --aur-orb: 152px;
+  --aur-viz: 248px;
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity var(--j-dur-slow) var(--j-ease),
+    visibility var(--j-dur-slow) var(--j-ease);
+}
+
+#aur-voice-overlay.aur-open {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+/* A hidden overlay never paints and never captures clicks (even if opacity/visibility are overridden). */
+#aur-voice-overlay[hidden] {
+  display: none !important;
+  pointer-events: none !important;
+}
+
+/* ── backdrop / ambient bloom ──────────────────────────────────────────────
+   Purely VISUAL: lighting + aurora bloom. Closing is now only via ×/End/Esc
+   (a click on empty space does NOT close — user feedback). */
+.aur-voice-backdrop {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  /* a lighting gradient over an opaque base (var(--j-bg)) → the app behind never
+     leaks through (the old blur was removed; the center covers the underside of the 80% opaque gradient). */
+  background:
+    radial-gradient(
+      120% 120% at 50% 40%,
+      color-mix(in srgb, var(--j-bg-grad-a) 80%, transparent),
+      var(--j-bg) 72%
+    ),
+    var(--j-bg);
+}
+
+[data-theme="light"] .aur-voice-backdrop {
+  background: radial-gradient(130% 130% at 50% 38%, #ffffff 0%, var(--j-bg) 64%);
+}
+
+.aur-voice-backdrop::before {
+  content: "";
+  position: absolute;
+  inset: -15%;
+  background:
+    radial-gradient(38% 38% at 28% 32%, color-mix(in srgb, var(--j-accent) 30%, transparent), transparent 70%),
+    radial-gradient(40% 40% at 72% 64%, color-mix(in srgb, var(--j-accent-2) 24%, transparent), transparent 70%),
+    radial-gradient(36% 36% at 60% 24%, color-mix(in srgb, var(--j-accent-3) 18%, transparent), transparent 70%);
+  filter: blur(50px);
+  opacity: 0.7;
+  animation: aur-voice-drift 18s ease-in-out infinite alternate;
+}
+
+@keyframes aur-voice-drift {
+  0% { transform: translate(0, 0) scale(1); }
+  100% { transform: translate(-3%, 4%) scale(1.12); }
+}
+
+/* ── close (×) top right ──────────────────────────────────────────────────────── */
+.aur-voice-close {
+  position: absolute;
+  top: max(var(--j-sp-5), env(safe-area-inset-top));
+  right: max(var(--j-sp-5), env(safe-area-inset-right));
+  z-index: 3;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1px solid var(--j-border-strong);
+  background: var(--j-raised);
+  color: var(--j-ink-dim);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition:
+    color var(--j-dur-fast) var(--j-ease),
+    border-color var(--j-dur-fast) var(--j-ease),
+    box-shadow var(--j-dur-fast) var(--j-ease),
+    transform var(--j-dur-med) var(--j-ease);
+}
+
+.aur-voice-close:hover {
+  color: var(--j-ink);
+  border-color: var(--j-accent);
+  box-shadow: var(--j-glow-soft);
+  transform: rotate(90deg);
+}
+
+.aur-voice-close:focus-visible {
+  outline: none;
+  box-shadow: var(--j-glow-accent);
+}
+
+.aur-voice-close svg {
+  width: 19px;
+  height: 19px;
+}
+
+/* ── stage: two horizontal regions ───────────────────────────────────────────────── */
+.aur-voice-stage {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  /* Cinematic entrance (B3): the stage SETTLES into place slightly small + from
+     below — a sense of depth together with the backdrop bloom. The transition uses
+     the same --j-dur-slow/--j-ease as the overlay opacity fade → the two flow as one motion. */
+  transform: scale(0.985) translateY(10px);
+  transition: transform var(--j-dur-slow) var(--j-ease);
+}
+
+#aur-voice-overlay.aur-open .aur-voice-stage {
+  transform: none;
+}
+
+/* ════════════ LEFT — presence ════════════ */
+.aur-voice-presence {
+  flex: none;
+  width: 468px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 56px 48px;
+  box-sizing: border-box;
+  border-right: 1px solid var(--j-border);
+  min-height: 0;
+}
+
+.aur-voice-presence-main {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 40px;
+  width: 100%;
+  min-height: 0;
+}
+
+/* orb + wave rings */
+.aur-voice-viz {
+  position: relative;
+  width: var(--aur-viz);
+  height: var(--aur-viz);
+  max-width: 70vw;
+  display: grid;
+  place-items: center;
+  isolation: isolate;
+}
+
+.aur-voice-viz::before {
+  content: "";
+  position: absolute;
+  width: 78%;
+  height: 78%;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--j-accent) calc(26% + var(--aur-amp) * 18%), transparent),
+    transparent 68%
+  );
+  filter: blur(28px);
+  opacity: calc(0.55 + var(--aur-amp) * 0.35);
+  z-index: -1;
+}
+
+.aur-ring {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--j-accent) 32%, transparent);
+  will-change: transform, opacity;
+}
+
+.aur-ring.aur-r1 {
+  animation: aur-wave 3.6s var(--j-ease) infinite;
+}
+
+.aur-ring.aur-r2 {
+  border-color: color-mix(in srgb, var(--j-accent-2) 26%, transparent);
+  animation: aur-wave 3.6s var(--j-ease) infinite 1.2s;
+}
+
+@keyframes aur-wave {
+  0% { transform: scale(0.7); opacity: 0; }
+  18% { opacity: 0.7; }
+  100% { transform: scale(1.55); opacity: 0; }
+}
+
+/* large live orb (conic iris + inner glow, breathes) */
+.aur-orb {
+  position: relative;
+  width: var(--aur-orb);
+  height: var(--aur-orb);
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 34% 28%, #fff 0%, transparent 42%),
+    conic-gradient(from 210deg, var(--j-accent), var(--j-accent-3), var(--j-accent-2), var(--j-accent));
+  box-shadow:
+    0 16px 50px -8px color-mix(in srgb, var(--j-accent) 60%, transparent),
+    0 0 0 1px rgba(255, 255, 255, 0.08);
+  animation: aur-voice-breathe 4.4s var(--j-ease) infinite;
+  transition: transform 90ms linear;
+}
+
+.aur-orb::after {
+  content: "";
+  position: absolute;
+  inset: 18px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 38% 32%,
+    rgba(255, 255, 255, 0.92),
+    rgba(255, 255, 255, 0.08) 54%,
+    transparent 72%
+  );
+  mix-blend-mode: screen;
+}
+
+@keyframes aur-voice-breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.045); }
+}
+
+/* linear equalizer — thin bars under the orb (JS scaleYs them, driven by --aur-amp) */
+.aur-bars {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 5px;
+  height: 46px;
+  pointer-events: none;
+}
+
+.aur-bar {
+  width: 3px;
+  border-radius: var(--j-r-pill);
+  background: linear-gradient(var(--j-accent), var(--j-accent-2));
+  transform-origin: bottom;
+  will-change: transform;
+}
+
+#aur-voice-overlay[data-state="thinking"] .aur-bar {
+  background: linear-gradient(var(--j-accent-2), var(--j-accent));
+}
+
+#aur-voice-overlay[data-state="responding"] .aur-bar,
+#aur-voice-overlay[data-state="speaking"] .aur-bar {
+  background: linear-gradient(var(--j-accent-3), var(--j-accent));
+}
+
+/* status (label + dot) + sub-text */
+.aur-voice-status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  text-align: center;
+}
+
+.aur-voice-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--j-font-mono);
+  font-size: 13px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--j-accent);
+}
+
+.aur-voice-state .aur-sdot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--j-accent), var(--j-accent-2));
+  box-shadow: 0 0 10px color-mix(in srgb, var(--j-accent) 60%, transparent);
+  animation: aur-blink 1.6s ease-in-out infinite;
+}
+
+@keyframes aur-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.aur-voice-sub {
+  margin: 0;
+  font-size: 15px;
+  color: var(--j-ink-dim);
+  max-width: 24ch;
+}
+
+/* controls (Mute + End) — below the panel */
+.aur-voice-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+  flex: 0 0 auto;
+}
+
+.aur-vbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 12px 22px;
+  border-radius: var(--j-r-pill);
+  border: 1px solid var(--j-border-strong);
+  background: var(--j-raised);
+  color: var(--j-ink);
+  font-family: var(--j-font-ui);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    color var(--j-dur-fast) var(--j-ease),
+    border-color var(--j-dur-fast) var(--j-ease),
+    box-shadow var(--j-dur-fast) var(--j-ease),
+    transform var(--j-dur-fast) var(--j-ease);
+}
+
+.aur-vbtn:hover {
+  border-color: var(--j-accent);
+  box-shadow: var(--j-glow-soft);
+  transform: translateY(-1px);
+}
+
+.aur-vbtn:focus-visible {
+  outline: none;
+  box-shadow: var(--j-glow-accent);
+}
+
+.aur-vbtn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.aur-mute-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--j-ink-dim);
+  transition: background var(--j-dur-fast) var(--j-ease);
+}
+
+.aur-voice-mute[aria-pressed="true"] {
+  border-color: var(--j-accent);
+  color: var(--j-accent);
+}
+
+.aur-voice-mute[aria-pressed="true"] .aur-mute-dot {
+  background: var(--j-accent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--j-accent) 60%, transparent);
+}
+
+/* Barge-in toggle — mirrors the mute pill's on/off treatment (dot + accent when on) */
+.aur-barge-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--j-ink-dim);
+  transition: background var(--j-dur-fast) var(--j-ease);
+}
+
+.aur-voice-barge[aria-pressed="true"] {
+  border-color: var(--j-accent);
+  color: var(--j-accent);
+}
+
+.aur-voice-barge[aria-pressed="true"] .aur-barge-dot {
+  background: var(--j-accent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--j-accent) 60%, transparent);
+}
+
+/* Stop — danger tone; active while a turn is in flight, dimmed/disabled while listening */
+.aur-voice-stop {
+  border-color: color-mix(in srgb, var(--j-danger) 42%, transparent);
+  background: color-mix(in srgb, var(--j-danger) 13%, transparent);
+  color: var(--j-danger);
+}
+
+.aur-voice-stop:hover:not(:disabled) {
+  border-color: var(--j-danger);
+  color: var(--j-danger);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--j-danger) 22%, transparent);
+}
+
+.aur-voice-stop:disabled {
+  opacity: 0.42;
+  cursor: default;
+  border-color: var(--j-border-strong);
+  background: var(--j-raised);
+  color: var(--j-ink-dim);
+}
+
+.aur-voice-stop:disabled:hover {
+  transform: none;
+  box-shadow: none;
+  border-color: var(--j-border-strong);
+}
+
+/* ════════════ RIGHT — conversation ════════════ */
+.aur-voice-convo {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  padding: 48px 56px;
+  box-sizing: border-box;
+  gap: 22px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.aur-voice-cohead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--j-sp-3);
+  flex: 0 0 auto;
+  /* don't overlap the top-right close (×) button → make room on the right for the status cluster */
+  padding-right: 30px;
+}
+
+.aur-voice-cotitle {
+  font-family: var(--j-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--j-ink-faint);
+  white-space: nowrap;
+}
+
+/* active model + WS connection + duration — to the right of the header, separate from the × button */
+.aur-voice-status-cluster {
+  display: flex;
+  align-items: center;
+  gap: var(--j-sp-4);
+  min-width: 0;
+  font-family: var(--j-font-mono);
+  font-size: 11px;
+  color: var(--j-ink-faint);
+}
+
+.aur-voice-model,
+.aur-voice-ws {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.aur-voice-model-text {
+  max-width: 18ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aur-voice-model-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--j-accent);
+  flex: 0 0 auto;
+}
+
+.aur-voice-ws-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--j-ink-faint);
+  flex: 0 0 auto;
+}
+
+.aur-voice-ws-dot[data-ws="on"] {
+  background: var(--j-energy);
+  box-shadow: 0 0 7px color-mix(in srgb, var(--j-energy) 55%, transparent);
+}
+
+.aur-voice-ws-dot[data-ws="wait"] {
+  background: color-mix(in srgb, var(--j-energy) 50%, var(--j-danger));
+}
+
+.aur-voice-ws-dot[data-ws="off"] {
+  background: var(--j-danger);
+}
+
+.aur-voice-timer {
+  font-family: var(--j-font-mono);
+  font-size: 12px;
+  color: var(--j-ink-faint);
+  flex: 0 0 auto;
+}
+
+/* the current user utterance (hidden when empty) */
+.aur-voice-user {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  color: var(--j-ink-dim);
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.aur-voice-user[hidden] {
+  display: none;
+}
+
+.aur-voice-user-label {
+  font-family: var(--j-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--j-ink-faint);
+  padding-top: 2px;
+  white-space: nowrap;
+}
+
+.aur-voice-user-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--j-ink-faint);
+  margin-top: 8px;
+  flex: 0 0 auto;
+}
+
+.aur-voice-usertext {
+  text-wrap: pretty;
+}
+
+/* reply area — one of three contents depending on the state (data-state) */
+.aur-voice-answer {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.aur-voice-hero,
+.aur-voice-shimmer,
+.aur-voice-transcript {
+  display: none;
+}
+
+#aur-voice-overlay[data-state="listening"] .aur-voice-hero {
+  display: block;
+}
+
+#aur-voice-overlay[data-state="thinking"] .aur-voice-shimmer {
+  display: flex;
+}
+
+#aur-voice-overlay[data-state="responding"] .aur-voice-transcript,
+#aur-voice-overlay[data-state="speaking"] .aur-voice-transcript {
+  display: block;
+}
+
+/* listening: a large faint hint */
+.aur-voice-hero {
+  font-family: var(--j-font-display);
+  font-size: clamp(1.5rem, 2.8vw, 1.875rem);
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: var(--j-tracking-tight);
+  color: var(--j-ink-dim);
+}
+
+/* thinking: 3 shimmer placeholder */
+.aur-voice-shimmer {
+  flex-direction: column;
+  gap: 16px;
+}
+
+.aur-voice-shimmer span {
+  height: 18px;
+  border-radius: 8px;
+  background: var(--j-raised);
+  animation: aur-shimmer 1.4s ease-in-out infinite;
+}
+
+.aur-voice-shimmer span:nth-child(1) { width: 88%; }
+.aur-voice-shimmer span:nth-child(2) { width: 96%; animation-delay: 0.2s; }
+.aur-voice-shimmer span:nth-child(3) { width: 62%; animation-delay: 0.4s; }
+
+@keyframes aur-shimmer {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 0.65; }
+}
+
+/* responding: scrolling reply text + caret */
+.aur-voice-transcript {
+  max-height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 8px;
+  font-family: var(--j-font-display);
+  font-size: clamp(1.5rem, 2.6vw, 1.875rem);
+  font-weight: 500;
+  line-height: 1.45;
+  letter-spacing: var(--j-tracking-tight);
+  color: var(--j-ink);
+  max-width: 46ch;
+  text-wrap: pretty;
+  overflow-wrap: anywhere;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--j-accent) 40%, transparent) transparent;
+}
+
+.aur-voice-transcript::-webkit-scrollbar {
+  width: 8px;
+}
+
+.aur-voice-transcript::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--j-accent) 36%, transparent);
+  border-radius: var(--j-r-pill);
+}
+
+.aur-voice-transcript::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.aur-caret {
+  display: inline-block;
+  width: 0.5ch;
+  margin-left: 2px;
+  color: var(--j-accent);
+  animation: aur-caret-blink 0.9s step-end infinite;
+}
+
+@keyframes aur-caret-blink {
+  50% { opacity: 0; }
+}
+
+/* "No answer received" notice — shows briefly when a turn ends with an error/empty,
+   then the stage returns to listening (JS: showNoAnswer → aur-noanswer). */
+.aur-voice-notice {
+  display: none;
+  font-family: var(--j-font-display);
+  font-size: clamp(1.25rem, 2.4vw, 1.6rem);
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: var(--j-tracking-tight);
+  color: var(--j-danger);
+}
+
+#aur-voice-overlay.aur-noanswer .aur-voice-hero,
+#aur-voice-overlay.aur-noanswer .aur-voice-shimmer,
+#aur-voice-overlay.aur-noanswer .aur-voice-transcript {
+  display: none !important;
+}
+
+#aur-voice-overlay.aur-noanswer .aur-voice-notice {
+  display: block;
+}
+
+/* ── tool-card panel (chat parity) ───────────────────────────────────── */
+.aur-voice-activity {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+
+.aur-voice-activity[hidden] {
+  display: none;
+}
+
+.aur-voice-tools-head {
+  font-family: var(--j-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--j-ink-faint);
+}
+
+.aur-voice-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 560px;
+  max-height: 184px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--j-accent) 36%, transparent) transparent;
+}
+
+.aur-voice-tools[hidden] {
+  display: none;
+}
+
+.aur-voice-tools::-webkit-scrollbar {
+  width: 7px;
+}
+
+.aur-voice-tools::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--j-accent) 32%, transparent);
+  border-radius: var(--j-r-pill);
+}
+
+.aur-voice-tool {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 16px;
+  border-radius: var(--j-r-md);
+  border: 1px solid var(--j-border);
+  background: var(--j-panel);
+  font-size: 15px;
+  color: var(--j-ink);
+  animation: aur-tool-in var(--j-dur-med) var(--j-ease);
+}
+
+@keyframes aur-tool-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.aur-voice-tool .aur-vt-icon {
+  flex: 0 0 auto;
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+.aur-voice-tool .aur-vt-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aur-voice-tool .aur-vt-state {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--j-ink-faint);
+}
+
+/* running → accent (assigned card) · done → energy green · error → danger */
+.aur-voice-tool[data-status="running"] {
+  border-color: color-mix(in srgb, var(--j-accent) 30%, transparent);
+  background: color-mix(in srgb, var(--j-accent) 7%, transparent);
+}
+
+.aur-voice-tool[data-status="running"] .aur-vt-state {
+  background: var(--j-accent);
+  animation: aur-blink 1.1s ease-in-out infinite;
+}
+
+.aur-voice-tool[data-status="done"] .aur-vt-state {
+  background: var(--j-energy);
+}
+
+.aur-voice-tool[data-status="error"] .aur-vt-state {
+  background: var(--j-danger);
+}
+
+/* ════════════ MOBILE — vertical stack (≤760px) ════════════
+   The presence box is dissolved with display:contents → the orb block,
+   conversation and controls enter the stage flex directly; we arrange them
+   top/middle/bottom with order. */
+@media (max-width: 760px) {
+  #aur-voice-overlay {
+    --aur-orb: 96px;
+    --aur-viz: 150px;
+  }
+
+  .aur-voice-stage {
+    flex-direction: column;
+  }
+
+  .aur-voice-presence {
+    display: contents;
+  }
+
+  .aur-voice-presence-main {
+    order: 1;
+    flex: 0 0 auto;
+    gap: 14px;
+    padding: 22px 22px 12px;
+    box-sizing: border-box;
+  }
+
+  .aur-voice-convo {
+    order: 2;
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 0 22px;
+    gap: 14px;
+  }
+
+  /* on mobile × is small top-left; the header cluster narrows but doesn't overlap the button */
+  .aur-voice-cohead {
+    padding-right: 46px;
+  }
+
+  .aur-voice-status-cluster {
+    gap: var(--j-sp-3);
+  }
+
+  .aur-voice-model-text {
+    max-width: 10ch;
+  }
+
+  .aur-voice-controls {
+    order: 3;
+    gap: 10px;
+    padding: 14px 22px calc(30px + env(safe-area-inset-bottom));
+    box-sizing: border-box;
+  }
+
+  .aur-voice-controls .aur-vbtn {
+    flex: 1 1 0;
+    justify-content: center;
+    padding: 14px;
+  }
+
+  .aur-voice-close {
+    top: max(14px, env(safe-area-inset-top));
+    right: max(14px, env(safe-area-inset-right));
+  }
+
+  .aur-voice-hero { font-size: 21px; }
+  .aur-voice-transcript { font-size: 21px; max-width: none; line-height: 1.5; }
+  .aur-voice-tools { max-height: 148px; }
+  /* no room for tool meta on mobile → compact card */
+  .aur-voice-tool { padding: 11px 14px; gap: 11px; font-size: 14px; }
+}
+
+/* ── reduced motion: a motionless but readable stage ─────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  #aur-voice-overlay {
+    --aur-amp: 0.4;
+    transition: none !important;
+  }
+  .aur-ring,
+  .aur-orb,
+  .aur-voice-viz::before,
+  .aur-voice-backdrop::before,
+  .aur-voice-state .aur-sdot,
+  .aur-voice-shimmer span,
+  .aur-voice-tool,
+  .aur-voice-tool[data-status="running"] .aur-vt-state,
+  .aur-caret {
+    animation: none !important;
+  }
+  /* show the wave rings static (not vanished) */
+  .aur-ring {
+    transform: scale(1.18);
+    opacity: 0.35;
+  }
+}

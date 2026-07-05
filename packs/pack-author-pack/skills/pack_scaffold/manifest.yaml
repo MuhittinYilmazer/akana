@@ -1,0 +1,14 @@
+id: pack_scaffold
+version: 1
+title: "Pack: scaffold from scratch"
+description: "Generates a contract-compliant new pack skeleton (pack.yaml + skill stubs + persona). Auto-discovered; offline."
+triggers:
+  - "scaffold a pack"
+  - "start a new pack"
+  - "create a pack skeleton"
+  - "generate a pack template"
+risk: medium
+learn_from_success: true
+requires_approval: false
+cursor_skills: []
+tools_allowed: []

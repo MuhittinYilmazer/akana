@@ -1,0 +1,586 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   AURORA — WAVE 3 · SHELL  (CSS-only refinement, loads LAST)
+   ─────────────────────────────────────────────────────────────────────────
+   This file loads RIGHT AFTER aurora-chat.css in index.html and pulls the
+   shell's LOOK toward the Aurora mockup. Structure/scaffold and ALL id/class/data-*
+   names are kept exactly — only the existing contract classes are restyled.
+
+   Mockup reference (Akana Aurora.html / aurora.css) — NOT the class names, but
+   the treatment (centered reading column, frosted-glass composer, polished sidebar,
+   living iris orb, inviting empty state) is ported.
+
+   Principles:
+   - Color/spacing/radius/shadow/motion only from var(--j-*) tokens
+     (tokens.css + aurora-skin.css; dark+light correct). No raw hex.
+   - NEW classes are `aur-` prefixed; existing ones are targeted with `body …`
+     specificity (equal specificity with v2 → this last-loaded file wins the tie).
+   - Motion: only transform/opacity/filter; turned off in prefers-reduced-motion.
+   - NO horizontal scroll: the shared reading column reserves a gutter with min().
+   - Live orb state semantics (orb-idle / orb-busy / data-chat-streaming /
+     .bubble-bot.is-speaking) are PRESERVED — this file only refreshes the idle/base
+     face; higher-specificity state rules still win when active.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── 0 · Shared metrics ──────────────────────────────────────────────── */
+:root {
+  /* Aurora reading column: comfortable width + edge breathing room.
+     Sidebar open/closed doesn't matter — it's centered in every case. */
+  --aur-read-max: 52rem;
+  --aur-read-gutter: clamp(1.5rem, 6vw, 4rem);
+  --aur-read-w: min(var(--aur-read-max), calc(100% - var(--aur-read-gutter)));
+
+  /* Frosted-glass layers (composer + top bar): derived from overlay,
+     a doubled blur for a deep frosted-glass feel. */
+  --aur-frost: color-mix(in srgb, var(--j-overlay) 72%, transparent);
+  --aur-frost-strong: color-mix(in srgb, var(--j-overlay) 84%, transparent);
+  --aur-blur: 22px;
+}
+
+/* ─── 1 · Horizontal overflow shield ─────────────────────────────────────────────── */
+/* The root frame and the stage never produce horizontal scroll. */
+body .app-frame,
+body .stage,
+body .layout,
+body .layout.layout-with-archive {
+  overflow-x: hidden;
+  max-width: 100%;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   2 · STAGE — centered reading column
+   Top bar + conversation (#log) + composer align to the same centered max-width.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* 2a · Top bar: no longer a full-width strip — a glass bar centered in the same
+   column as the reading arm. Aligned in both sidebar open/closed states. */
+body .stage .top.top-bar,
+body .top.top-bar {
+  width: var(--aur-read-w);
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: var(--j-sp-4);
+  padding-right: var(--j-sp-3);
+  border: 1px solid color-mix(in srgb, var(--j-border) 80%, transparent);
+  border-radius: var(--j-r-lg);
+  background: var(--aur-frost);
+  -webkit-backdrop-filter: blur(var(--aur-blur)) saturate(1.3);
+  backdrop-filter: blur(var(--aur-blur)) saturate(1.3);
+  box-shadow:
+    inset 0 1px 0 var(--j-hairline),
+    var(--j-shadow-1);
+}
+
+/* 2b · Conversation column — #log and the empty state are centered at the same reading width. */
+body .log,
+body .log-empty {
+  max-width: var(--aur-read-w);
+}
+
+/* 2c · Composer column — capsule + meta + attachments align to the same width. */
+body .composer .composer-inner,
+body .composer .composer-attachments,
+body .composer .composer-meta {
+  max-width: var(--aur-read-w);
+}
+
+/* Scroll surface: horizontal overflow off, vertical roomy. */
+body .log-scroll {
+  overflow-x: hidden;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   3 · SIDEBAR — polished command column
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* 3a · Column ground: a faint iris wash on top + frosted glass — a thin
+   aurora gradient divider on the right (the mockup's signature edge). */
+body .chat-archive,
+body .chat-archive.panel {
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--j-accent) 7%, transparent),
+      transparent 26%
+    ),
+    var(--aur-frost);
+  -webkit-backdrop-filter: blur(var(--aur-blur)) saturate(1.25);
+  backdrop-filter: blur(var(--aur-blur)) saturate(1.25);
+  box-shadow: inset -1px 0 0 var(--j-border);
+}
+
+body .chat-archive::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 1px;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    transparent,
+    color-mix(in srgb, var(--j-accent) 34%, transparent) 20%,
+    color-mix(in srgb, var(--j-accent-2) 28%, transparent) 60%,
+    transparent 92%
+  );
+}
+
+/* 3b · Brand row — a bit more air + a large wordmark. */
+body .sidebar-brand {
+  padding: var(--j-sp-5) var(--j-sp-5) var(--j-sp-4);
+  gap: var(--j-sp-3);
+}
+
+body .sidebar-brand .brand-text h1 {
+  font-size: 1.3rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+
+/* Brand badge: give the orb breathing room, make the conic border a bit more prominent. */
+body .sidebar-brand .brand-mark {
+  flex-basis: 42px;
+  width: 42px;
+  height: 42px;
+  border-radius: var(--j-r-md);
+  box-shadow:
+    var(--j-shadow-1),
+    0 6px 18px -8px color-mix(in srgb, var(--j-accent) 60%, transparent);
+}
+
+/* 3c · "New chat" CTA — gradient-filled, bright; horizontal breathing room. */
+body .btn-new-chat.sidebar-new-chat,
+body .sidebar-new-chat {
+  width: calc(100% - var(--j-sp-5) * 2);
+  margin: 0 var(--j-sp-5) var(--j-sp-4);
+  padding: 0.72rem 1rem;
+  border: none;
+  border-radius: var(--j-r-md);
+  background: var(--j-accent-grad);
+  color: var(--j-accent-ink);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, #fff 30%, transparent),
+    var(--j-shadow-accent);
+}
+
+body .sidebar-new-chat:hover {
+  filter: brightness(1.06);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, #fff 40%, transparent),
+    var(--j-glow-soft),
+    var(--j-shadow-accent);
+}
+
+/* 3d · Title + tab + search: align the side margin with the CTA. */
+body .chat-archive-head {
+  padding: 0 var(--j-sp-5) var(--j-sp-3);
+  gap: var(--j-sp-3);
+}
+
+/* Segmented Active/Archive: glass bed + selected bubble. */
+body .chat-archive-tabs {
+  background: color-mix(in srgb, var(--j-bg) 42%, transparent);
+}
+
+body .chat-archive-tab.is-active {
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--j-accent) 24%, var(--j-raised)),
+    color-mix(in srgb, var(--j-accent-2) 16%, var(--j-raised))
+  );
+  border-color: color-mix(in srgb, var(--j-accent) 35%, transparent);
+  box-shadow: inset 0 1px 0 var(--j-hairline), var(--j-shadow-1);
+}
+
+/* Search capsule — pill, a soft ring on focus. In the mockup search is ABOVE
+   the tabs → move it earlier in the flex order (head flex-column; tab+search are siblings). */
+body .chat-archive-search-wrap {
+  order: -1;
+  border-radius: var(--j-r-pill);
+  background: color-mix(in srgb, var(--j-bg) 42%, transparent);
+}
+
+body .chat-archive-search-wrap:focus-within {
+  border-color: color-mix(in srgb, var(--j-accent) 55%, var(--j-border));
+  box-shadow: var(--j-glow-soft);
+}
+
+/* 3e · Chat list — airy cards. */
+body .chat-archive-list {
+  padding: var(--j-sp-2) var(--j-sp-3) var(--j-sp-3);
+}
+
+body .chat-archive-item {
+  padding: 0.7rem 0.85rem 0.72rem 0.95rem;
+  border-radius: var(--j-r-md);
+}
+
+body .chat-archive-item:hover {
+  background: color-mix(in srgb, var(--j-raised) 80%, transparent);
+  border-color: var(--j-border);
+  transform: translateX(2px);
+}
+
+body .chat-archive-item.is-active {
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--j-accent) 16%, var(--j-raised)),
+    color-mix(in srgb, var(--j-accent-2) 10%, var(--j-raised))
+  );
+  border-color: color-mix(in srgb, var(--j-accent) 30%, var(--j-border));
+  box-shadow: var(--j-glow-soft);
+}
+
+body .chat-archive-item-title {
+  font-size: var(--j-fs-sm);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* 3f · Footer nav — Memory pill + settings/theme icons. */
+body .sidebar-foot {
+  padding: var(--j-sp-3) var(--j-sp-4);
+  border-top: 1px solid var(--j-border);
+  background: color-mix(in srgb, var(--j-bg) 30%, transparent);
+}
+
+body .sidebar-foot .sidebar-foot-link:hover,
+body .sidebar-foot .btn-memory-nav:hover {
+  background: linear-gradient(135deg, var(--j-accent-soft), var(--j-accent-2-soft));
+  border-color: color-mix(in srgb, var(--j-accent) 35%, var(--j-border));
+  color: var(--j-accent);
+  transform: translateY(-1px);
+}
+
+/* 3g · Brand sub-label (#phase): the persistent identity line from the mockup. #phase
+   is the live phase indicator (JS empties it while idle) → when empty write "online";
+   while a turn is running JS writes something like "(thinking)" so that shows instead.
+   The model name stays in the top-bar pill (the mockup shows the model there too). */
+body .sidebar-brand .brand-text .phase {
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+}
+body .sidebar-brand .brand-text .phase:empty::before {
+  content: "online";
+}
+
+/* 3h · Pinned chat: a 📌 before the title (mockup .thr.pin .thr-t::before). */
+body .chat-archive-item.is-pinned .chat-archive-item-title::before {
+  content: "📌";
+  font-size: 0.8em;
+  margin-right: 0.28rem;
+}
+
+/* 3i · Selected chat: a 3px aurora bar on the left (mockup .thr.on::before). The card
+   is already position:relative. */
+body .chat-archive-item.is-active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 10px;
+  bottom: 10px;
+  width: 3px;
+  border-radius: var(--j-r-pill);
+  background: var(--j-accent-grad);
+}
+
+/* 3j · In the mockup there's NO in-sidebar heading (Chats) or close button; on desktop
+   (>900px) the sidebar is persistent → hide the row. On mobile (≤900px) the
+   #btn-archive-close is needed to close the overlay, so it stays there. */
+@media (min-width: 901px) {
+  body .chat-archive-head-row {
+    display: none;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   4 · LIVING IRIS ORB — #orb.orb (mockup treatment)
+   Conic iris/cyan/violet sphere + breathe + pulse halo + inner glint.
+   Covers only the idle/base face; live state rules (busy/streaming/speaking)
+   still override the color/animation at higher specificity when active.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Base sphere: inside the brand badge, a conic iris gradient + a top glint. */
+body .sidebar-brand .brand-mark #orb.orb {
+  position: relative;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 32% 28%, #fff 0%, transparent 38%),
+    conic-gradient(
+      from 210deg,
+      var(--j-accent),
+      var(--j-accent-3),
+      var(--j-accent-2),
+      var(--j-accent)
+    );
+  box-shadow:
+    0 0 0 1px var(--j-hairline),
+    0 6px 16px -6px color-mix(in srgb, var(--j-accent) 70%, transparent);
+}
+
+/* idle: living breath — the sphere grows slightly + the hue shifts (color stays on the sphere). */
+body .sidebar-brand .brand-mark #orb.orb.orb-idle {
+  background:
+    radial-gradient(circle at 32% 28%, #fff 0%, transparent 38%),
+    conic-gradient(
+      from 210deg,
+      var(--j-accent),
+      var(--j-accent-3),
+      var(--j-accent-2),
+      var(--j-accent)
+    );
+  box-shadow:
+    0 0 0 1px var(--j-hairline),
+    0 6px 16px -6px color-mix(in srgb, var(--j-accent) 70%, transparent);
+  animation: aur-shell-breathe 4.2s var(--j-ease) infinite;
+}
+
+/* outer pulse halo — only in the idle/base state; it turns off when live states
+   use their own ::before ring (below). */
+body .sidebar-brand .brand-mark #orb.orb.orb-idle::before {
+  content: "";
+  position: absolute;
+  inset: -7px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--j-accent) 28%, transparent),
+    transparent 70%
+  );
+  animation: aur-shell-pulse 4.2s var(--j-ease) infinite;
+  pointer-events: none;
+}
+
+/* inner glass glint (specular spot) — always on the base sphere. */
+body .sidebar-brand .brand-mark #orb.orb::after {
+  content: "";
+  position: absolute;
+  inset: 5px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 38% 32%,
+    rgba(255, 255, 255, 0.9),
+    rgba(255, 255, 255, 0.1) 50%,
+    transparent 70%
+  );
+  mix-blend-mode: screen;
+  pointer-events: none;
+}
+
+@keyframes aur-shell-breathe {
+  0%, 100% { transform: scale(1); filter: hue-rotate(0deg); }
+  50% { transform: scale(1.06); filter: hue-rotate(24deg); }
+}
+
+@keyframes aur-shell-pulse {
+  0%, 100% { opacity: 0.5; transform: scale(1); }
+  50% { opacity: 0.9; transform: scale(1.18); }
+}
+
+/* When live states busy/streaming/speaking are on, soften the iris-sphere fill
+   with the state color: v2's state rules already override the
+   `background`/`animation`/`::before` ring; here we only calm the sphere's ::after glint. */
+body .sidebar-brand .brand-mark #orb.orb.orb-busy::after,
+body:has(#log[data-chat-streaming="1"]) .sidebar-brand .brand-mark #orb.orb::after,
+body:has(.bubble-bot.is-speaking) .sidebar-brand .brand-mark #orb.orb::after {
+  opacity: 0.65;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   5 · COMPOSER — frosted-glass capsule
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Capsule: deep frosted glass + a thin border + a calm accent underglow.
+   (Pulls v2's gradient-border capsule toward a more frosted, more restrained glass.) */
+body .composer .composer-inner {
+  padding: 0.5rem 0.5rem 0.5rem 0.7rem;
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-xl);
+  background: var(--aur-frost-strong);
+  -webkit-backdrop-filter: blur(var(--aur-blur)) saturate(1.3);
+  backdrop-filter: blur(var(--aur-blur)) saturate(1.3);
+  box-shadow:
+    inset 0 1px 0 var(--j-hairline),
+    var(--j-shadow-2);
+}
+
+body .composer .composer-inner:focus-within {
+  border-color: color-mix(in srgb, var(--j-accent) 45%, var(--j-border));
+  background: color-mix(in srgb, var(--j-overlay) 90%, transparent);
+  box-shadow:
+    inset 0 1px 0 var(--j-hairline),
+    var(--j-glow-soft),
+    var(--j-shadow-2),
+    0 14px 50px -22px color-mix(in srgb, var(--j-accent) 40%, transparent);
+  transform: translateY(-1px);
+}
+
+body .composer .composer-inner.is-dragover {
+  border-color: color-mix(in srgb, var(--j-accent) 55%, var(--j-border));
+  background: color-mix(in srgb, var(--j-accent) 8%, var(--aur-frost-strong));
+  box-shadow: var(--j-glow-accent), var(--j-shadow-2);
+}
+
+/* Send button: a gradient-filled round — the mockup's live CTA. */
+body .composer .btn-send {
+  background: var(--j-accent-grad);
+  color: var(--j-accent-ink);
+  box-shadow: var(--j-shadow-accent);
+}
+
+body .composer .btn-send:hover:not(:disabled) {
+  filter: brightness(1.07);
+  transform: translateY(-1px);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   5b · TOP BAR PILLS — mono status capsules + filled-iris "Hey Akana"
+   Mockup: "● composer-2" / "WS connected" neutral mono pills + a filled-iris
+   "● Hey Akana" pill on the right. The existing .status-pill is already mono/pill;
+   here the neutral border + live dot are clarified, and .btn-wake is turned from
+   icon-only into a LABELED filled-iris pill (base styles.css/akana-v2.css hides
+   the label — it comes back here).
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Status pills: neutral border (instead of a green tint) + a live green dot. */
+body .top.top-bar .status-pill {
+  border-color: var(--j-border);
+  background: color-mix(in srgb, var(--j-raised) 70%, transparent);
+}
+
+/* "Hey Akana": a filled-iris labeled pill (the mockup's right accent chip).
+   A labeled pill only on wide screens — on narrow screens the base icon-only
+   stays (styles.css @900px hides .btn-label-full + a 34px square); otherwise the
+   mobile top bar overflows. */
+@media (min-width: 901px) {
+  body .top.top-bar .btn-wake {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-shrink: 0;
+    width: auto;
+    height: auto;
+    padding: 0.42rem 0.85rem;
+    border: 1px solid color-mix(in srgb, var(--j-accent) 32%, var(--j-border));
+    border-radius: var(--j-r-pill);
+    background: var(--j-accent-soft);
+    color: var(--j-accent-strong);
+    font-family: var(--j-font-ui);
+    font-size: var(--j-fs-sm);
+    font-weight: 600;
+  }
+
+  body .top.top-bar .btn-wake .btn-label-full {
+    display: inline;
+  }
+
+  body .top.top-bar .btn-wake .btn-chip-dot {
+    width: 8px;
+    height: 8px;
+    background: var(--j-accent-grad);
+  }
+
+  body .top.top-bar .btn-wake:hover {
+    background: color-mix(in srgb, var(--j-accent) 16%, transparent);
+    box-shadow: var(--j-glow-soft);
+  }
+}
+
+/* Top-bar action icons (rename / pin / download …): small squares,
+   iris-soft on hover (mockup .tb-actions .ibtn). */
+body .top.top-bar .chat-thread-actions .btn-thread-action:hover {
+  color: var(--j-accent-strong);
+  background: var(--j-accent-soft);
+  border-color: color-mix(in srgb, var(--j-accent) 30%, var(--j-border));
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   5c · COMPOSER META + HINTS — a roomy hint row below the capsule
+   Mockup: below the composer "● composer-2" + "/ command" · "@ context" … and
+   "Enter to send" on the right. The prompt chips are inviting glass chips ABOVE the capsule.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+body .composer .composer-meta {
+  margin-top: var(--j-sp-2);
+  margin-left: auto;
+  margin-right: auto;
+  --composer-hint-optical-x: -1.65rem;
+}
+
+@media (max-width: 560px) {
+  body .composer .composer-meta {
+    --composer-hint-optical-x: -0.35rem;
+  }
+}
+
+body .composer .composer-hint {
+  font-size: var(--j-fs-xs);
+  color: var(--j-ink-faint);
+  transform: translateX(var(--composer-hint-optical-x, 0));
+}
+
+/* Horizontal breathing room on the prompt chips, aligned with the capsule (visible in the empty state). */
+body .prompt-chips {
+  gap: var(--j-sp-2);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   6 · WELCOME / EMPTY — inviting empty state
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Title: a flowing aurora gradient wordmark (mockup scale). */
+body .log-empty-title {
+  font-size: clamp(1.8rem, 4.5vw, 2.6rem);
+  letter-spacing: -0.02em;
+}
+
+/* Prompt chips: glass invitations; an aurora gradient border on hover. */
+body .prompt-chip {
+  border-radius: var(--j-r-pill);
+  background: var(--aur-frost-strong);
+  -webkit-backdrop-filter: blur(var(--j-blur));
+  backdrop-filter: blur(var(--j-blur));
+}
+
+body .prompt-chip:hover {
+  border-color: color-mix(in srgb, var(--j-accent) 40%, var(--j-border));
+  color: var(--j-accent);
+  background: linear-gradient(
+    135deg,
+    var(--j-accent-soft),
+    var(--j-accent-2-soft)
+  );
+  box-shadow: var(--j-glow-soft);
+  transform: translateY(-2px);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   7 · RESPONSIVE — widen the column on narrow screens (shrink the side margin)
+   ═══════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 900px) {
+  :root {
+    --aur-read-gutter: clamp(1rem, 5vw, 2rem);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   8 · REDUCED MOTION — stop the orb/CTA loops (colors stay)
+   ═══════════════════════════════════════════════════════════════════════════ */
+@media (prefers-reduced-motion: reduce) {
+  body .sidebar-brand .brand-mark #orb.orb,
+  body .sidebar-brand .brand-mark #orb.orb.orb-idle,
+  body .sidebar-brand .brand-mark #orb.orb.orb-idle::before {
+    animation: none !important;
+  }
+
+  body .sidebar-new-chat,
+  body .composer .btn-send,
+  body .prompt-chip,
+  body .chat-archive-item,
+  body .composer .composer-inner {
+    transition: none !important;
+  }
+}

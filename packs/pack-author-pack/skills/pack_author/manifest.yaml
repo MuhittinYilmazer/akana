@@ -1,0 +1,14 @@
+id: pack_author
+version: 1
+title: "Pack: route the authoring request"
+description: "Umbrella that routes a new-pack/maintenance request to the right sub-skill. Contract-aware; offline."
+triggers:
+  - "make me a pack"
+  - "create a new capability pack"
+  - "develop a pack"
+  - "pack author"
+risk: low
+learn_from_success: true
+requires_approval: false
+cursor_skills: []
+tools_allowed: []

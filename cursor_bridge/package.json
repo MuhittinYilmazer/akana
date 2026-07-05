@@ -1,0 +1,14 @@
+{
+  "name": "akana-cursor-bridge",
+  "version": "0.1.0",
+  "description": "Node bridge to the @cursor/sdk for Akana's Cursor provider.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@cursor/sdk": "^1.0.23"
+  },
+  "overrides": {
+    "undici": "^6.27.0"
+  }
+}

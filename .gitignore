@@ -1,0 +1,62 @@
+# Python
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Env & local data (never commit secrets)
+.env
+.env.*
+!.env.example
+
+# Secrets / keys (defense in depth — .env already covered above)
+*.key
+*.pem
+*.p12
+*.pfx
+secrets*.json
+credentials*.json
+
+# Pack runtime / personal config (ship *.example, never the real values)
+packs/**/config/*.local.json
+
+# Node
+cursor_bridge/node_modules/
+node_modules/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Ship artifacts
+akana-*.tar.gz
+
+# Editor / AI assistant local settings (never part of the tree)
+.claude/
+
+# User data lives outside the repo (~/.akana); a local ./data/ is ignored too
+data/
+
+# Local runtime artifacts (defense in depth — never commit logs/databases/backups)
+*.log
+*.db
+*.sqlite3
+*.bak
+
+# Launch texts (copy-paste materials for HN / Reddit / dev.to). Owner keeps
+# these on disk only; they are not versioned or shipped with the repo.
+docs/launch/
+
+# Internal working documents (audit artifacts etc.) — not part of the public docs
+docs/internal/

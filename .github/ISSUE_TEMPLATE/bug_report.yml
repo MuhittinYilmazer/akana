@@ -1,0 +1,59 @@
+name: 🐞 Bug report
+description: Report something that isn't working as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! For **security** issues, do NOT use this form — follow
+        [SECURITY.md](https://github.com/MuhittinYilmazer/akana/blob/main/SECURITY.md) instead.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug and its impact.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Run `python akana.py ...`
+        2. In the UI, do ...
+        3. See the error
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: false
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Provider in use
+      options: [cursor, claude, gemini, openai, ollama, "not sure / N/A"]
+    validations:
+      required: false
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: Output of `python akana.py doctor` is ideal.
+      placeholder: |
+        - OS: (Windows 11 / Ubuntu 24.04 / macOS 14 ...)
+        - Python: (python --version)
+        - Node: (node --version, if using Cursor)
+        - Akana commit: (git rev-parse --short HEAD)
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: From `~/.akana/logs/server.log` or the console. Redact any secrets.
+      render: shell
+    validations:
+      required: false

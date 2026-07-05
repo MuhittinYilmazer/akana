@@ -1,0 +1,22 @@
+# Akana core runtime dependencies.
+# Akana is clone-and-run (NOT a pip-installable package):
+#   python3 akana.py setup   # creates venv, installs these
+#   python3 akana.py start
+# Install manually with: pip install -r requirements.txt
+fastapi>=0.110
+starlette>=0.36
+uvicorn[standard]>=0.27
+httpx>=0.27
+pydantic>=2.13.4
+cryptography>=49.0.0
+python-dotenv>=1.2.2
+ulid-py>=1.1
+pyyaml>=6.0
+python-multipart>=0.0.9
+anyio>=4
+numpy>=1.26
+edge-tts>=7
+# In-process MCP client — lets the native function-calling providers (ollama/gemini/
+# openai) reach external MCP servers from mcp_servers.yaml, matching the cursor/claude
+# tool surface. Soft dependency: the bridge degrades gracefully if it is absent.
+mcp>=1.0

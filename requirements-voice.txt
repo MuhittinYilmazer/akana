@@ -1,0 +1,23 @@
+# Voice input: faster-whisper STT + openWakeWord ("Hey Akana" wake word).
+# Optional — Akana boots fine without it (ImportError-guarded at runtime).
+# Install with: python akana.py add voice-full
+#
+# NOTE — do NOT `pip install -r requirements-voice.txt` directly on Linux with
+# Python 3.12+. openwakeword pins `tflite-runtime>=2.8,<3` on Linux, and
+# tflite-runtime has no cp312/cp313 wheels — so a plain resolve fails on modern
+# distros (Ubuntu 24.04+, Fedora 39+). Akana drives openwakeword through the
+# ONNX framework, not TFLite, so the CLI installs openwakeword with `--no-deps`
+# and lists its real runtime deps below. Use `python akana.py add voice-full`.
+faster-whisper>=1.0
+# openwakeword's real transitive runtime deps (tflite-runtime intentionally
+# omitted — we run the ONNX framework). Upper caps guard against a future
+# breaking major silently entering a fresh install.
+onnxruntime>=1.10,<2
+scipy>=1.3,<2
+scikit-learn>=1,<2
+requests>=2,<3
+tqdm>=4,<5
+# openwakeword itself is installed WITHOUT its declared deps by
+# add_cmd._install_requirements (avoids the tflite-runtime resolve failure).
+# Listed here so `deps_installed(voice-full)` still probes it. Do not remove.
+openwakeword>=0.6

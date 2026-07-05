@@ -1,0 +1,528 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   AURORA — RESPONSIVE  (tablet / mobile · CSS-only · loads LAST)
+   ─────────────────────────────────────────────────────────────────────────
+   Loaded LAST among ALL the aurora links in index.html + memory.html (right
+   BEFORE aurora-onboard). Its sole job: make the shell + memory + settings
+   surface usable on narrow viewports (tablet/phone). It NEVER touches the
+   desktop layout — EVERY rule is inside a @media.
+
+   COMPLEMENT, NOT CONFLICT — the layers below already do most of it:
+     • akana-v2.css @900px         → .chat-archive off-canvas drawer + backdrop,
+                                       .app-frame single column, topbar/composer padding
+     • akana-v2-studio.css @960/900/720/560 → memory: rail→top strip, hero 2-col,
+                                       overview single column, rail icon-strip
+     • aurora-shell.css @900px      → narrows the reading-column gutter
+     • aurora-settings.css @720px   → settings modal ~fullscreen + nav horizontal strip
+   This file ONLY closes the gaps those layers leave (goal 1-5):
+     - the top-bar/pills wrapping gracefully on narrow screens (fixed height removed)
+     - the aurora reading-column width not overflowing horizontally with the drawer layout
+     - composer touch targets ≥40px
+     - Facts card grid single column <900px
+     - the settings modal fullscreen <560px + title wrapping
+     - touch targets ≥40px + the drawer slide silenced in prefers-reduced-motion
+
+   Principles: only var(--j-*) tokens (no raw hex); if a new class is needed it's
+   `aur-` prefixed; motion only via transform/opacity; all rules @media-scoped.
+   Breakpoints: 900px (primary — aligned with the lower layers), 560px (phone),
+   + (hover:none)/(pointer:coarse) touch, + (prefers-reduced-motion).
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   1 · HORIZONTAL OVERFLOW SHIELD  (≤900px)
+   aurora-shell.css §1 already sets overflow-x:hidden on app-frame/stage/layout;
+   here we also lock it at the root document level so there's no horizontal
+   scroll at any width (even while the drawer sits outside via translateX(-105%)).
+   ═══════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 900px) {
+  html,
+  body {
+    overflow-x: hidden;
+    max-width: 100%;
+  }
+
+  /* While the drawer is closed (-105% outside) it adds no width to the document: fixed + clip.
+     v2 already positions it fixed; this is only extra insurance (it can't be an overflow source). */
+  body:not(.archive-open) .chat-archive,
+  body:not(.archive-open) .chat-archive.panel {
+    max-width: 100vw;
+  }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   2 · CHAT TOP BAR + PILLS  (≤900px)
+   Problem: akana-v2.css makes the top bar a FIXED-height (height:var(--v2-topbar-h))
+   single-row flex; aurora-shell applies width:var(--aur-read-w) + auto-center.
+   v2 @900px overrides only margin/padding, NOT width → aurora's reading-column
+   width combined with the margin stays fragile on narrow screens, and if the
+   pills don't fit they overflow the fixed height.
+   Solution: on narrow screens the top bar is FULL width (auto) + wrappable; the pills shrink.
+   ═══════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 900px) {
+  /* Top bar: drop the aurora reading-width (let v2's margin manage full-width),
+     relax the fixed height — so it can grow vertically when content wraps. The
+     height comes from the content's natural size (40px icon buttons + pills +
+     vertical padding) → the bar doesn't get thinner than on desktop, it grows when wrapping. */
+  body .stage .top.top-bar,
+  body .top.top-bar {
+    width: auto;
+    flex: 0 0 auto;
+    height: auto;
+    flex-wrap: wrap;
+    row-gap: var(--j-sp-2);
+    padding-top: var(--j-sp-1);
+    padding-bottom: var(--j-sp-1);
+  }
+
+  /* The right block (status + Hey Akana) can now wrap to the next line; instead
+     of hugging the left it flexes at the row end — wrap instead of overflow. */
+  body .top-bar .top-nav {
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: var(--j-sp-2);
+    row-gap: var(--j-sp-1);
+  }
+
+  /* The title bar (hamburger + title + actions) wants at least a full row, so
+     the title and the status pills don't collide and get cramped. */
+  body .chat-panel-toolbar,
+  body .top-bar .chat-panel-toolbar {
+    flex: 1 1 100%;
+    min-width: 0;
+    margin-right: 0;
+  }
+
+  /* The title text should shorten without overflowing (ellipsis, no wrap). */
+  body .chat-thread-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* The status group flexes, the pills shrink when needed. */
+  body .top-bar .status-group {
+    flex: 1 1 auto;
+    min-width: 0;
+    flex-wrap: wrap;
+    gap: var(--j-sp-1);
+  }
+
+  body .top-bar .status-pill {
+    min-width: 0;
+    flex-shrink: 1;
+  }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   3 · COMPOSER  (≤560px)  — stay touch-friendly and usable
+   akana-v2.css base: btn 42px; v2 @480px shrinks these to 38px (<40px).
+   For phone touch targets we pull them back to 40px; textarea + icon + send
+   fit on one row (composer-inner flex; textarea flex:1, min-width:0).
+   ═══════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 560px) {
+  /* Narrow the capsule's side margin; make use of the full width. */
+  body .composer {
+    padding-left: var(--j-sp-2);
+    padding-right: var(--j-sp-2);
+  }
+
+  body .composer .composer-inner {
+    gap: var(--j-sp-1);
+    padding: var(--j-sp-2);
+  }
+
+  /* Touch targets ≥40px (overrides v2 @480's 38px — this file loads last and
+     at equal/higher specificity). */
+  body .composer .btn-mic,
+  body .composer .btn-attach,
+  body .composer .btn-send {
+    flex-basis: 40px;
+    width: 40px;
+    height: 40px;
+  }
+
+  /* Meta below the composer: keep the hint centered, the TTS chip floats on the right. */
+  body .composer .composer-meta {
+    justify-content: center;
+  }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   4 · TOUCH TARGETS ≥40px  (narrow screen + coarse pointer)
+   akana-v2.css base .btn-icon = 36px. On touch/narrow screens the icon buttons
+   (top-bar actions, theme, settings, drawer open/close) must be ≥40px (goal 5).
+   We only grow the square; the visual style comes from the lower layer.
+   ═══════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 900px) {
+  body .btn-icon {
+    width: 40px;
+    height: 40px;
+  }
+}
+
+/* On coarse-pointer (touch) devices — regardless of viewport width —
+   the icon buttons and chat-list items should stay comfortably tappable. */
+@media (hover: none) and (pointer: coarse) {
+  body .btn-icon,
+  body .top-bar .btn-wake {
+    min-width: 40px;
+    min-height: 40px;
+  }
+
+  /* Top-bar single-action (rename/pin/download…) squares are tappable. */
+  body .chat-thread-actions .btn-thread-action {
+    width: 40px;
+    height: 40px;
+  }
+
+  /* Chat-list rows are tall enough for a finger. */
+  body .chat-archive-item {
+    min-height: 44px;
+  }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   5 · MEMORY (memory.html)  — Facts card grid SINGLE COLUMN <900px  (goal 3)
+   akana-v2-studio.css already: rail→top strip (@900), overview single column (@960),
+   hero 2-col (@720), rail icon-strip (@560). What's MISSING: the Facts/Inbox/Recall
+   card grid (aurora-memory.css `.memory-facts-cards` minmax(280px,1fr)) still
+   shows 2 columns at ~600-720px. The contract wants a single column → we close it here.
+   ═══════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 900px) {
+  /* All card grids (Facts/Inbox/Recall/Conflict share the same class)
+     drop to a single column — readable, no overflow. */
+  body.memory-studio-page .memory-facts-cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* The Facts filter row is already flex-wrap; what's missing: the search box
+     should drop to its own full-width row on narrow screens (so scope+history don't fit beside it). */
+  body.memory-studio-page .memory-filter-row > .memory-search-wrap {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  /* The Recall query row is also flex-wrap; force the search input to full width
+     (base flex:1 1 14rem can still sit side-by-side on narrow screens). */
+  body.memory-studio-page .memory-search-row > input[type="search"] {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+}
+
+/* Phone (≤560px): the top stat blocks (hero) drop to a single column — even 2-col
+   gets cramped on a narrow screen (akana-v2-studio @720 leaves it 2-col; we finish it here). */
+@media (max-width: 560px) {
+  body.memory-studio-page .mem-hero-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  /* The 2-up row in the new-fact form (key + scope) stacks vertically. */
+  body.memory-studio-page .settings-row-2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Very narrow phone (≤380px): hero single column — when even two cards don't fit. */
+@media (max-width: 380px) {
+  body.memory-studio-page .mem-hero-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   6 · SETTINGS MODAL  (<560px)  — COMPLEMENT aurora-settings @720px (goal 4)
+   aurora-settings.css @720px makes the modal `100vw-1rem` × `100dvh-1rem` and
+   turns the nav into a horizontal strip. Here we ONLY add the missing bits at <560px:
+     • modal full-bleed (minimal side margin)
+     • header (search + close) wraps vertically, no overflow
+     • search field full width
+   aurora-settings's @720 grid/nav rules are PRESERVED (no repeat/conflict).
+   ═══════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 560px) {
+  /* Match the high-specificity aurora rule (#settings-panel.settings-panel) so
+     the width/height can be overridden — almost fullscreen. */
+  #settings-panel.settings-panel {
+    width: calc(100vw - 0.5rem);
+    height: calc(100dvh - 0.5rem);
+    max-height: calc(100dvh - 0.5rem);
+    border-radius: var(--j-r-md);
+  }
+
+  /* Header: text block on TOP, (search + close) on the BOTTOM row — stack vertically.
+     (styles.css @900's proven layout; since aurora centers the modal it's
+     re-applied here at <560.) So the search box doesn't overflow the row. */
+  #settings-panel .settings-panel-head {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--j-sp-2);
+    padding: var(--j-sp-3);
+  }
+
+  #settings-panel .settings-panel-head-actions {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: var(--j-sp-2);
+  }
+
+  /* Narrow the pane scroll's side margin — let content breathe on narrow screens. */
+  #settings-panel .settings-scroll {
+    padding-left: var(--j-sp-3);
+    padding-right: var(--j-sp-3);
+  }
+
+  /* The tabs in the nav strip stay at a tappable height (horizontal strip). */
+  #settings-panel .settings-tab {
+    min-height: 40px;
+  }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   8 · PHONE TOP-BAR DENSITY  (≤560px)  — reclaim vertical space
+   Problem: the title row has hamburger + title + 6 action icons; when §4 forces
+   every icon to 40px (6×40 + gaps) the title gets cramped down to an ellipsis
+   and the bar grows unnecessarily. Vertical space is precious on a phone → we
+   narrow the margin/padding, pull the action icons (only THIS dense title group)
+   to 36px and tighten the spacing. §4's general 40px touch baseline is PRESERVED
+   on other buttons; here only .btn-thread-action gets 36px, with visual spacing between them.
+   ═══════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 560px) {
+  /* Narrow the top-bar + title-bar vertical padding — the bar gets thinner, freeing room for the chat. */
+  body .stage .top.top-bar,
+  body .top.top-bar {
+    margin-top: var(--j-sp-1);
+    row-gap: var(--j-sp-1);
+  }
+
+  body .chat-panel-toolbar {
+    padding-top: var(--j-sp-1);
+    padding-bottom: var(--j-sp-1);
+  }
+
+  /* Action icons: 36px + a tiny gap in the dense title group → 6 icons + title
+     fit on one row without cramping. (We override §4's 40px touch baseline ONLY for
+     this group at equal/higher specificity; the spacing between buttons keeps touch usable.) */
+  body .chat-thread-actions {
+    gap: var(--j-sp-1);
+  }
+
+  body .btn-icon.btn-thread-action,
+  body .chat-thread-actions .btn-thread-action {
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
+    min-height: 36px;
+  }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   7 · REDUCED MOTION  (goal 5)  — drawer slide + mobile transforms silenced
+   akana-v2.css slides the drawer with transform:translateX(...) + transition;
+   tokens.css zeroes the durations in reduced-motion but HERE we also turn it off
+   explicitly (contract: "respect prefers-reduced-motion for the drawer slide").
+   The drawer still opens/closes — only the slide animation becomes instant.
+   ═══════════════════════════════════════════════════════════════════════════ */
+@media (prefers-reduced-motion: reduce) {
+  body .chat-archive,
+  body .chat-archive.panel,
+  body .chat-archive-backdrop {
+    transition: none !important;
+  }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   9 · PHONE: SAFE AREA (notch / gesture-bar) + TOUCH TARGETS
+   The index.html viewport is already `viewport-fit=cover` (paints up to the
+   notch) but no layer consumed env(safe-area-inset-*) → content could slide
+   UNDER the notch/gesture bar. Here we add a top inset to the top bar and a
+   bottom inset to the composer (the bottom tab-strip inset is in §11). Only
+   padding grows; the layout doesn't change. (pointer:coarse) EXCLUDES small desktop windows.
+   ═══════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 560px) and (pointer: coarse) {
+  /* The top bar must not go under the notch — an inset is ADDED to the existing
+     top padding (with max: if inset is 0, §8's --j-sp-1 is preserved, never shrinks). */
+  body .stage .top.top-bar,
+  body .top.top-bar {
+    padding-top: max(var(--j-sp-1), env(safe-area-inset-top));
+  }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   10 · PHONE: STICKY COMPOSER (above the keyboard) + META SINGLE ROW  (goal 1)
+   .composer is in normal flow; on a phone it should stick to the bottom so it
+   stays visible when the virtual keyboard opens. A safe-area inset is added to
+   the bottom padding (gesture bar). To reclaim vertical space, composer-meta
+   carries only the hint + TTS chip; the effort bar is inside the capsule.
+   z-index: not ABOVE the drawer backdrop (akana-v2); just a low value so it
+   sits above the streaming content. The conflict with the bottom tab strip is
+   resolved in §11 (bottom padding on #log-scroll equal to the tab height).
+   ═══════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 560px) {
+  body .composer {
+    position: sticky;
+    bottom: 0;
+    z-index: 5;
+    /* Must not fall under the gesture bar / home indicator. */
+    padding-bottom: max(var(--j-sp-2), env(safe-area-inset-bottom));
+  }
+
+  /* Meta row: hint centered, TTS chip on the right (absolute). */
+  body .composer .composer-meta {
+    overflow: visible;
+    min-width: 0;
+  }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   11 · PHONE: SCROLL FEEL + ROOM FOR THE BOTTOM TAB STRIP  (goal · scroll)
+   iOS momentum + overscroll chain-break on #log-scroll. Also, so the bottom tab
+   strip (akana-mobile-nav.js → .mnav, fixed) doesn't cover content, we leave
+   room below the composer equal to the strip height + safe-area. The strip's
+   VISUAL and actual height are defined in aurora-mobile.css (--mnav-h); here we
+   only consume that variable to open the space (a harmless small gap even when
+   the strip is hidden). The strip is visible only on mobile/standalone (CSS visibility lives there).
+   ═══════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 560px) {
+  body #log-scroll {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    /* The last message must not stay under the fixed bottom tab strip: inner-bottom
+       padding equal to the strip height + safe-area (when hidden --mnav-h=0 → harmless). */
+    padding-bottom: calc(var(--mnav-h, 0px) + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* The composer's sticky bottom edge should sit above the tab strip: raise the
+     sticky bottom (offset) by the strip height + safe-area. So the strip doesn't
+     cover the composer; the two don't overlap. */
+  body .composer {
+    bottom: calc(var(--mnav-h, 0px) + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* Edge case: a WIDE installed PWA window (standalone but >560px). The strip
+   stays visible via the standalone gate in aurora-mobile; here we open the same
+   tab space so the strip doesn't cover the composer/content in a wide window.
+   (The target A34 is already narrow → §11 handles it; this is just wide-standalone insurance.) */
+@media (display-mode: standalone) and (min-width: 561px) {
+  body #log-scroll {
+    padding-bottom: calc(var(--mnav-h, 0px) + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   12 · REDUCED MOTION (bottom tab strip)  — completes §7
+   The bottom tab strip (aurora-mobile.css) uses a transition on the active-tab
+   indicator; make it instant in reduced-motion. This PRESERVES §7's drawer rule (separate block).
+   ═══════════════════════════════════════════════════════════════════════════ */
+@media (prefers-reduced-motion: reduce) {
+  body .mnav,
+  body .mnav .mnav-tab,
+  body .mnav .mnav-ind {
+    transition: none !important;
+  }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   13 · TOP-BAR COMPACT (≤560px)  — model name + WS on one row, panel lowered
+   Complaint: on a phone #model-pill ("Claude · opus") and #ws-status ("WS connected")
+   wrapped to separate rows (status-group flex-wrap:wrap, §2/≤900) → the top panel
+   was 3 rows. Here the status group is fixed to a SINGLE row and CENTERED; the WS
+   text ("WS connected") is visible on the phone too (user request) and vertical
+   space is reduced. This file loads last + ID specificity → overrides ≤900. */
+@media (max-width: 560px) {
+  /* Keep status + Hey Akana on one row (no wrap). */
+  body .top-bar .top-nav {
+    flex-wrap: nowrap;
+    row-gap: 0;
+    gap: var(--j-sp-1);
+  }
+  /* Model + WS side by side, the group is CENTERED (grows + centers its content; actions on the right). */
+  body .top-bar .status-group {
+    flex-wrap: nowrap;
+    flex: 1 1 auto;
+    min-width: 0;
+    gap: var(--j-sp-1);
+    justify-content: center;
+  }
+  /* The "WS connected" text is VISIBLE on the phone too (user request). */
+  body .top-bar #ws-status .status-text {
+    display: inline;
+  }
+  body .top-bar #ws-status {
+    flex: 0 0 auto;
+  }
+  /* The model name shows fully at its natural width (there's room on the row, no shrink);
+     an excessively long name theoretically shortens with an ellipsis (safety). */
+  body .top-bar #model-pill {
+    min-width: 0;
+    flex: 0 0 auto;
+    max-width: 60vw;
+  }
+  body .top-bar #model-pill .status-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* Lower the top panel: row gap + vertical inner padding are reduced. */
+  body .top.top-bar {
+    row-gap: var(--j-sp-1);
+    padding-top: 2px;
+    padding-bottom: 2px;
+  }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   12 · PHONE: TOAST STRIP ABOVE THE BOTTOM TAB  (overlay · toast)
+   The .ui-toast-stack in styles.css is bottom-fixed; on mobile it stayed UNDER
+   the bottom tab strip (--mnav-h) + home indicator and got hidden. On mobile
+   raise it by the strip + safe-area (when hidden --mnav-h=0 → harmless).
+   ═══════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 560px) {
+  body .ui-toast-stack {
+    bottom: calc(var(--j-sp-4) + var(--mnav-h, 0px) + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   13 · PHONE: HIDE DESKTOP KEYBOARD HINTS  (empty · keys)
+   The Enter / Shift+Enter / Ctrl+Shift+N / ? hints on the empty chat screen are
+   meaningless on a touch device → hidden (markup preserved, CSS only).
+   ═══════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 560px) {
+  body .log-empty-keys {
+    display: none;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   iOS FOCUS-ZOOM PREVENTION (mobile polish — audit C1/H1)
+   Safari zooms the viewport when an input with font-size < 16px is FOCUSED and
+   LEAVES it zoomed/panned — this happens on every message in the most-used
+   composer textarea. text-size-adjust does NOT prevent this. On touch (no hover +
+   coarse pointer) devices make ALL writable controls ≥16px. With max():
+   if the token is small it rises to a 16px floor, if it's already ≥16px it's kept as is.
+   Desktop is unaffected (only coarse-pointer media). */
+@media (hover: none) and (pointer: coarse) {
+  textarea,
+  select,
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]) {
+    font-size: max(16px, var(--j-fs-md));
+  }
+}

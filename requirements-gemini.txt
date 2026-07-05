@@ -1,0 +1,6 @@
+# Gemini provider — native text chat + full-duplex Live audio (native-audio) when
+# `provider==gemini`. OPTIONAL cloud feature (opt-in): audio/text flows to Google,
+# the user supplies their own key. If NOT installed, Akana boots cleanly and the
+# Gemini surfaces are reported as "unavailable". Enable:
+#   pip install -r requirements-gemini.txt
+google-genai>=1.0

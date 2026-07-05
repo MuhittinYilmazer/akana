@@ -1,0 +1,1397 @@
+/* Memory Studio skin — design language from a SINGLE source: tokens.css (var(--j-*)).
+   Dark/light theme comes free via the tokens; no raw hex.
+   styles.css provides the base skeleton; this file dresses the /memory page. */
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   STUDIO 2 — "memory command center": left vertical nav rail + view-switch content.
+   The shell is now a [rail | content] grid.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── 0. Shell: shell = rail + content grid ──────────────────────────────── */
+body.memory-studio-page .memory-studio-layout {
+  width: min(1240px, 100%);
+  margin-inline: auto;
+}
+
+body.memory-studio-page .mem-shell {
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  background: var(--j-panel) !important;
+  border: 1px solid var(--j-border-strong) !important;
+  border-radius: var(--j-r-lg) !important;
+  box-shadow: var(--j-shadow-2);
+  backdrop-filter: blur(var(--j-blur));
+  -webkit-backdrop-filter: blur(var(--j-blur));
+}
+
+/* Thin header + global search */
+body.memory-studio-page .mem-topbar {
+  gap: var(--j-sp-4);
+}
+
+body.memory-studio-page .mem-topbar-search {
+  flex: 1 1 auto;
+  display: flex;
+  justify-content: center;
+  min-width: 0;
+  padding-inline: var(--j-sp-4);
+}
+
+body.memory-studio-page .mem-search-wrap {
+  width: min(440px, 100%);
+}
+
+/* ─── 1. Left vertical navigation rail ───────────────────────────────────── */
+body.memory-studio-page .mem-rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--j-sp-2);
+  padding: var(--j-sp-4) var(--j-sp-3);
+  border-right: 1px solid var(--j-border);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--j-raised) 60%, transparent), transparent 60%);
+}
+
+body.memory-studio-page .mem-rail-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+}
+
+body.memory-studio-page .mem-rail-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--j-sp-3);
+  width: 100%;
+  padding: 0.62rem 0.72rem !important;
+  border: 1px solid transparent !important;
+  border-radius: var(--j-r-md) !important;
+  background: transparent !important;
+  color: var(--j-ink-dim) !important;
+  font-family: var(--j-font-ui) !important;
+  font-size: var(--j-fs-sm) !important;
+  font-weight: 600 !important;
+  letter-spacing: 0 !important;
+  text-transform: none !important;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--j-dur-fast) var(--j-ease),
+    color var(--j-dur-fast) var(--j-ease),
+    border-color var(--j-dur-fast) var(--j-ease),
+    box-shadow var(--j-dur-fast) var(--j-ease),
+    transform var(--j-dur-fast) var(--j-ease);
+}
+
+body.memory-studio-page .mem-rail-item:hover {
+  color: var(--j-ink) !important;
+  background: color-mix(in srgb, var(--j-accent-soft) 60%, transparent) !important;
+  border-color: var(--j-border) !important;
+}
+
+/* Active rail item: gradient marker bar + azure→violet glass fill + glow */
+body.memory-studio-page .mem-rail-item.is-active {
+  color: var(--j-accent) !important;
+  background: linear-gradient(135deg, var(--j-accent-soft), var(--j-accent-2-soft)) !important;
+  border-color: color-mix(in srgb, var(--j-accent) 35%, transparent) !important;
+  box-shadow: var(--j-glow-soft), var(--j-shadow-1);
+}
+
+body.memory-studio-page .mem-rail-item.is-active::before {
+  content: "";
+  position: absolute;
+  left: -0.72rem;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 56%;
+  border-radius: var(--j-r-pill);
+  background: var(--j-accent-grad);
+}
+
+body.memory-studio-page .mem-rail-item:focus-visible {
+  outline: 2px solid var(--j-accent);
+  outline-offset: 2px;
+}
+
+body.memory-studio-page .mem-rail-icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  color: currentColor;
+}
+
+body.memory-studio-page .mem-rail-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Rail counter badge (pending Inbox) */
+body.memory-studio-page .mem-rail-badge {
+  margin-left: auto;
+}
+
+body.memory-studio-page .mem-rail-foot {
+  margin-top: auto;
+  padding-top: var(--j-sp-3);
+  border-top: 1px solid var(--j-border);
+}
+
+body.memory-studio-page .mem-rail-refresh {
+  display: flex;
+  align-items: center;
+  gap: var(--j-sp-2);
+  width: 100%;
+  justify-content: flex-start;
+}
+
+/* ─── 2. Content area + view-switch transition ───────────────────────────── */
+body.memory-studio-page .mem-content {
+  min-width: 0;
+  padding: var(--j-sp-5) var(--j-sp-5) var(--j-sp-6);
+}
+
+/* View panel: hidden while hidden; when active, flows in via opacity+translate */
+body.memory-studio-page .mem-view {
+  animation: mem-view-in var(--j-dur-med) var(--j-ease) both;
+}
+
+@keyframes mem-view-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+body.memory-studio-page .mem-view-head {
+  margin-bottom: var(--j-sp-4);
+}
+
+body.memory-studio-page .mem-view-title {
+  margin: 0 0 var(--j-sp-1);
+  font-family: var(--j-font-display);
+  font-size: var(--j-fs-xl);
+  font-weight: 600;
+  letter-spacing: var(--j-tracking-tight);
+  color: var(--j-ink);
+}
+
+body.memory-studio-page .mem-view-sub {
+  margin: 0;
+  max-width: 60ch;
+  font-size: var(--j-fs-sm);
+  line-height: 1.5;
+  color: var(--j-ink-dim);
+}
+
+body.memory-studio-page .mem-view-sub strong {
+  color: var(--j-ink);
+  font-weight: 600;
+}
+
+/* ─── 3. Overview: hero metrics ──────────────────────────────────────────── */
+body.memory-studio-page .mem-hero-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--j-sp-3);
+  margin-bottom: var(--j-sp-5);
+}
+
+body.memory-studio-page .mem-hero-card {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: var(--j-sp-1);
+  min-height: 6.2rem;
+  padding: var(--j-sp-4);
+  background: var(--j-raised) !important;
+  border: 1px solid var(--j-border) !important;
+  border-radius: var(--j-r-md) !important;
+  box-shadow: var(--j-shadow-1);
+  transition:
+    border-color var(--j-dur-fast) var(--j-ease),
+    box-shadow var(--j-dur-fast) var(--j-ease),
+    transform var(--j-dur-fast) var(--j-ease);
+}
+
+body.memory-studio-page .mem-hero-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--j-accent) 65%, transparent) 35%, color-mix(in srgb, var(--j-accent-2) 60%, transparent) 65%, transparent);
+  opacity: 0.9;
+  pointer-events: none;
+}
+
+body.memory-studio-page .mem-hero-card-pending::before {
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--j-warn) 60%, transparent), transparent);
+}
+
+body.memory-studio-page .mem-hero-card:hover {
+  border-color: color-mix(in srgb, var(--j-accent) 35%, var(--j-border)) !important;
+  box-shadow: var(--j-glow-soft), var(--j-shadow-2);
+  transform: translateY(-2px);
+}
+
+body.memory-studio-page .mem-hero-value {
+  font-family: var(--j-font-mono) !important;
+  font-size: 2rem !important;
+  font-weight: 600;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--j-ink) !important;
+}
+
+body.memory-studio-page .mem-hero-card-pending .mem-hero-value {
+  color: var(--j-warn) !important;
+}
+
+body.memory-studio-page .mem-hero-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--j-font-ui) !important;
+  font-size: var(--j-fs-xs) !important;
+  font-weight: 600;
+  letter-spacing: 0.06em !important;
+  text-transform: uppercase;
+  color: var(--j-ink-dim) !important;
+}
+
+/* Vector card status dot: muted with no records, embeddings > 0 → energy */
+body.memory-studio-page .memory-stat-card-vector .mem-hero-label::before {
+  content: "";
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--j-r-pill);
+  background: var(--j-ink-faint);
+  transition:
+    background var(--j-dur-med) var(--j-ease),
+    box-shadow var(--j-dur-med) var(--j-ease);
+}
+
+body.memory-studio-page .memory-stat-card-vector.is-live .mem-hero-label::before {
+  background: var(--j-energy);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--j-energy) 65%, transparent);
+  animation: memory-dot-pulse 2.6s var(--j-ease) infinite;
+}
+
+@keyframes memory-dot-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 4px color-mix(in srgb, var(--j-energy) 45%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 11px color-mix(in srgb, var(--j-energy) 80%, transparent);
+  }
+}
+
+/* Overview: activity + quick actions two columns */
+body.memory-studio-page .mem-overview-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: var(--j-sp-4);
+  align-items: start;
+}
+
+body.memory-studio-page .mem-panel {
+  padding: var(--j-sp-4);
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-md);
+  background: color-mix(in srgb, var(--j-panel) 70%, transparent);
+}
+
+body.memory-studio-page .mem-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--j-sp-2);
+  margin-bottom: var(--j-sp-3);
+}
+
+body.memory-studio-page .mem-panel-title {
+  margin: 0;
+  font-size: var(--j-fs-md);
+  font-weight: 600;
+  color: var(--j-ink);
+}
+
+/* Recent activity timeline */
+body.memory-studio-page .mem-timeline {
+  margin: 0;
+  list-style: none;
+  padding: 0;
+}
+
+body.memory-studio-page .mem-timeline .memory-timeline-item {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  gap: var(--j-sp-3);
+  padding: var(--j-sp-2) 0;
+  margin: 0;
+  border: none;
+  background: transparent;
+  animation: memory-card-in var(--j-dur-fast) var(--j-ease) both;
+}
+
+body.memory-studio-page .mem-timeline .memory-timeline-item + .memory-timeline-item {
+  border-top: 1px solid var(--j-border);
+}
+
+.memory-timeline-dot {
+  position: relative;
+  margin-top: 0.42rem;
+  width: 9px;
+  height: 9px;
+  border-radius: var(--j-r-pill);
+  background: var(--j-accent);
+}
+
+.memory-timeline-item[data-kind*="approve"] .memory-timeline-dot,
+.memory-timeline-item[data-kind*="fact"] .memory-timeline-dot {
+  background: var(--j-energy);
+}
+
+.memory-timeline-item[data-kind*="staging"] .memory-timeline-dot,
+.memory-timeline-item[data-kind*="pending"] .memory-timeline-dot {
+  background: var(--j-warn);
+}
+
+.memory-timeline-main {
+  min-width: 0;
+}
+
+.memory-timeline-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--j-sp-2);
+}
+
+.memory-timeline-title {
+  font-size: var(--j-fs-sm);
+  font-weight: 600;
+  color: var(--j-ink);
+  word-break: break-word;
+}
+
+.memory-timeline-ts {
+  margin-left: auto;
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+  color: var(--j-ink-faint);
+  white-space: nowrap;
+}
+
+.memory-timeline-detail {
+  margin: 2px 0 0;
+  font-size: var(--j-fs-xs);
+  line-height: 1.45;
+  color: var(--j-ink-dim);
+  word-break: break-word;
+}
+
+/* ─── 5. Legacy control/tab classes (backward-compat; hidden/spare now) ───── */
+.memory-studio-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--j-sp-3);
+  flex-wrap: wrap;
+  margin: var(--j-sp-4) 0;
+}
+
+.memory-studio-page .btn-ghost:focus-visible,
+.memory-studio-page .btn-primary:focus-visible,
+.memory-studio-page .memory-empty-action:focus-visible {
+  outline: 2px solid var(--j-accent);
+  outline-offset: 2px;
+}
+
+.memory-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--j-sp-2);
+}
+
+.memory-toolbar-global {
+  margin: 0;
+}
+
+.memory-studio-pane .memory-toolbar {
+  justify-content: flex-end;
+  margin: 0 0 var(--j-sp-2);
+}
+
+/* Counter badges: pending Inbox → amber, Conflict → red */
+.memory-studio-page .memory-tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.3rem;
+  padding: 0.05rem 0.4rem;
+  margin-left: 0.1rem;
+  border-radius: var(--j-r-pill);
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+  font-weight: 700;
+  background: color-mix(in srgb, var(--j-warn) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--j-warn) 45%, transparent);
+  color: var(--j-warn);
+}
+
+.memory-tab-badge[hidden] {
+  display: none;
+}
+
+/* Tab intro strip */
+.memory-studio-page .memory-tab-intro {
+  margin: 0 0 var(--j-sp-3);
+  padding: var(--j-sp-3) var(--j-sp-4);
+  border: 1px solid var(--j-border);
+  border-left: 2px solid color-mix(in srgb, var(--j-accent) 45%, transparent);
+  border-radius: var(--j-r-sm);
+  background: color-mix(in srgb, var(--j-panel) 70%, transparent);
+  color: var(--j-ink-dim);
+  font-size: var(--j-fs-sm);
+  line-height: 1.5;
+}
+
+.memory-studio-page .memory-tab-intro strong {
+  color: var(--j-ink);
+  font-weight: 600;
+}
+
+/* ─── 3. Card lists (shared language) ─────────────────────────────────────── */
+.memory-studio-page .memory-hit-list {
+  max-height: none; /* page itself scrolls; drop the list cap */
+  overflow: visible;
+  margin-top: var(--j-sp-3);
+}
+
+.memory-studio-page .memory-hit-list li {
+  padding: var(--j-sp-4);
+  margin-bottom: var(--j-sp-3);
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-md);
+  background: var(--j-raised);
+  font-size: var(--j-fs-sm);
+  line-height: 1.5;
+  animation: memory-card-in var(--j-dur-fast) var(--j-ease) both;
+  transition:
+    border-color var(--j-dur-fast) var(--j-ease),
+    box-shadow var(--j-dur-fast) var(--j-ease),
+    opacity var(--j-dur-fast) var(--j-ease);
+}
+
+@keyframes memory-card-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.memory-studio-page .memory-fact-card {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--j-sp-2);
+  border-left: 3px solid color-mix(in srgb, var(--j-accent) 55%, transparent);
+}
+
+.memory-studio-page .memory-fact-card:hover {
+  border-color: var(--j-border-strong);
+  border-left-color: var(--j-accent);
+  box-shadow: var(--j-shadow-1);
+}
+
+/* Card head: key dominant, meta muted on the right */
+.memory-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--j-sp-2);
+  flex-wrap: wrap;
+}
+
+.memory-card-key {
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-md);
+  font-weight: 600;
+  color: var(--j-ink);
+  word-break: break-word;
+}
+
+.memory-studio-page .memory-hit-list li .memory-hit-meta {
+  margin: 0 0 0 auto;
+  font-size: var(--j-fs-xs);
+  color: var(--j-ink-faint);
+  white-space: nowrap;
+}
+
+.memory-studio-page .memory-hit-text {
+  font-size: var(--j-fs-md);
+  color: var(--j-ink);
+}
+
+.memory-inbox-reason {
+  margin: 0;
+  padding-left: var(--j-sp-3);
+  border-left: 2px solid var(--j-border-strong);
+  font-size: var(--j-fs-xs);
+  font-style: italic;
+  color: var(--j-ink-dim);
+}
+
+.memory-fact-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--j-sp-2);
+  margin-top: var(--j-sp-1);
+}
+
+/* Studio buttons pulled into token language */
+.memory-studio-page .btn-sm {
+  padding: 0.32rem 0.8rem;
+  font-size: var(--j-fs-xs);
+}
+
+.memory-studio-page .btn-primary {
+  border-radius: var(--j-r-sm);
+  background: linear-gradient(135deg, var(--j-accent), var(--j-accent-strong));
+  color: var(--j-accent-ink);
+  box-shadow: var(--j-shadow-1);
+}
+
+/* Approve: --j-energy framed "promote to permanent" button */
+.memory-studio-page .memory-approve-btn {
+  background: color-mix(in srgb, var(--j-energy) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--j-energy) 55%, transparent);
+  color: var(--j-energy);
+  box-shadow: none;
+  font-weight: 700;
+  transition:
+    background var(--j-dur-fast) var(--j-ease),
+    box-shadow var(--j-dur-fast) var(--j-ease),
+    transform var(--j-dur-fast) var(--j-ease);
+}
+
+.memory-studio-page .memory-approve-btn:hover {
+  background: color-mix(in srgb, var(--j-energy) 22%, transparent);
+  filter: none;
+}
+
+.memory-studio-page .memory-fact-delete {
+  color: var(--j-danger);
+  border-color: color-mix(in srgb, var(--j-danger) 30%, var(--j-border));
+}
+
+.memory-studio-page .memory-fact-delete:hover {
+  color: var(--j-danger);
+  background: color-mix(in srgb, var(--j-danger) 16%, transparent);
+  border-color: color-mix(in srgb, var(--j-danger) 55%, transparent);
+}
+
+/* Slide-away: studio's optimistic li.remove() is converted to this class
+   via the render.js hook; the counter class drops instantly, the node
+   detaches at the end of the transition. (Under reduced-motion, durations
+   are 0ms → disappears instantly.) */
+.memory-studio-page .memory-hit-list li.is-leaving {
+  opacity: 0;
+  transform: translateX(32px) scale(0.98);
+  max-height: 0 !important; /* beats the inline starting height → collapse animation */
+  margin-bottom: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-color: transparent;
+  overflow: hidden;
+  pointer-events: none;
+  animation: none;
+  transition:
+    opacity var(--j-dur-med) var(--j-ease),
+    transform var(--j-dur-med) var(--j-ease),
+    max-height var(--j-dur-med) var(--j-ease),
+    margin var(--j-dur-med) var(--j-ease),
+    padding var(--j-dur-med) var(--j-ease),
+    border-color var(--j-dur-med) var(--j-ease);
+}
+
+/* ─── 5. Facts: search, grid, invalidated, inline editor ─────────────────── */
+.memory-filter-row {
+  display: flex;
+  gap: var(--j-sp-2);
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: var(--j-sp-3);
+}
+
+.memory-search-wrap {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 13rem;
+}
+
+.memory-search-icon {
+  position: absolute;
+  left: 0.72rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--j-ink-faint);
+  pointer-events: none;
+  transition: color var(--j-dur-fast) var(--j-ease);
+}
+
+.memory-search-wrap:focus-within .memory-search-icon {
+  color: var(--j-accent);
+}
+
+.memory-search-wrap input[type="search"] {
+  width: 100%;
+  padding-left: 2.2rem;
+}
+
+/* Studio form elements: glass background + focus glow (excluding toggle/checkbox) */
+.memory-studio-page .memory-studio-pane input[type="search"],
+.memory-studio-page .memory-studio-pane input[type="text"],
+.memory-studio-page .memory-studio-pane select,
+.memory-studio-page .memory-studio-pane textarea {
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-sm);
+  background: color-mix(in srgb, var(--j-panel) 85%, transparent);
+  color: var(--j-ink);
+  font: inherit;
+  font-size: var(--j-fs-sm);
+  transition:
+    border-color var(--j-dur-fast) var(--j-ease),
+    box-shadow var(--j-dur-fast) var(--j-ease);
+}
+
+.memory-studio-page .memory-studio-pane input[type="search"]:focus,
+.memory-studio-page .memory-studio-pane input[type="text"]:focus,
+.memory-studio-page .memory-studio-pane select:focus,
+.memory-studio-page .memory-studio-pane textarea:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--j-accent) 60%, transparent);
+  box-shadow: 0 0 0 3px var(--j-accent-soft), var(--j-glow-soft);
+}
+
+.memory-filter-row select {
+  width: auto;
+}
+
+.memory-history-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--j-sp-1);
+  font-size: var(--j-fs-xs);
+  color: var(--j-ink-dim);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.memory-history-toggle input {
+  accent-color: var(--j-accent);
+}
+
+/* Fact cards: 2-column grid on wide screens (Facts panel only) */
+@media (min-width: 860px) {
+  .memory-studio-page .memory-studio-pane[data-memory-view="facts"] .memory-facts-cards {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--j-sp-3);
+    align-items: start;
+  }
+
+  .memory-studio-page .memory-studio-pane[data-memory-view="facts"] .memory-facts-cards > li {
+    margin-bottom: 0;
+  }
+
+  .memory-studio-page .memory-studio-pane[data-memory-view="facts"] .memory-facts-cards > li.memory-state {
+    grid-column: 1 / -1;
+  }
+}
+
+/* Invalidated record: strikethrough + faded, accent line muted */
+.memory-studio-page .memory-fact-card.is-invalidated {
+  opacity: 0.62;
+  border-style: dashed;
+  border-left-color: var(--j-ink-faint);
+}
+
+.memory-studio-page .memory-fact-card.is-invalidated:hover {
+  opacity: 0.85;
+}
+
+.memory-fact-card.is-invalidated .memory-hit-text {
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--j-ink-dim) 75%, transparent);
+  opacity: 0.7;
+}
+
+/* Inline editor: glass panel */
+.memory-studio-page .memory-fact-editor {
+  display: grid;
+  gap: var(--j-sp-3);
+  margin-top: var(--j-sp-2);
+  padding: var(--j-sp-4);
+  border: 1px solid color-mix(in srgb, var(--j-accent) 35%, var(--j-border));
+  border-radius: var(--j-r-md);
+  background: var(--j-overlay);
+  backdrop-filter: blur(var(--j-blur));
+  -webkit-backdrop-filter: blur(var(--j-blur));
+  box-shadow: var(--j-shadow-2), var(--j-glow-soft);
+  animation: memory-rise var(--j-dur-med) var(--j-ease) both;
+}
+
+@keyframes memory-rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+.memory-fact-editor textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+}
+
+.memory-fact-editor-modes {
+  display: flex;
+  gap: var(--j-sp-4);
+  flex-wrap: wrap;
+}
+
+.memory-fact-editor-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--j-sp-1);
+  font-size: var(--j-fs-xs);
+  color: var(--j-ink-dim);
+  cursor: pointer;
+}
+
+.memory-fact-editor-mode input {
+  accent-color: var(--j-accent);
+}
+
+/* New fact form panel */
+.memory-studio-page .memory-panel {
+  margin-top: var(--j-sp-4);
+  padding: var(--j-sp-2) var(--j-sp-4);
+  border: 1px dashed var(--j-border-strong);
+  border-radius: var(--j-r-md);
+  background: color-mix(in srgb, var(--j-panel) 60%, transparent);
+}
+
+.memory-studio-page .memory-panel > summary {
+  padding: var(--j-sp-2) 0;
+  color: var(--j-ink-dim);
+  cursor: pointer;
+  transition: color var(--j-dur-fast) var(--j-ease);
+}
+
+.memory-studio-page .memory-panel > summary:hover,
+.memory-studio-page .memory-panel[open] > summary {
+  color: var(--j-accent);
+}
+
+/* ─── 6. Recall: score bar + strategy trace + time-travel (as_of) ────────── */
+.memory-search-row {
+  display: flex;
+  gap: var(--j-sp-2);
+  align-items: stretch;
+}
+
+/* as_of row: query what was valid at a moment in the past */
+.memory-asof-row {
+  display: flex;
+  align-items: center;
+  gap: var(--j-sp-2);
+  flex-wrap: wrap;
+  margin-top: var(--j-sp-3);
+  padding: var(--j-sp-2) var(--j-sp-3);
+  border: 1px solid var(--j-border);
+  border-left: 2px solid color-mix(in srgb, var(--j-trust-synth) 55%, transparent);
+  border-radius: var(--j-r-sm);
+  background: color-mix(in srgb, var(--j-panel) 60%, transparent);
+}
+
+.memory-asof-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--j-sp-1);
+  font-size: var(--j-fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--j-ink-dim);
+  white-space: nowrap;
+}
+
+.memory-asof-ico {
+  color: var(--j-trust-synth);
+}
+
+/* Observation-range row (bi-temporal observed_from/observed_to): shares the
+   as_of style, left accent shifts to the observation/tool color. */
+.memory-observed-row {
+  margin-top: var(--j-sp-2);
+  border-left-color: color-mix(in srgb, var(--j-trust-tool, var(--j-trust-synth)) 55%, transparent);
+}
+
+.memory-observed-row .memory-asof-ico {
+  color: var(--j-trust-tool, var(--j-trust-synth));
+}
+
+.memory-observed-sep {
+  color: var(--j-ink-dim);
+  font-size: var(--j-fs-xs);
+}
+
+.memory-studio-page .memory-studio-pane input[type="date"] {
+  padding: 0.42rem 0.6rem;
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-sm);
+  background: color-mix(in srgb, var(--j-panel) 85%, transparent);
+  color: var(--j-ink);
+  font: inherit;
+  font-size: var(--j-fs-sm);
+  color-scheme: dark;
+  transition:
+    border-color var(--j-dur-fast) var(--j-ease),
+    box-shadow var(--j-dur-fast) var(--j-ease);
+}
+
+[data-theme="light"] .memory-studio-page .memory-studio-pane input[type="date"] {
+  color-scheme: light;
+}
+
+.memory-studio-page .memory-studio-pane input[type="date"]:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--j-accent) 60%, transparent);
+  box-shadow: 0 0 0 3px var(--j-accent-soft), var(--j-glow-soft);
+}
+
+.memory-recall-trace {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--j-sp-2);
+  margin: var(--j-sp-3) 0 var(--j-sp-1);
+  min-height: 1.2rem;
+}
+
+.memory-score-bar {
+  display: block;
+  width: 100%;
+  height: 4px;
+  margin-top: var(--j-sp-1);
+  border-radius: var(--j-r-pill);
+  background: color-mix(in srgb, var(--j-ink-faint) 25%, transparent);
+  overflow: hidden;
+}
+
+.memory-score-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--j-accent-strong), var(--j-energy));
+  box-shadow: 0 0 8px color-mix(in srgb, var(--j-accent) 40%, transparent);
+  transition: width var(--j-dur-slow) var(--j-ease);
+}
+
+/* ─── 7. Chip language ────────────────────────────────────────────────────── */
+.memory-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--j-sp-1);
+}
+
+.memory-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0.12rem 0.55rem;
+  border-radius: var(--j-r-pill);
+  border: 1px solid var(--j-border);
+  background: color-mix(in srgb, var(--j-panel) 70%, transparent);
+  color: var(--j-ink-dim);
+  font-size: var(--j-fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+/* Kind: kind-based muted colors (via --chip-c) */
+.memory-chip-kind {
+  --chip-c: var(--j-accent);
+  color: var(--chip-c);
+  background: color-mix(in srgb, var(--chip-c) 12%, transparent);
+  border-color: color-mix(in srgb, var(--chip-c) 35%, transparent);
+}
+
+.memory-chip-kind[data-kind="preference"],
+.memory-chip-kind[data-kind="concept"] {
+  --chip-c: var(--j-trust-synth);
+}
+
+.memory-chip-kind[data-kind="rule"],
+.memory-chip-kind[data-kind="finding"] {
+  --chip-c: var(--j-warn);
+}
+
+.memory-chip-kind[data-kind="lesson"],
+.memory-chip-kind[data-kind="technique"] {
+  --chip-c: var(--j-energy);
+}
+
+.memory-chip-kind[data-kind="hypothesis"],
+.memory-chip-kind[data-kind="playbook"] {
+  --chip-c: var(--j-danger);
+}
+
+.memory-chip-kind[data-kind="bookmark"],
+.memory-chip-kind[data-kind="snippet"] {
+  --chip-c: var(--j-ink-dim);
+}
+
+/* Trust ladder: source kind → --j-trust-* tokens (dot + color) */
+.memory-chip-trust {
+  --chip-c: var(--j-ink-dim);
+  color: var(--chip-c);
+  border-color: color-mix(in srgb, var(--chip-c) 40%, transparent);
+  background: color-mix(in srgb, var(--chip-c) 9%, transparent);
+}
+
+.memory-chip-trust::before {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--j-r-pill);
+  background: var(--chip-c);
+}
+
+.memory-chip-trust-user {
+  --chip-c: var(--j-trust-user);
+}
+
+.memory-chip-trust-inferred {
+  --chip-c: var(--j-trust-inferred);
+}
+
+.memory-chip-trust-tool {
+  --chip-c: var(--j-trust-tool);
+}
+
+.memory-chip-trust-synth {
+  --chip-c: var(--j-trust-synth);
+}
+
+/* Numeric trust (legacy records): high/mid/low */
+.memory-chip-trust-high {
+  --chip-c: var(--j-energy);
+}
+
+.memory-chip-trust-mid {
+  --chip-c: var(--j-warn);
+}
+
+.memory-chip-trust-low {
+  --chip-c: var(--j-danger);
+}
+
+/* Provenance: source chip (origin → --j-trust-* tokens) + popover */
+.memory-source-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.memory-chip-source {
+  --chip-c: var(--j-ink-dim);
+  cursor: pointer;
+  color: var(--chip-c);
+  border-color: color-mix(in srgb, var(--chip-c) 40%, transparent);
+  background: color-mix(in srgb, var(--chip-c) 9%, transparent);
+  font: inherit;
+  font-size: var(--j-fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.memory-chip-source::before {
+  content: "◎";
+  font-size: 0.7rem;
+  line-height: 1;
+  color: var(--chip-c);
+}
+
+.memory-chip-source:hover,
+.memory-chip-source[aria-expanded="true"] {
+  border-color: var(--chip-c);
+  background: color-mix(in srgb, var(--chip-c) 16%, transparent);
+}
+
+.memory-chip-source[data-origin="user_statement"] {
+  --chip-c: var(--j-trust-user);
+}
+
+.memory-chip-source[data-origin="inferred"] {
+  --chip-c: var(--j-trust-inferred);
+}
+
+.memory-chip-source[data-origin="tool_output"] {
+  --chip-c: var(--j-trust-tool);
+}
+
+.memory-chip-source[data-origin="synthesis"] {
+  --chip-c: var(--j-trust-synth);
+}
+
+.memory-chip-source[data-origin="legacy"] {
+  --chip-c: var(--j-ink-faint);
+  border-style: dashed;
+}
+
+.memory-provenance-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  min-width: 240px;
+  max-width: 340px;
+  padding: var(--j-sp-3);
+  border: 1px solid var(--j-border-strong);
+  border-radius: var(--j-r-md);
+  background: var(--j-panel);
+  box-shadow: var(--j-shadow-2);
+  font-size: var(--j-fs-xs);
+  animation: memory-card-in var(--j-dur-fast) var(--j-ease) both;
+}
+
+.memory-provenance-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--j-sp-2);
+  margin-bottom: var(--j-sp-2);
+  color: var(--j-ink);
+}
+
+.memory-provenance-close {
+  border: 0;
+  background: transparent;
+  color: var(--j-ink-dim);
+  font-size: var(--j-fs-md);
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.memory-provenance-close:hover {
+  color: var(--j-ink);
+}
+
+.memory-provenance-row {
+  display: flex;
+  gap: var(--j-sp-2);
+  padding: 2px 0;
+}
+
+.memory-provenance-label {
+  flex: none;
+  min-width: 52px;
+  color: var(--j-ink-faint);
+  font-weight: 600;
+}
+
+.memory-provenance-value {
+  color: var(--j-ink-dim);
+  word-break: break-word;
+  white-space: normal;
+}
+
+.memory-chip-invalid {
+  color: var(--j-ink-faint);
+  border-style: dashed;
+  background: transparent;
+  text-decoration: line-through;
+}
+
+.memory-chip-warn {
+  color: var(--j-warn);
+  border-color: color-mix(in srgb, var(--j-warn) 45%, transparent);
+  background: color-mix(in srgb, var(--j-warn) 10%, transparent);
+}
+
+.memory-chip-strategy {
+  font-family: var(--j-font-mono);
+  text-transform: none;
+  color: var(--j-accent);
+  border-color: color-mix(in srgb, var(--j-accent) 35%, transparent);
+  background: color-mix(in srgb, var(--j-accent) 10%, transparent);
+}
+
+.memory-chip-vector-on {
+  color: var(--j-energy);
+  border-color: color-mix(in srgb, var(--j-energy) 50%, transparent);
+  background: color-mix(in srgb, var(--j-energy) 10%, transparent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--j-energy) 18%, transparent);
+}
+
+.memory-chip-vector-off {
+  color: var(--j-ink-faint);
+  border-style: dashed;
+}
+
+.memory-chip-score,
+.memory-chip-ts {
+  font-family: var(--j-font-mono);
+}
+
+/* Salience chip: "↑N times used" — facts frequently called during recall */
+.memory-chip-salience {
+  font-family: var(--j-font-mono);
+  color: var(--j-energy);
+  border-color: color-mix(in srgb, var(--j-energy) 45%, transparent);
+  background: color-mix(in srgb, var(--j-energy) 10%, transparent);
+}
+
+/* ─── 8. Empty / loading / error states ──────────────────────────────────── */
+.memory-studio-page .memory-hit-list li.memory-state {
+  background: transparent;
+  border: 1px dashed var(--j-border);
+  border-radius: var(--j-r-lg);
+  color: var(--j-ink-dim);
+  text-align: center;
+  animation: none;
+}
+
+.memory-studio-page .memory-hit-list li.memory-state-rich {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--j-sp-2);
+  padding: var(--j-sp-6) var(--j-sp-4);
+}
+
+.memory-state-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  margin-bottom: var(--j-sp-1);
+  border-radius: var(--j-r-pill);
+  background: var(--j-accent-soft);
+  color: var(--j-accent);
+  box-shadow: var(--j-glow-soft);
+}
+
+.memory-state-icon-error {
+  background: color-mix(in srgb, var(--j-danger) 14%, transparent);
+  color: var(--j-danger);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--j-danger) 18%, transparent);
+}
+
+.memory-empty-title {
+  margin: 0;
+  font-size: var(--j-fs-md);
+  font-weight: 600;
+  color: var(--j-ink);
+}
+
+.memory-empty-hint {
+  margin: 0;
+  max-width: 30rem;
+  font-size: var(--j-fs-sm);
+  line-height: 1.55;
+  color: var(--j-ink-dim);
+}
+
+.memory-empty-action {
+  margin-top: var(--j-sp-2);
+  text-decoration: none;
+}
+
+.memory-studio-page .memory-hit-list li.memory-state-error {
+  border-color: color-mix(in srgb, var(--j-danger) 35%, var(--j-border));
+}
+
+.memory-error-text {
+  margin: 0;
+  max-width: 30rem;
+  font-size: var(--j-fs-sm);
+  line-height: 1.5;
+  color: var(--j-danger);
+  word-break: break-word;
+}
+
+.memory-studio-page .memory-hit-list li.memory-state-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--j-sp-2);
+  padding: var(--j-sp-5);
+}
+
+.memory-spinner {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--j-r-pill);
+  border: 2px solid var(--j-border-strong);
+  border-top-color: var(--j-accent);
+  animation: memory-spin 0.8s linear infinite;
+}
+
+@keyframes memory-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Facts counter (below the list) */
+.memory-studio-page .memory-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.3rem;
+  margin-top: var(--j-sp-2);
+  padding: 0.05rem 0.45rem;
+  border-radius: var(--j-r-pill);
+  border: 1px solid color-mix(in srgb, var(--j-accent) 35%, transparent);
+  background: var(--j-accent-soft);
+  color: var(--j-accent);
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+  font-weight: 700;
+}
+
+.memory-studio-page .memory-badge[hidden] {
+  display: none;
+}
+
+/* ─── 9. Settings touches ─────────────────────────────────────────────────── */
+.memory-studio-page .memory-ledger-path {
+  margin: var(--j-sp-2) 0;
+  padding: var(--j-sp-2) var(--j-sp-3);
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-sm);
+  background: color-mix(in srgb, var(--j-panel) 80%, transparent);
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+  color: var(--j-ink-dim);
+  word-break: break-all;
+}
+
+.memory-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--j-sp-2);
+  margin-top: var(--j-sp-3);
+}
+
+.memory-status.is-ok {
+  color: var(--j-energy);
+}
+
+.memory-status.is-error {
+  color: var(--j-danger);
+}
+
+/* ─── 10. Responsive + reduced motion ─────────────────────────────────────── */
+/* Mid-screen: Overview columns collapse to a single column */
+@media (max-width: 960px) {
+  body.memory-studio-page .mem-overview-cols {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Narrow screen: vertical rail → horizontal strip on top (icon + label scroll) */
+@media (max-width: 760px) {
+  body.memory-studio-page .mem-shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  body.memory-studio-page .mem-rail {
+    flex-direction: row;
+    align-items: center;
+    gap: var(--j-sp-2);
+    border-right: none;
+    border-bottom: 1px solid var(--j-border);
+    overflow-x: auto;
+  }
+
+  body.memory-studio-page .mem-rail-list {
+    flex-direction: row;
+    flex: 1 1 auto;
+    gap: var(--j-sp-1);
+  }
+
+  body.memory-studio-page .mem-rail-item.is-active::before {
+    display: none; /* on horizontal, fill is enough instead of the left bar */
+  }
+
+  body.memory-studio-page .mem-rail-foot {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: none;
+    border-left: 1px solid var(--j-border);
+    padding-left: var(--j-sp-2);
+  }
+
+  body.memory-studio-page .mem-rail-refresh .mem-rail-label {
+    display: none; /* narrow screen: refresh icon only */
+  }
+
+  body.memory-studio-page .mem-content {
+    padding: var(--j-sp-4) var(--j-sp-3) var(--j-sp-5);
+  }
+
+  body.memory-studio-page .mem-topbar-search {
+    display: none; /* hide header search on mobile; Recall view is enough */
+  }
+}
+
+@media (max-width: 720px) {
+  body.memory-studio-page .mem-hero-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .memory-studio-page .memory-hit-list li .memory-hit-meta {
+    margin-left: 0;
+    white-space: normal;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body.memory-studio-page .memory-stat-card-vector.is-live .mem-hero-label::before {
+    animation: none;
+  }
+
+  .memory-spinner {
+    animation-duration: 1.6s; /* don't stop rotation fully: it carries state info */
+  }
+
+  body.memory-studio-page .mem-view,
+  .memory-studio-page .memory-hit-list li,
+  .memory-studio-page .memory-fact-editor {
+    animation: none;
+  }
+}

@@ -1,0 +1,2202 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   AURORA CHAT — Wave 2: tool call polish (Option B · ROOMY cards)
+   ─────────────────────────────────────────────────────────────────────────
+   Loaded LAST (after aurora-skin.css + akana-chat.css + akana-v2-surfaces.css).
+   Only polishes the existing contract classes PRODUCED by akana-chat-render.js
+   — markup / JS / id / class / --j-* token names DO NOT change. New helper
+   classes are `aur-` prefixed (not needed in this file).
+
+   TWO PARTS:
+   1) Sheen sweep on the running tool card — counterpart of the mockup's
+      reference/aurora.css .tool .tool-sum::after.
+   2) ROOMY tool card: the app's RADICAL COMPACT (~24px single-line) geometry
+      is overridden → ~30px round icon CHIP + 2-line summary (line 1 action
+      title, line 2 subtitle/meta + duration) + spacious readable title.
+      Carries the look of the mockup reference/aurora.css .tool/.tool-sum/
+      .tool-ico/.tool-main/.tool-act/.tool-meta/.tool-dur (≈348-407) — NOT
+      the class names.
+
+   NOTE: Left type rail, status visuals (spinner / ✓ / ✕), running pulse,
+   error tone, open-card glass rise ALREADY exist in base CSS and are
+   PRESERVED — do not fight them, only relax the geometry.
+
+   CONTRACT (renderActionCard + renderToolCall): DOM order inside summary is
+   icon → text(.action-card-text: title, opt. subtitle, opt. duration) →
+   status → chevron. The duration node lives INSIDE .action-card-text → it
+   goes on line 2 next to the subtitle; status + chevron stay to the right
+   of the summary.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── 1 · Running tool card — sheen sweep ───────────────────────────────── */
+.log .tool-call[data-status="running"] .action-card-summary {
+  position: relative;
+  overflow: hidden;
+}
+.log .tool-call[data-status="running"] .action-card-summary::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    100deg,
+    transparent 32%,
+    color-mix(in srgb, var(--j-accent) 16%, transparent) 50%,
+    transparent 68%
+  );
+  transform: translateX(-100%);
+  animation: aur-tool-sheen 1.6s ease-in-out infinite;
+}
+@keyframes aur-tool-sheen {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .log .tool-call[data-status="running"] .action-card-summary::after {
+    animation: none;
+    opacity: 0;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   2 · ROOMY tool card
+   ───────────────────────────────────────────────────────────────────────────
+   Because this file loads LAST, akana-chat.css's `.tool-call--compact`
+   (~24px) rules and akana-v2-surfaces.css extra geometry win here.
+   Targets only the tool card: `.log .tool-call` / `.log .action-card--tool`.
+   Memory/skill cards (.action-card--memory / .action-card--skill) do NOT
+   match these selectors so they are UNAFFECTED.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Card shell: compact vertical locking (negative margin / corner flattening)
+   is reverted — each card becomes its own round glass card, spacious vertical rhythm. */
+.log .tool-call.tool-call--compact {
+  margin: 0.22rem 0 0;
+  font-size: var(--j-fs-sm);
+  border-radius: var(--j-r-md);
+  /* Let the card extend to the right edge: base `.action-card{width:fit-content}`
+     (narrow card on short content → right-side gap) is overridden here at (0,3,0). */
+  width: 100%;
+  box-sizing: border-box;
+}
+.log .tool-call + .tool-call {
+  margin-top: 0.22rem;
+}
+/* Cancel "single block" locking of consecutive closed cards (roomy list). */
+.log .tool-call--compact + .tool-call--compact:not([open]),
+.log .tool-call--compact:not([open]) + .tool-call--compact:not([open]) {
+  margin-top: 0.26rem;
+  border-top-left-radius: var(--j-r-md);
+  border-top-right-radius: var(--j-r-md);
+}
+.log .tool-call--compact:not([open]):has(+ .tool-call--compact:not([open])) {
+  border-bottom-left-radius: var(--j-r-md);
+  border-bottom-right-radius: var(--j-r-md);
+}
+
+/* Summary row: roomy padding + icon/text top-aligned (align-items:flex-start
+   for 2-line text). Base `.tool-call--compact .action-card-summary`
+   (~0.15rem padding) is overridden. */
+.log .tool-call .action-card-summary {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--j-sp-2);
+  padding: 0.22rem 0.55rem;
+  /* The card's .action-card{width:fit-content} behavior was leaving the
+     summary row at max-content (overflow) width for long command/result
+     text → it exceeded the card and pushed the result chip on the right off
+     screen. Confine the summary to the card + allow inner text to shrink
+     and ellipsis via min-width:0. */
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+/* Icon CHIP: compact rule (border:none / bg:transparent / 1.15em) is reverted.
+   ~30px (1.9em) round accent chip; emoji centered. Single accent chip for all
+   tool families (no type class in markup → family coloring not possible). */
+.log .tool-call .action-card-icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6em;
+  height: 1.6em;
+  margin-top: 0.05em;
+  font-size: var(--j-fs-sm);
+  line-height: 1;
+  border-radius: var(--j-r-sm);
+  background: var(--j-accent-soft);
+  border: 1px solid color-mix(in srgb, var(--j-border-strong) 60%, transparent);
+}
+
+/* Text block: was a horizontal single-line flow in compact (flex-wrap:nowrap,
+   baseline) → moves to 2 vertical lines. Line 1: title. Line 2: subtitle + duration.
+   Per contract, the duration node lives INSIDE .action-card-text; it flows to line end. */
+.log .tool-call .action-card-text {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  row-gap: 1px;
+  column-gap: var(--j-sp-2);
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Title: compact's small/dim/nowrap (var(--j-fs-xs) · ink-dim) is overridden →
+   readable size, normal weight, full ink. Single line; long titles ellipsis.
+   ── max-width:100% REQUIRED: title has flex-basis:100% + white-space:nowrap.
+   Its parent (.action-card-text) width depends on flex = "indefinite", so it
+   falls to percentage-base content size (max-content) and min-width:0 does
+   not shrink it → title would overflow its own box, OVER the result chip on
+   the right. max-width:100% pins the title to the parent's used width;
+   overflow+ellipsis truncates cleanly.
+   (-webkit-box/-line-clamp is unnecessary for a single line + conflicts with
+   nowrap; plain display:block guarantees ellipsis.) */
+.log .tool-call .action-card-title {
+  flex: 1 1 100%;
+  min-width: 0;
+  max-width: 100%;
+  display: block;
+  overflow: hidden;
+  font-weight: 500;
+  font-size: var(--j-fs-sm);
+  line-height: 1.3;
+  color: var(--j-ink);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* When open/hover, title is already ink (base) — keep it crisp here too. */
+.log .tool-call--compact:hover .action-card-title,
+.log .tool-call--compact[open] .action-card-title {
+  color: var(--j-ink);
+}
+
+/* Subtitle/meta: line 2 — mono telemetry, dim, single-line ellipsis. */
+.log .tool-call .action-card-subtitle {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+  line-height: 1.3;
+  color: var(--j-ink-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Duration: on line 2 next to the subtitle — mono, dim, unbreakable. The
+   base's "· " prefix is preserved (even without a subtitle the leading dot
+   is not unneeded, it acts as a separator). */
+.log .tool-call .action-card-duration {
+  flex: none;
+  margin-left: auto;
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+  line-height: 1.3;
+  color: var(--j-ink-faint);
+  white-space: nowrap;
+}
+
+/* Status indicator: keep it to the right of the summary, vertically centered
+   with the icon chip. Visuals (spinner / ✓ / ✕) come from base — only fix alignment. */
+.log .tool-call .action-card-status {
+  flex: none;
+  align-self: center;
+}
+
+/* Chevron: on the right, vertically centered. Rotation/open state comes from base. */
+.log .tool-call .action-card-chevron {
+  flex: none;
+  align-self: center;
+  margin-right: var(--j-sp-1);
+}
+
+/* On an error card the title is fully emphasized (base ink-dim → ink). */
+.log .tool-call--compact[data-status="error"] .action-card-title {
+  color: var(--j-ink);
+}
+
+/* ─── Consistency: memory/skill cards (NOT compact) ───────────────────────
+   These are already roomy in base with ~1.45em icons + single-line titles.
+   For visual consistency with the ROOMY tool chip, bump the icon chip up
+   one notch — WITHOUT changing geometry/line count (targets only
+   .action-card--memory / --skill). */
+.log .action-card--memory .action-card-icon,
+.log .action-card--skill .action-card-icon {
+  width: 1.9em;
+  height: 1.9em;
+  font-size: var(--j-fs-md);
+}
+.log .action-card--memory .action-card-summary,
+.log .action-card--skill .action-card-summary {
+  gap: var(--j-sp-3);
+  padding: 0.5rem 0.65rem;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   3 · TYPE-COLORED FAMILIES  (render.js `data-tool-family` — mockup .tool-ico.t-*)
+   ───────────────────────────────────────────────────────────────────────────
+   Icon chip + left rail are colored by tool family. Without a family, the
+   general accent (base) remains. Error card keeps the red rail (aurora-skin
+   error ::after is more specific). shell→purple, file→cyan, search→iris,
+   mem→green, web/edit→amber.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.log .tool-call[data-tool-family] .action-card-icon {
+  transition: background var(--j-dur-fast) var(--j-ease), border-color var(--j-dur-fast) var(--j-ease);
+}
+
+.log .tool-call[data-tool-family="shell"] .action-card-icon {
+  background: color-mix(in srgb, var(--j-accent-2) 15%, transparent);
+  border-color: color-mix(in srgb, var(--j-accent-2) 34%, var(--j-border));
+}
+.log .tool-call[data-tool-family="shell"]::after { background: var(--j-accent-2); }
+
+.log .tool-call[data-tool-family="file"] .action-card-icon {
+  background: color-mix(in srgb, var(--j-accent-3) 15%, transparent);
+  border-color: color-mix(in srgb, var(--j-accent-3) 34%, var(--j-border));
+}
+.log .tool-call[data-tool-family="file"]::after { background: var(--j-accent-3); }
+
+.log .tool-call[data-tool-family="search"] .action-card-icon {
+  background: color-mix(in srgb, var(--j-accent) 15%, transparent);
+  border-color: color-mix(in srgb, var(--j-accent) 34%, var(--j-border));
+}
+.log .tool-call[data-tool-family="search"]::after { background: var(--j-accent); }
+
+.log .tool-call[data-tool-family="mem"] .action-card-icon {
+  background: color-mix(in srgb, var(--j-energy) 15%, transparent);
+  border-color: color-mix(in srgb, var(--j-energy) 34%, var(--j-border));
+}
+.log .tool-call[data-tool-family="mem"]::after { background: var(--j-energy); }
+
+.log .tool-call[data-tool-family="web"] .action-card-icon,
+.log .tool-call[data-tool-family="edit"] .action-card-icon {
+  background: color-mix(in srgb, var(--j-warn) 15%, transparent);
+  border-color: color-mix(in srgb, var(--j-warn) 34%, var(--j-border));
+}
+.log .tool-call[data-tool-family="web"]::after,
+.log .tool-call[data-tool-family="edit"]::after { background: var(--j-warn); }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   4 · RESULT CHIP  (render.js .aur-tool-result — mockup .tool-result)
+   At-a-glance result: neutral "→ text", ok "✓ done/N results" (green), err "✕ error".
+   To the left of the status indicator; hidden on narrow screens.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.log .tool-call .aur-tool-result {
+  flex: none;
+  align-self: center;
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+  font-weight: 500;
+  line-height: 1.4;
+  padding: 0.12rem 0.55rem;
+  border-radius: var(--j-r-pill);
+  white-space: nowrap;
+  max-width: 16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: color-mix(in srgb, var(--j-ink-faint) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--j-border-strong) 55%, var(--j-border));
+  color: var(--j-ink-dim);
+  letter-spacing: 0.01em;
+}
+.log .tool-call .aur-tool-result::before { content: "→ "; color: var(--j-ink-faint); }
+.log .tool-call .aur-tool-result[data-kind="ok"] {
+  background: color-mix(in srgb, var(--j-energy) 15%, transparent);
+  border-color: color-mix(in srgb, var(--j-energy) 42%, transparent);
+  color: var(--j-energy);
+}
+.log .tool-call .aur-tool-result[data-kind="ok"]::before { content: "✓ "; color: var(--j-energy); }
+.log .tool-call .aur-tool-result[data-kind="err"] {
+  background: color-mix(in srgb, var(--j-danger) 15%, transparent);
+  border-color: color-mix(in srgb, var(--j-danger) 42%, transparent);
+  color: var(--j-danger);
+}
+.log .tool-call .aur-tool-result[data-kind="err"]::before { content: "✕ "; color: var(--j-danger); }
+@media (max-width: 640px) {
+  .log .tool-call .aur-tool-result { display: none; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   5 · UNIFIED PROCESS CARD  (mockup .process/.timeline/.step/.tool)
+   ───────────────────────────────────────────────────────────────────────────
+   Thought steps + tool cards form a SINGLE chronological timeline. The
+   existing `.akana-thought-feed` (transport.js) turns into a glass card; its
+   inner `.akana-thought-feed-body` carries a glowing gradient thread on the
+   left + node dots. Tool cards (`.tool-call.aur-timeline-tool`) are events
+   on the thread. Class names are PRESERVED — only `aur-process`/`aur-timeline`
+   + head spans are added. akana-chat.css's border-left thread and is-live
+   head hiding are overridden here (loaded LAST).
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Card shell: frosted glass, thin border, inner glow. akana-chat.css's
+   plain border-left is cancelled (our own thread is on the timeline body). */
+.log .akana-thought-feed.aur-process {
+  position: relative;
+  margin: 0 0 var(--j-sp-3);
+  padding: 0;
+  border: 1px solid var(--j-border);
+  border-left: 1px solid var(--j-border);
+  border-radius: var(--j-r-lg);
+  background: color-mix(in srgb, var(--j-panel) 92%, transparent);
+  -webkit-backdrop-filter: blur(var(--j-blur));
+  backdrop-filter: blur(var(--j-blur));
+  box-shadow: inset 0 1px 0 var(--j-hairline), var(--j-shadow-1);
+  overflow: hidden;
+  color: var(--j-ink-dim);
+}
+
+/* Head: spark + label + sub + chevron. Visible in is-live too (akana-chat.css
+   `.is-live .akana-thought-feed-head{display:none}` is overridden). */
+.log .akana-thought-feed.aur-process .akana-thought-feed-head.aur-process-head,
+.log .akana-thought-feed.aur-process.is-live .akana-thought-feed-head.aur-process-head {
+  display: flex;
+  align-items: center;
+  gap: var(--j-sp-2);
+  margin: 0;
+  padding: 0.7rem 0.9rem;
+  font-family: var(--j-font-ui);
+  letter-spacing: normal;
+  user-select: none;
+}
+
+/* Spark: double dot, pulses when live; fades on done. */
+.aur-process-spark {
+  position: relative;
+  flex: none;
+  width: 15px;
+  height: 15px;
+}
+.aur-process-spark::before,
+.aur-process-spark::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--j-accent-grad);
+}
+.aur-process.is-live .aur-process-spark::after,
+.aur-process.is-running .aur-process-spark::after {
+  animation: aur-spark-pulse 1.4s var(--j-ease) infinite;
+}
+.aur-process.is-done .aur-process-spark::after {
+  transform: scale(0.5);
+  opacity: 0;
+}
+@keyframes aur-spark-pulse {
+  0%, 100% { transform: scale(0.5); opacity: 1; }
+  50% { transform: scale(1.05); opacity: 0.3; }
+}
+
+.aur-process-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--j-fs-sm);
+  font-weight: 600;
+  color: var(--j-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Live/running label shimmer flow (mockup .process.live .lbl). */
+.aur-process.is-live .aur-process-label,
+.aur-process.is-running .aur-process-label {
+  background: linear-gradient(
+    90deg,
+    var(--j-ink-dim) 20%,
+    var(--j-accent) 50%,
+    var(--j-ink-dim) 80%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: aur-label-shimmer 2.2s linear infinite;
+}
+@keyframes aur-label-shimmer {
+  to { background-position: -200% 0; }
+}
+
+.aur-process-sub {
+  flex: none;
+  margin-left: auto;
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+  color: var(--j-ink-faint);
+}
+.aur-process-chev {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-left: 0.3rem;
+  border-right: 2px solid var(--j-ink-faint);
+  border-bottom: 2px solid var(--j-ink-faint);
+  transform: rotate(45deg);
+  transition: transform var(--j-dur-fast) var(--j-ease);
+}
+.aur-process.is-collapsed .aur-process-chev {
+  transform: rotate(-45deg);
+}
+
+/* Body = timeline; when open, thread + nodes. NO inner scroll of its own: tool
+   cards flow at natural size, the outer `.log-scroll` scrolls. (The old inner
+   cap — max-height:56vh + overflow:auto — set a nested-scroll trap: after
+   ~5 cards content sank into the inner region and could not be reached by
+   the outer auto-scroll.) `max-height:none` is set EXPLICITLY; otherwise the
+   more-general `.akana-thought-feed-body` cap (38vh) from akana-chat.css
+   kicks back in. */
+.log .akana-thought-feed.aur-process .akana-thought-feed-body.aur-timeline {
+  position: relative;
+  display: block;
+  gap: 0;
+  max-height: none;
+  overflow: visible;
+  padding: 0.2rem 0.75rem 0.6rem 1.75rem;
+}
+/* Collapsed → body hidden (akana-chat.css rule was being overridden by our
+   more-specific display:block; restore it explicitly here). */
+.log .akana-thought-feed.aur-process.is-collapsed .akana-thought-feed-body.aur-timeline {
+  display: none;
+}
+/* Glowing gradient thread (mockup .timeline::before). */
+.log .akana-thought-feed.aur-process .aur-timeline::before {
+  content: "";
+  position: absolute;
+  left: 0.95rem;
+  top: 0.5rem;
+  bottom: 0.5rem;
+  width: 2px;
+  border-radius: 2px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--j-accent) 55%, transparent),
+    color-mix(in srgb, var(--j-accent-2) 45%, transparent)
+  );
+}
+
+/* Thought step row = node dot on the thread (mockup .step). */
+.log .akana-thought-feed.aur-process .aur-timeline .akana-thought-line {
+  position: relative;
+  margin: 0;
+  padding: 0.24rem 0 0.24rem 0;
+}
+.log .akana-thought-feed.aur-process .aur-timeline .akana-thought-line + .akana-thought-line {
+  margin-top: 0.26rem;
+}
+.log .akana-thought-feed.aur-process .aur-timeline .akana-thought-line::before {
+  content: "";
+  position: absolute;
+  /* Aligned to the CENTER of the thread (thread left:0.95rem + 1px ≈ 1.01rem;
+     node 9px → left -1.02rem for center). The old -0.8rem was pushing the node
+     to the RIGHT of the thread and looked "disconnected". */
+  left: -1.02rem;
+  top: 0.54rem;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--j-accent) 30%, var(--j-bg));
+  border: 1.5px solid color-mix(in srgb, var(--j-accent) 55%, var(--j-border));
+}
+/* Thought line italic + ink-accent mix (mockup .step.think). */
+.log .akana-thought-feed.aur-process .aur-timeline .akana-thought-line--think {
+  font-style: italic;
+  color: color-mix(in srgb, var(--j-ink) 80%, var(--j-accent));
+}
+.log .akana-thought-feed.aur-process .aur-timeline .akana-thought-line--think::before {
+  background: color-mix(in srgb, var(--j-accent) 22%, var(--j-bg));
+}
+/* Shell live output row = mockup .tool-stream (mono, box, blink caret). */
+.log .akana-thought-feed.aur-process .aur-timeline .akana-thought-line--shell {
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+  color: var(--j-ink-dim);
+  background: color-mix(in srgb, var(--j-bg-grad-a) 80%, var(--j-raised));
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-sm);
+  padding: 0.5rem 0.7rem;
+  white-space: pre-wrap;
+  max-height: 11em;
+  overflow: hidden;
+}
+.log .akana-thought-feed.aur-process .aur-timeline .akana-thought-line--shell-current::after {
+  content: "▌";
+  color: var(--j-accent);
+  margin-left: 1px;
+  animation: aur-caret 0.9s step-end infinite;
+}
+@keyframes aur-caret {
+  50% { opacity: 0; }
+}
+
+/* Tool card = event on the thread (mockup .tool::before node). Card geometry
+   comes from the ROOMY rule (above); here only the timeline node + top gap.
+   NOTE: base `.action-card{overflow:hidden}` would clip the node dot (OUTSIDE
+   the card, left:-0.8rem) → overflow:visible on the timeline card. Corner
+   clipping is preserved by the summary/body's own radius; the left rail
+   ::after is already bounded by its own border-radius. */
+.log .akana-thought-feed.aur-process .aur-timeline .tool-call.aur-timeline-tool {
+  position: relative;
+  margin: 0.22rem 0 0;
+  overflow: visible;
+  /* Let the timeline card extend to the right edge too (fit-content → full width). */
+  width: 100%;
+  box-sizing: border-box;
+}
+/* Cancel "single block" locking of adjacent timeline cards (each card is
+   roomy with its own rounded corners — the base compact negative-margin rule is overridden). */
+.log .akana-thought-feed.aur-process .aur-timeline .tool-call.aur-timeline-tool + .tool-call.aur-timeline-tool {
+  margin-top: 0.22rem;
+  border-top-left-radius: var(--j-r-md);
+  border-top-right-radius: var(--j-r-md);
+}
+.log .akana-thought-feed.aur-process .aur-timeline .tool-call.aur-timeline-tool::before {
+  content: "";
+  position: absolute;
+  /* SOLID dot aligned to the CENTER of the thread. content-box pseudo → 2px
+     border sits outside the 10px diameter; the card wrapper is ~1px to the
+     right of the thought row. -1.2375rem (measured) makes the visual center
+     sit on the thread. Color/halo overrides live in ::before #2 below (same left). */
+  left: -1.2375rem;
+  top: 0.87rem;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--j-accent);
+  border: 2px solid var(--j-bg);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--j-accent) 45%, transparent);
+  z-index: 1;
+}
+.log .akana-thought-feed.aur-process .aur-timeline .tool-call.aur-timeline-tool[data-status="error"]::before {
+  background: var(--j-danger);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--j-danger) 45%, transparent);
+}
+.log .akana-thought-feed.aur-process .aur-timeline .tool-call.aur-timeline-tool[data-status="running"]::before {
+  background: var(--j-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--j-accent) 18%, transparent);
+}
+
+/* ─── 5b · AGENT ACTIVITY  (Batch 1: TODO progress + subagent group) ─────────
+   TODO pill: compact "N/M tasks" badge to the right of the process title.
+   Subagent group: a labeled, indented block for Claude's Task subagent;
+   the subagent's own tool cards (parent_id) land inside the group body. */
+.aur-process-todo {
+  flex: none;
+  margin-left: 0.5rem;
+  padding: 0.04rem 0.42rem;
+  border-radius: 999px;
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+  color: var(--j-ink-dim);
+  background: color-mix(in srgb, var(--j-ink-faint) 16%, transparent);
+  white-space: nowrap;
+}
+.aur-process-todo[data-complete="1"] {
+  color: var(--j-accent);
+  background: color-mix(in srgb, var(--j-accent) 15%, transparent);
+}
+
+/* Group = timeline node (same alignment as the tool card + node dot). */
+.log .akana-thought-feed.aur-process .aur-timeline .aur-subagent-group.aur-timeline-tool {
+  position: relative;
+  margin: 0.3rem 0 0.1rem;
+  width: 100%;
+  box-sizing: border-box;
+}
+.log .akana-thought-feed.aur-process .aur-timeline .aur-subagent-group.aur-timeline-tool::before {
+  content: "";
+  position: absolute;
+  left: -1.2375rem;
+  top: 0.62rem;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--j-accent);
+  border: 2px solid var(--j-bg);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--j-accent) 45%, transparent);
+  z-index: 1;
+}
+.log .akana-thought-feed.aur-process .aur-timeline .aur-subagent-group[data-status="running"]::before {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--j-accent) 18%, transparent);
+}
+.log .akana-thought-feed.aur-process .aur-timeline .aur-subagent-group[data-status="error"]::before {
+  background: var(--j-danger);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--j-danger) 45%, transparent);
+}
+.aur-subagent-head {
+  display: flex;
+  align-items: center;
+  gap: 0.42rem;
+  padding: 0.15rem 0;
+}
+.aur-subagent-ic {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  color: var(--j-accent);
+}
+.aur-subagent-ic svg { width: 100%; height: 100%; display: block; }
+.aur-subagent-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--j-fs-sm);
+  font-weight: 600;
+  color: var(--j-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.aur-subagent-status {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--j-ink-faint);
+}
+.aur-subagent-status svg { width: 100%; height: 100%; display: block; }
+.aur-subagent-group[data-status="running"] .aur-subagent-status { color: var(--j-accent); }
+.aur-subagent-group[data-status="done"] .aur-subagent-status { color: var(--j-accent); }
+.aur-subagent-group[data-status="error"] .aur-subagent-status { color: var(--j-danger); }
+/* Body = subagent's steps; a gentle sub-rail indented on the left. */
+.aur-subagent-body {
+  margin: 0.1rem 0 0.1rem 0.5rem;
+  padding-left: 0.7rem;
+  border-left: 1px dashed color-mix(in srgb, var(--j-ink-faint) 42%, transparent);
+}
+.aur-subagent-body:empty { display: none; }
+.aur-subagent-desc {
+  font-size: var(--j-fs-xs);
+  color: var(--j-ink-dim);
+  padding: 0.05rem 0 0.2rem;
+  line-height: 1.35;
+}
+/* Inner cards: hide the main-thread node dot (sub-rail + indent already
+   convey the grouping); the card's own status chip carries the color signal. */
+.log .akana-thought-feed.aur-process .aur-timeline .aur-subagent-body .tool-call.aur-timeline-tool::before {
+  display: none;
+}
+.log .akana-thought-feed.aur-process .aur-timeline .aur-subagent-body .tool-call.aur-timeline-tool {
+  margin-left: 0;
+}
+
+/* ─── 5c · LIVE TOOL INPUT  (Batch 2: tool_call_delta streaming input) ──────
+   As the tool streams its input (input JSON) in chunks, it flows live in the
+   subtitle; mono font + blinking caret. When the full tool_call arrives,
+   patchToolCallCard overwrites the subtitle with the real args and clears
+   data-streaming. */
+.tool-call[data-streaming="1"] .action-card-subtitle {
+  font-family: var(--j-font-mono);
+  color: var(--j-ink-dim);
+}
+.tool-call[data-streaming="1"] .action-card-subtitle::after {
+  content: "▋";
+  margin-left: 1px;
+  color: var(--j-accent);
+  animation: aur-tool-caret 1s steps(1) infinite;
+}
+@keyframes aur-tool-caret {
+  50% { opacity: 0; }
+}
+
+/* ─── 6 · LIVE OUTPUT + CANCEL  (mockup .tool[data-status=running] + .tool-cancel)
+   Red "■ Cancel" button under the running tool card. Indented to the node
+   alignment. ─────────────────────────────────────────────────────────────── */
+.aur-tool-cancel-row {
+  position: relative;
+  margin: 0.45rem 0 0.1rem;
+}
+.aur-tool-cancel {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.32rem 0.8rem;
+  border: 1px solid color-mix(in srgb, var(--j-danger) 35%, var(--j-border));
+  border-radius: var(--j-r-pill);
+  background: color-mix(in srgb, var(--j-danger) 8%, transparent);
+  color: var(--j-danger);
+  font-size: var(--j-fs-xs);
+  font-weight: 600;
+  transition: background var(--j-dur-fast) var(--j-ease);
+}
+.aur-tool-cancel:hover {
+  background: color-mix(in srgb, var(--j-danger) 16%, transparent);
+}
+.aur-tool-cancel:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.aur-tool-cancel svg {
+  width: 11px;
+  height: 11px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   7 · SOURCES row  (mockup .cites — render.js .aur-sources)
+   Colored source chips below the answer; color = trust type (tokens --j-trust-*).
+   ═══════════════════════════════════════════════════════════════════════════ */
+.log .aur-sources {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--j-sp-2);
+  margin-top: 0.85rem;
+  padding-top: 0.7rem;
+  border-top: 1px solid var(--j-border);
+}
+.log .aur-sources-label {
+  font-size: var(--j-fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--j-ink-faint);
+  margin-right: 0.1rem;
+}
+.log .aur-source-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.22rem 0.65rem;
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-pill);
+  background: var(--j-raised);
+  font-size: var(--j-fs-xs);
+  color: var(--j-ink-dim);
+  transition:
+    border-color var(--j-dur-fast) var(--j-ease),
+    color var(--j-dur-fast) var(--j-ease),
+    background var(--j-dur-fast) var(--j-ease);
+}
+.log .aur-source-chip:hover {
+  border-color: var(--j-border-strong);
+  color: var(--j-ink);
+}
+.log .aur-source-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--j-trust-synth);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+.log .aur-source-chip[data-trust="user"] .aur-source-dot { background: var(--j-trust-user); }
+.log .aur-source-chip[data-trust="inferred"] .aur-source-dot { background: var(--j-trust-inferred); }
+.log .aur-source-chip[data-trust="tool"] .aur-source-dot { background: var(--j-trust-tool); }
+.log .aur-source-chip[data-trust="synth"] .aur-source-dot { background: var(--j-trust-synth); }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   8 · APPROVAL CARD  (mockup .approval — render.js .aur-approval)
+   Yellow-toned glass card: head (icon+title+badge) · body (code/description) ·
+   foot ("don't ask again" + Deny/Allow) · result (resolved row).
+   ═══════════════════════════════════════════════════════════════════════════ */
+.log .aur-approval {
+  margin: var(--j-sp-2) 0;
+  border: 1px solid color-mix(in srgb, var(--j-warn) 40%, var(--j-border));
+  border-radius: var(--j-r-lg);
+  overflow: hidden;
+  background: color-mix(in srgb, var(--j-warn) 6%, var(--j-raised));
+  box-shadow: var(--j-shadow-1);
+}
+.log .aur-approval-head {
+  display: flex;
+  align-items: center;
+  gap: var(--j-sp-2);
+  padding: 0.7rem 0.85rem;
+}
+.log .aur-approval-ic {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  font-weight: 700;
+  background: color-mix(in srgb, var(--j-warn) 16%, transparent);
+  color: var(--j-warn);
+}
+.log .aur-approval-t {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--j-fs-sm);
+  font-weight: 650;
+  color: var(--j-ink);
+}
+.log .aur-approval-badge {
+  flex: none;
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+  padding: 0.12rem 0.5rem;
+  border-radius: var(--j-r-pill);
+  background: color-mix(in srgb, var(--j-warn) 14%, transparent);
+  color: var(--j-warn);
+  border: 1px solid color-mix(in srgb, var(--j-warn) 30%, var(--j-border));
+}
+.log .aur-approval-body {
+  padding: 0 0.85rem 0.6rem;
+}
+.log .aur-approval-detail {
+  margin: 0;
+  font-size: var(--j-fs-sm);
+  line-height: 1.55;
+  color: var(--j-ink-dim);
+}
+.log .aur-code {
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+  line-height: 1.5;
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  border-radius: var(--j-r-sm);
+  border: 1px solid var(--j-border);
+  background: color-mix(in srgb, var(--j-bg-grad-a) 80%, var(--j-raised));
+  color: var(--j-ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 14em;
+  overflow: auto;
+}
+.log .aur-approval-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--j-sp-2);
+  padding: 0.6rem 0.85rem;
+  border-top: 1px solid var(--j-border);
+  background: color-mix(in srgb, var(--j-bg-grad-a) 40%, transparent);
+}
+.log .aur-approval-grow {
+  flex: 1;
+}
+.log .aur-approval-once {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: var(--j-fs-xs);
+  color: var(--j-ink-faint);
+  cursor: pointer;
+}
+.log .aur-btn-allow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 1rem;
+  border: none;
+  border-radius: var(--j-r-md);
+  background: var(--j-accent-grad);
+  color: var(--j-accent-ink);
+  font-size: var(--j-fs-sm);
+  font-weight: 650;
+  box-shadow: var(--j-shadow-accent);
+  transition: transform var(--j-dur-fast) var(--j-ease-snap), filter var(--j-dur-fast) var(--j-ease);
+}
+.log .aur-btn-allow:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+}
+.log .aur-btn-allow svg {
+  width: 13px;
+  height: 13px;
+}
+.log .aur-btn-deny {
+  padding: 0.45rem 0.95rem;
+  border: 1px solid var(--j-border-strong);
+  border-radius: var(--j-r-md);
+  background: none;
+  color: var(--j-ink-dim);
+  font-size: var(--j-fs-sm);
+  font-weight: 600;
+  transition: color var(--j-dur-fast) var(--j-ease), border-color var(--j-dur-fast) var(--j-ease);
+}
+.log .aur-btn-deny:hover {
+  color: var(--j-danger);
+  border-color: color-mix(in srgb, var(--j-danger) 40%, var(--j-border));
+}
+.log .aur-approval-result {
+  display: none;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.55rem 0.85rem;
+  border-top: 1px solid var(--j-border);
+  font-size: var(--j-fs-sm);
+  font-weight: 600;
+}
+.log .aur-approval[data-state="allowed"] .aur-approval-result {
+  display: flex;
+  color: var(--j-energy);
+}
+.log .aur-approval[data-state="denied"] .aur-approval-result {
+  display: flex;
+  color: var(--j-danger);
+}
+/* When resolved, foot is hidden and the card goes neutral (mockup .approval.resolved). */
+.log .aur-approval[data-state="allowed"] .aur-approval-foot,
+.log .aur-approval[data-state="denied"] .aur-approval-foot {
+  display: none;
+}
+.log .aur-approval[data-state="allowed"],
+.log .aur-approval[data-state="denied"] {
+  border-color: var(--j-border);
+  background: var(--j-raised);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   8b · QUESTION CARD  (AskUserQuestion — render.js .aur-ask)
+   When Claude asks a structured question in headless mode: head (❓+title+badge) ·
+   body (each question: text + option buttons + free text) · foot (hint +
+   Submit) · result (submitted row). Accent-toned (separate from approval yellow).
+   ═══════════════════════════════════════════════════════════════════════════ */
+.log .aur-ask {
+  margin: var(--j-sp-2) 0;
+  border: 1px solid color-mix(in srgb, var(--j-accent) 38%, var(--j-border));
+  border-radius: var(--j-r-lg);
+  overflow: hidden;
+  background: color-mix(in srgb, var(--j-accent) 6%, var(--j-raised));
+  box-shadow: var(--j-shadow-1);
+}
+.log .aur-ask-head {
+  display: flex;
+  align-items: center;
+  gap: var(--j-sp-2);
+  padding: 0.7rem 0.85rem;
+}
+.log .aur-ask-ic {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  font-weight: 700;
+  background: color-mix(in srgb, var(--j-accent) 16%, transparent);
+  color: var(--j-accent);
+}
+.log .aur-ask-t {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--j-fs-sm);
+  font-weight: 650;
+  color: var(--j-ink);
+}
+.log .aur-ask-badge {
+  flex: none;
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+  padding: 0.12rem 0.5rem;
+  border-radius: var(--j-r-pill);
+  background: color-mix(in srgb, var(--j-accent) 14%, transparent);
+  color: var(--j-accent);
+  border: 1px solid color-mix(in srgb, var(--j-accent) 30%, var(--j-border));
+}
+.log .aur-ask-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--j-sp-3);
+  padding: 0.2rem 0.85rem 0.7rem;
+}
+.log .aur-ask-q {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.log .aur-ask-q-text {
+  font-size: var(--j-fs-sm);
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--j-ink);
+}
+.log .aur-ask-opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.log .aur-ask-opt {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.12rem;
+  max-width: 100%;
+  padding: 0.4rem 0.7rem;
+  border: 1px solid var(--j-border-strong);
+  border-radius: var(--j-r-md);
+  background: color-mix(in srgb, var(--j-bg-grad-a) 40%, var(--j-raised));
+  color: var(--j-ink-dim);
+  font-size: var(--j-fs-sm);
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--j-dur-fast) var(--j-ease),
+    color var(--j-dur-fast) var(--j-ease), background var(--j-dur-fast) var(--j-ease);
+}
+.log .aur-ask-opt:hover {
+  border-color: color-mix(in srgb, var(--j-accent) 45%, var(--j-border));
+  color: var(--j-ink);
+}
+.log .aur-ask-opt.is-on {
+  border-color: var(--j-accent);
+  background: color-mix(in srgb, var(--j-accent) 16%, transparent);
+  color: var(--j-accent-ink, var(--j-ink));
+}
+.log .aur-ask-opt-l {
+  font-weight: 650;
+}
+.log .aur-ask-opt-d {
+  font-size: var(--j-fs-xs);
+  font-weight: 500;
+  color: var(--j-ink-faint);
+  line-height: 1.4;
+  white-space: normal;
+}
+.log .aur-ask-opt.is-on .aur-ask-opt-d {
+  color: color-mix(in srgb, var(--j-accent) 70%, var(--j-ink-dim));
+}
+.log .aur-ask-free {
+  width: 100%;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-sm);
+  background: color-mix(in srgb, var(--j-bg-grad-a) 60%, var(--j-raised));
+  color: var(--j-ink);
+  font-size: var(--j-fs-sm);
+  font-family: inherit;
+}
+.log .aur-ask-free:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--j-accent) 55%, var(--j-border));
+}
+.log .aur-ask-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--j-sp-2);
+  padding: 0.6rem 0.85rem;
+  border-top: 1px solid var(--j-border);
+  background: color-mix(in srgb, var(--j-bg-grad-a) 40%, transparent);
+}
+.log .aur-ask-hint {
+  font-size: var(--j-fs-xs);
+  color: var(--j-ink-faint);
+}
+.log .aur-ask-grow {
+  flex: 1;
+}
+.log .aur-ask-submit {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 1.1rem;
+  border: none;
+  border-radius: var(--j-r-md);
+  background: var(--j-accent-grad);
+  color: var(--j-accent-ink);
+  font-size: var(--j-fs-sm);
+  font-weight: 650;
+  box-shadow: var(--j-shadow-accent);
+  cursor: pointer;
+  transition: transform var(--j-dur-fast) var(--j-ease-snap), filter var(--j-dur-fast) var(--j-ease);
+}
+.log .aur-ask-submit:hover:not(:disabled) {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+}
+.log .aur-ask-submit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+.log .aur-ask-result {
+  display: none;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.55rem 0.85rem;
+  border-top: 1px solid var(--j-border);
+  font-size: var(--j-fs-sm);
+  font-weight: 600;
+  color: var(--j-energy);
+}
+.log .aur-ask[data-state="answered"] .aur-ask-result {
+  display: flex;
+}
+.log .aur-ask[data-state="answered"] .aur-ask-foot {
+  display: none;
+}
+.log .aur-ask[data-state="answered"] {
+  border-color: var(--j-border);
+  background: var(--j-raised);
+}
+.log .aur-ask[data-state="answered"] .aur-ask-opt {
+  cursor: default;
+  opacity: 0.85;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   8c · PLAN CARD  (claude plan-mode / ExitPlanMode — render.js .aur-plan)
+   Model presents a plan before writing: head (📋+title+badge) · body (plan markdown) ·
+   revise (free text, hidden) · foot (hint + Revise + Apply) · result.
+   Same accent language as the question card; locked once decided (applied/revised).
+   ═══════════════════════════════════════════════════════════════════════════ */
+.log .aur-plan {
+  margin: var(--j-sp-2) 0;
+  border: 1px solid color-mix(in srgb, var(--j-accent) 38%, var(--j-border));
+  border-radius: var(--j-r-lg);
+  overflow: hidden;
+  background: color-mix(in srgb, var(--j-accent) 6%, var(--j-raised));
+  box-shadow: var(--j-shadow-1);
+}
+.log .aur-plan-head {
+  display: flex;
+  align-items: center;
+  gap: var(--j-sp-2);
+  padding: 0.7rem 0.85rem;
+}
+.log .aur-plan-ic {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  font-weight: 700;
+  background: color-mix(in srgb, var(--j-accent) 16%, transparent);
+  color: var(--j-accent);
+}
+.log .aur-plan-t {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--j-fs-sm);
+  font-weight: 650;
+  color: var(--j-ink);
+}
+.log .aur-plan-badge {
+  flex: none;
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+  padding: 0.12rem 0.5rem;
+  border-radius: var(--j-r-pill);
+  background: color-mix(in srgb, var(--j-accent) 14%, transparent);
+  color: var(--j-accent);
+  border: 1px solid color-mix(in srgb, var(--j-accent) 30%, var(--j-border));
+}
+.log .aur-plan-body {
+  padding: 0.2rem 0.85rem 0.7rem;
+  font-size: var(--j-fs-sm);
+  line-height: 1.55;
+  color: var(--j-ink);
+  max-height: 22rem;
+  overflow-y: auto;
+}
+.log .aur-plan-body .md-content {
+  font-size: var(--j-fs-sm);
+}
+.log .aur-plan-revise {
+  padding: 0 0.85rem 0.6rem;
+}
+.log .aur-plan-revise-in {
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-sm);
+  background: color-mix(in srgb, var(--j-bg-grad-a) 60%, var(--j-raised));
+  color: var(--j-ink);
+  font-size: var(--j-fs-sm);
+  font-family: inherit;
+}
+.log .aur-plan-revise-in:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--j-accent) 55%, var(--j-border));
+}
+.log .aur-plan-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--j-sp-2);
+  padding: 0.6rem 0.85rem;
+  border-top: 1px solid var(--j-border);
+  background: color-mix(in srgb, var(--j-bg-grad-a) 40%, transparent);
+}
+.log .aur-plan-hint {
+  font-size: var(--j-fs-xs);
+  color: var(--j-ink-faint);
+}
+.log .aur-plan-grow {
+  flex: 1;
+}
+.log .aur-plan-revise-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.45rem 0.9rem;
+  border: 1px solid var(--j-border-strong);
+  border-radius: var(--j-r-md);
+  background: color-mix(in srgb, var(--j-bg-grad-a) 40%, var(--j-raised));
+  color: var(--j-ink-dim);
+  font-size: var(--j-fs-sm);
+  font-weight: 650;
+  cursor: pointer;
+  transition: border-color var(--j-dur-fast) var(--j-ease),
+    color var(--j-dur-fast) var(--j-ease), background var(--j-dur-fast) var(--j-ease);
+}
+.log .aur-plan-revise-btn:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--j-accent) 45%, var(--j-border));
+  color: var(--j-ink);
+}
+.log .aur-plan-revise-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.log .aur-plan-apply {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 1.1rem;
+  border: none;
+  border-radius: var(--j-r-md);
+  background: var(--j-accent-grad);
+  color: var(--j-accent-ink);
+  font-size: var(--j-fs-sm);
+  font-weight: 650;
+  box-shadow: var(--j-shadow-accent);
+  cursor: pointer;
+  transition: transform var(--j-dur-fast) var(--j-ease-snap), filter var(--j-dur-fast) var(--j-ease);
+}
+.log .aur-plan-apply:hover:not(:disabled) {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+}
+.log .aur-plan-apply:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+.log .aur-plan-result {
+  display: none;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.55rem 0.85rem;
+  border-top: 1px solid var(--j-border);
+  font-size: var(--j-fs-sm);
+  font-weight: 600;
+  color: var(--j-energy);
+}
+.log .aur-plan[data-state="applied"] .aur-plan-result,
+.log .aur-plan[data-state="revised"] .aur-plan-result {
+  display: flex;
+}
+.log .aur-plan[data-state="applied"] .aur-plan-foot,
+.log .aur-plan[data-state="revised"] .aur-plan-foot,
+.log .aur-plan[data-state="applied"] .aur-plan-revise,
+.log .aur-plan[data-state="revised"] .aur-plan-revise {
+  display: none;
+}
+.log .aur-plan[data-state="applied"],
+.log .aur-plan[data-state="revised"] {
+  border-color: var(--j-border);
+  background: var(--j-raised);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   9 · ERROR CARD  (mockup .err-card — render.js .aur-err-card)
+   Red-toned card: icon + title + description + action buttons.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.log .aur-err-card {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--j-sp-3);
+  margin: var(--j-sp-2) 0;
+  padding: 0.85rem 1rem;
+  border-radius: var(--j-r-lg);
+  border: 1px solid color-mix(in srgb, var(--j-danger) 38%, var(--j-border));
+  background: color-mix(in srgb, var(--j-danger) 7%, var(--j-raised));
+}
+.log .aur-err-ico {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  font-weight: 700;
+  background: color-mix(in srgb, var(--j-danger) 16%, transparent);
+  color: var(--j-danger);
+}
+.log .aur-err-main {
+  flex: 1;
+  min-width: 0;
+}
+.log .aur-err-t {
+  font-size: var(--j-fs-sm);
+  font-weight: 650;
+  color: var(--j-ink);
+}
+.log .aur-err-d {
+  margin-top: 2px;
+  font-size: var(--j-fs-sm);
+  line-height: 1.5;
+  color: var(--j-ink-dim);
+}
+.log .aur-err-d code {
+  font-family: var(--j-font-mono);
+  font-size: 0.86em;
+  padding: 0.05em 0.35em;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--j-danger) 10%, transparent);
+  color: var(--j-danger);
+}
+.log .aur-err-actions {
+  display: flex;
+  gap: var(--j-sp-2);
+  margin-top: 0.7rem;
+}
+.log .aur-btn-retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.9rem;
+  border: none;
+  border-radius: var(--j-r-pill);
+  white-space: nowrap;
+  background: var(--j-accent-grad);
+  color: var(--j-accent-ink);
+  font-size: var(--j-fs-xs);
+  font-weight: 600;
+  box-shadow: var(--j-shadow-accent);
+  transition: transform var(--j-dur-fast) var(--j-ease-snap), filter var(--j-dur-fast) var(--j-ease);
+}
+.log .aur-btn-retry:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+}
+.log .aur-btn-retry svg {
+  width: 13px;
+  height: 13px;
+}
+.log .aur-btn-mini {
+  padding: 0.4rem 0.85rem;
+  border: 1px solid var(--j-border-strong);
+  border-radius: var(--j-r-pill);
+  background: none;
+  color: var(--j-ink-dim);
+  font-size: var(--j-fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
+  transition: color var(--j-dur-fast) var(--j-ease), border-color var(--j-dur-fast) var(--j-ease);
+}
+.log .aur-btn-mini:hover {
+  color: var(--j-ink);
+  border-color: var(--j-ink-faint);
+}
+
+/* ─── prefers-reduced-motion: stop process card animations ───────────── */
+@media (prefers-reduced-motion: reduce) {
+  .aur-process.is-live .aur-process-spark::after,
+  .aur-process.is-running .aur-process-spark::after,
+  .aur-process.is-live .aur-process-label,
+  .aur-process.is-running .aur-process-label,
+  .log .akana-thought-feed.aur-process .aur-timeline .akana-thought-line--shell-current::after {
+    animation: none;
+  }
+  .aur-process.is-live .aur-process-label,
+  .aur-process.is-running .aur-process-label {
+    -webkit-text-fill-color: var(--j-ink);
+    color: var(--j-ink);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PREMIUM TOOL CARD — SVG icon system + polished states
+   ─────────────────────────────────────────────────────────────────────────
+   render.js now prints a line-SVG icon based on the tool FAMILY (instead of
+   emoji 🔧🧠⚡) plus an SVG status glyph (spinner / check / cross). This
+   block polishes them: family-colored icon chip, SVG status, result chip,
+   hover/open micro-interaction. Loaded LAST → safely overrides base's
+   emoji-era rules (::before text, border spinner). Markup/JS contract unchanged.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* — All action-card icons are SVG now: size + block layout — */
+.log .action-card-icon svg {
+  width: 1.05em;
+  height: 1.05em;
+  display: block;
+}
+
+/* — Tool icon chip: soft glass chip in family color — */
+.log .tool-call .action-card-icon {
+  width: 1.95em;
+  height: 1.95em;
+  border-radius: 10px;
+  color: var(--j-accent);
+  background: color-mix(in srgb, var(--j-accent) 12%, var(--j-raised));
+  border: 1px solid color-mix(in srgb, var(--j-accent) 26%, var(--j-border));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 7%, transparent);
+  overflow: hidden;
+  transition: transform 0.18s var(--j-ease), box-shadow 0.18s var(--j-ease);
+}
+
+/* Family colors — from a single source: icon stroke (color) + chip tone. The
+   left type rail (.action-card--tool::after) already uses the same family colors (above). */
+.log .tool-call[data-tool-family="shell"] .action-card-icon {
+  color: var(--j-accent-2);
+  background: color-mix(in srgb, var(--j-accent-2) 13%, var(--j-raised));
+  border-color: color-mix(in srgb, var(--j-accent-2) 28%, var(--j-border));
+}
+.log .tool-call[data-tool-family="file"] .action-card-icon {
+  color: var(--j-accent-3);
+  background: color-mix(in srgb, var(--j-accent-3) 13%, var(--j-raised));
+  border-color: color-mix(in srgb, var(--j-accent-3) 28%, var(--j-border));
+}
+.log .tool-call[data-tool-family="search"] .action-card-icon {
+  color: var(--j-accent);
+}
+.log .tool-call[data-tool-family="mem"] .action-card-icon {
+  color: var(--j-energy);
+  background: color-mix(in srgb, var(--j-energy) 13%, var(--j-raised));
+  border-color: color-mix(in srgb, var(--j-energy) 28%, var(--j-border));
+}
+.log .tool-call[data-tool-family="web"] .action-card-icon,
+.log .tool-call[data-tool-family="edit"] .action-card-icon {
+  color: var(--j-warn);
+  background: color-mix(in srgb, var(--j-warn) 13%, var(--j-raised));
+  border-color: color-mix(in srgb, var(--j-warn) 28%, var(--j-border));
+}
+.log .tool-call[data-tool-family="todo"] .action-card-icon {
+  color: var(--j-accent-3);
+  background: color-mix(in srgb, var(--j-accent-3) 13%, var(--j-raised));
+  border-color: color-mix(in srgb, var(--j-accent-3) 28%, var(--j-border));
+}
+
+/* Hover: chip lifts slightly + family-colored glow (no layout shift). */
+.log .tool-call--compact:hover .action-card-icon {
+  transform: translateY(-1px);
+  box-shadow:
+    0 5px 14px -7px color-mix(in srgb, currentColor 75%, transparent),
+    inset 0 1px 0 color-mix(in srgb, #fff 10%, transparent);
+}
+
+/* — Status glyph: SVG. base's ::before text (✓/✕) + border-spinner are switched off — */
+.log .action-card-status::before {
+  content: none !important;
+}
+.log .tool-call .action-card-status {
+  width: 1.25em;
+  height: 1.25em;
+  border: 0 !important;
+  border-radius: 0 !important;
+  animation: none !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.log .action-card-status svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.log .tool-call[data-status="running"] .action-card-status {
+  color: var(--j-accent);
+}
+.log .tool-call[data-status="done"] .action-card-status {
+  color: var(--j-energy);
+}
+.log .tool-call[data-status="error"] .action-card-status {
+  color: var(--j-danger);
+}
+.action-card-status .acs-spin {
+  animation: acs-spin 0.7s linear infinite;
+  transform-origin: 50% 50%;
+}
+@keyframes acs-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* — Card surface: polished border + hover/open toning — */
+.log .tool-call.tool-call--compact {
+  border: 1px solid var(--j-border);
+  background: color-mix(in srgb, var(--j-raised) 46%, transparent);
+  transition: border-color 0.18s var(--j-ease), background 0.18s var(--j-ease),
+    box-shadow 0.18s var(--j-ease);
+}
+.log .tool-call--compact:hover {
+  border-color: color-mix(in srgb, var(--j-accent) 32%, var(--j-border-strong));
+  background: color-mix(in srgb, var(--j-raised) 70%, transparent);
+}
+.log .tool-call--compact[open] {
+  border-color: color-mix(in srgb, var(--j-accent) 28%, var(--j-border-strong));
+  background: color-mix(in srgb, var(--j-raised) 80%, transparent);
+  box-shadow: 0 8px 24px -16px color-mix(in srgb, var(--j-accent) 60%, transparent);
+}
+.log .tool-call[data-status="error"].tool-call--compact {
+  border-color: color-mix(in srgb, var(--j-danger) 32%, var(--j-border));
+  background: color-mix(in srgb, var(--j-danger) 6%, color-mix(in srgb, var(--j-raised) 46%, transparent));
+}
+
+/* — Result chip: polish is now in the main §4 block — */
+
+/* — Chevron: soft visibility (rotation from base) — */
+.log .tool-call .action-card-chevron {
+  opacity: 0.45;
+  transition: opacity 0.18s var(--j-ease);
+}
+.log .tool-call--compact:hover .action-card-chevron,
+.log .tool-call--compact[open] .action-card-chevron {
+  opacity: 0.85;
+}
+
+/* — Memory/skill card icons are SVG too: non-family warm colors — */
+.log .action-card--memory .action-card-icon {
+  color: var(--j-accent-2);
+}
+.log .action-card--skill .action-card-icon {
+  color: var(--j-warn);
+}
+
+/* ── Family color from a single var (--fam): source for node, hover, border tone ── */
+.log .tool-call { --fam: var(--j-accent); }
+.log .tool-call[data-tool-family="shell"] { --fam: var(--j-accent-2); }
+.log .tool-call[data-tool-family="file"] { --fam: var(--j-accent-3); }
+.log .tool-call[data-tool-family="search"] { --fam: var(--j-accent); }
+.log .tool-call[data-tool-family="mem"] { --fam: var(--j-energy); }
+.log .tool-call[data-tool-family="web"],
+.log .tool-call[data-tool-family="edit"] { --fam: var(--j-warn); }
+.log .tool-call[data-tool-family="todo"] { --fam: var(--j-accent-3); }
+
+/* ── Card border: visible in BOTH THEMES (ink-based). Timeline rules were
+   overriding --j-border at high specificity → in light theme the white-on-white
+   border was disappearing. Here we polish timeline + standalone cards together
+   with a visible thin ink border. Hover/open warms to the family color. ── */
+.log .tool-call.tool-call--compact,
+.log .akana-thought-feed.aur-process .aur-timeline .tool-call.aur-timeline-tool {
+  border: 1px solid color-mix(in srgb, var(--j-ink) 14%, transparent);
+  background: color-mix(in srgb, var(--j-raised) 50%, transparent);
+}
+.log .tool-call--compact:hover,
+.log .akana-thought-feed.aur-process .aur-timeline .tool-call.aur-timeline-tool:hover {
+  border-color: color-mix(in srgb, var(--fam) 46%, transparent);
+  background: color-mix(in srgb, var(--j-raised) 74%, transparent);
+}
+.log .tool-call--compact[open],
+.log .akana-thought-feed.aur-process .aur-timeline .tool-call.aur-timeline-tool[open] {
+  border-color: color-mix(in srgb, var(--fam) 38%, transparent);
+  background: color-mix(in srgb, var(--j-raised) 82%, transparent);
+}
+.log .tool-call[data-status="error"].tool-call--compact,
+.log .akana-thought-feed.aur-process .aur-timeline .tool-call.aur-timeline-tool[data-status="error"] {
+  border-color: color-mix(in srgb, var(--j-danger) 42%, transparent);
+}
+
+/* ── In the timeline, hide the card's left rail — node dot + icon chip already
+   carry the family color; the rail+node+chip trio was crowding the left side. ── */
+.log .akana-thought-feed.aur-process .aur-timeline .tool-call.aur-timeline-tool::after {
+  display: none;
+}
+
+/* ── Timeline node: SOLID family-colored dot + bg halo (instead of a dim empty ring).
+   Red on error, running: accent + pulse ring. ── */
+.log .akana-thought-feed.aur-process .aur-timeline .tool-call.aur-timeline-tool::before {
+  width: 10px;
+  height: 10px;
+  /* The dot's visual center sits EXACTLY on the thread. content-box pseudo →
+     the 2px border sits OUTSIDE the 10px diameter (visual Ø=14px); the card
+     wrapper is ~1px further right than the thought row. Measured: -19.8px = -1.2375rem. */
+  left: -1.2375rem;
+  top: 0.95rem;
+  background: var(--fam);
+  border: 2.5px solid var(--j-bg);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--fam) 38%, transparent);
+}
+/* On a closed NORMAL timeline card, the dot should sit on the vertical CENTER
+   of the card (=summary row). A fixed `top` was matching the icon line → on a
+   2-line card the dot stayed at the top and looked "off-center" (user feedback).
+   top:50% auto-centers based on the card's actual height (1 vs 2 lines doesn't matter).
+   EXCEPT open cards ([open]) + the TODO card (.aur-todo-card): their body/checklist
+   grows, so a fixed `top` (title line) is kept so the dot doesn't float in the middle. */
+.log .akana-thought-feed.aur-process .aur-timeline .tool-call.aur-timeline-tool:not([open]):not(.aur-todo-card)::before {
+  top: 50%;
+  transform: translateY(-50%);
+}
+.log .akana-thought-feed.aur-process .aur-timeline .tool-call.aur-timeline-tool[data-status="error"]::before {
+  background: var(--j-danger);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--j-danger) 38%, transparent);
+}
+.log .akana-thought-feed.aur-process .aur-timeline .tool-call.aur-timeline-tool[data-status="running"]::before {
+  background: var(--j-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--j-accent) 18%, transparent);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PREMIUM TOOL DETAIL — when open: Input / Output panels + code shell
+   ─────────────────────────────────────────────────────────────────────────
+   Structure that breaks the "raw log" feel: args and result are SEPARATE
+   labeled panels (icon + name + badge), code/command/output live inside a
+   real CODE SHELL (title strip + copy icon), a spacious key-value definition
+   grid. Readable in both themes.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* — Panel = Input / Output — */
+.log .tool-call .action-card-panel {
+  border-top: 1px solid color-mix(in srgb, var(--j-ink) 10%, transparent);
+  padding: 0.65rem 0.75rem 0.75rem;
+  background: transparent;
+}
+.log .tool-call .action-card-panel[data-panel-kind="output"] {
+  background: color-mix(in srgb, var(--j-ink) 4%, transparent);
+  border-top-color: color-mix(in srgb, var(--j-energy) 20%, color-mix(in srgb, var(--j-ink) 10%, transparent));
+}
+
+/* Panel title: icon + name + (right) badge — not small-bold-faint; a crisp strip. */
+.log .tool-call .action-card-panel-label {
+  display: flex;
+  align-items: center;
+  gap: 0.42rem;
+  margin-bottom: 0.55rem;
+  font-family: var(--j-font-ui);
+  font-size: var(--j-fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: var(--j-ink-dim);
+}
+.log .action-card-panel-ic {
+  flex: none;
+  display: inline-flex;
+  width: 1.05em;
+  height: 1.05em;
+  color: var(--j-ink-faint);
+}
+.log .action-card-panel-ic svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.log .action-card-panel[data-panel-kind="output"] .action-card-panel-ic {
+  color: var(--j-energy);
+}
+.log .action-card-panel-name {
+  flex: none;
+}
+.log .tool-call .action-card-panel-badge {
+  margin-left: auto;
+  font-family: var(--j-font-mono);
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  padding: 0.05rem 0.5rem;
+  border-radius: var(--j-r-pill);
+  background: color-mix(in srgb, var(--j-ink) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--j-ink) 12%, transparent);
+  color: var(--j-ink-dim);
+}
+.log .tool-call .action-card-panel-badge[data-kind="ok"] {
+  background: color-mix(in srgb, var(--j-energy) 14%, transparent);
+  border-color: color-mix(in srgb, var(--j-energy) 32%, transparent);
+  color: var(--j-energy);
+}
+.log .tool-call .action-card-panel-badge[data-kind="err"] {
+  background: color-mix(in srgb, var(--j-danger) 14%, transparent);
+  border-color: color-mix(in srgb, var(--j-danger) 32%, transparent);
+  color: var(--j-danger);
+}
+
+/* — Code shell: title strip (dot + lang/label + copy icon) + body — */
+.log .ac-code-shell {
+  border: 1px solid color-mix(in srgb, var(--j-ink) 12%, transparent);
+  border-radius: 9px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--j-bg) 55%, var(--j-raised));
+}
+.log .ac-code-shell + .ac-code-shell {
+  margin-top: 0.4rem;
+}
+.log .ac-code-head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.32rem 0.42rem 0.32rem 0.6rem;
+  background: color-mix(in srgb, var(--j-ink) 5%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--j-ink) 9%, transparent);
+}
+.log .ac-code-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--j-accent) 75%, transparent);
+}
+.log .ac-code-shell[data-lang="bash"] .ac-code-dot {
+  background: var(--j-accent-2);
+}
+.log .ac-code-shell[data-lang="diff"] .ac-code-dot {
+  background: var(--j-warn);
+}
+.log .ac-code-lang {
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+  letter-spacing: 0.03em;
+  color: var(--j-ink-faint);
+}
+.log .ac-code-copy {
+  margin-left: auto;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.55em;
+  height: 1.55em;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--j-ink-faint);
+  cursor: pointer;
+  transition: color 0.15s var(--j-ease), background 0.15s var(--j-ease),
+    border-color 0.15s var(--j-ease);
+}
+.log .ac-code-copy svg {
+  width: 0.92em;
+  height: 0.92em;
+  display: block;
+}
+.log .ac-code-copy:hover {
+  color: var(--j-ink);
+  background: color-mix(in srgb, var(--j-ink) 7%, transparent);
+  border-color: color-mix(in srgb, var(--j-ink) 12%, transparent);
+}
+.log .ac-code-copy.is-ok {
+  color: var(--j-energy);
+}
+/* Body pre: no border/radius of its own (shell provides them). */
+.log .ac-code-shell .action-card-code {
+  border: 0;
+  border-radius: 0;
+  border-left: 0;
+  margin: 0;
+  background: transparent;
+  max-height: 15em;
+  overflow-y: auto;
+  padding: 0.6rem 0.75rem;
+  font-size: var(--j-fs-xs);
+  line-height: 1.5;
+  tab-size: 2;
+}
+
+/* — Key-value (Input fields): spacious definition grid — */
+.log .tool-call .action-card-kv {
+  grid-template-columns: minmax(4.5rem, max-content) minmax(0, 1fr);
+  gap: 0.32rem 0.85rem;
+  align-items: baseline;
+}
+.log .tool-call .action-card-kv dt {
+  font-family: var(--j-font-ui);
+  font-weight: 500;
+  font-size: var(--j-fs-xs);
+  color: var(--j-ink-faint);
+}
+.log .tool-call .action-card-kv dd {
+  color: var(--j-ink);
+}
+
+/* — List (search results) — */
+.log .tool-call .action-card-list {
+  list-style: none;
+  padding-left: 0;
+}
+.log .tool-call .action-card-list li {
+  position: relative;
+  padding-left: 1rem;
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+  color: var(--j-ink-dim);
+}
+.log .tool-call .action-card-list li::before {
+  content: "";
+  position: absolute;
+  left: 0.15rem;
+  top: 0.62em;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--j-accent) 65%, transparent);
+}
+
+/* — Pill (Input: query/pattern) — */
+.log .tool-call .action-card-pill {
+  font-family: var(--j-font-mono);
+  background: color-mix(in srgb, var(--j-accent) 11%, transparent);
+  border: 1px solid color-mix(in srgb, var(--j-accent) 26%, transparent);
+  color: color-mix(in srgb, var(--j-ink) 68%, var(--j-accent));
+  border-radius: var(--j-r-pill);
+  padding: 0.05rem 0.55rem;
+}
+
+/* — Developer JSON (raw): closed, dim; expands on click — */
+.log .tool-call .action-card-raw summary {
+  font-family: var(--j-font-ui);
+  color: var(--j-ink-faint);
+  padding: 0.15rem 0;
+}
+
+/* ── Unified colored diff (edit tools): −red / +green + "+N −M" ─────── */
+.log .ac-diff-shell .ac-code-dot {
+  background: var(--j-warn);
+}
+.log .ac-diff-stat {
+  display: inline-flex;
+  gap: 0.4rem;
+  margin-left: 0.15rem;
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+}
+.log .ac-diff-stat-add {
+  color: var(--j-energy);
+  font-weight: 600;
+}
+.log .ac-diff-stat-del {
+  color: var(--j-danger);
+  font-weight: 600;
+}
+.log .ac-diff-body {
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+  line-height: 1.5;
+  max-height: 19em;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  padding: 0.3rem 0;
+}
+.log .ac-diff-line {
+  display: flex;
+  align-items: flex-start;
+  padding: 0 0.55rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.log .ac-diff-gutter {
+  flex: none;
+  width: 1.15em;
+  text-align: center;
+  user-select: none;
+  opacity: 0.75;
+}
+.log .ac-diff-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.log .ac-diff-line--add {
+  background: color-mix(in srgb, var(--j-energy) 13%, transparent);
+}
+.log .ac-diff-line--add .ac-diff-gutter {
+  color: var(--j-energy);
+}
+.log .ac-diff-line--add .ac-diff-text {
+  color: color-mix(in srgb, var(--j-ink) 84%, var(--j-energy));
+}
+.log .ac-diff-line--del {
+  background: color-mix(in srgb, var(--j-danger) 12%, transparent);
+}
+.log .ac-diff-line--del .ac-diff-gutter {
+  color: var(--j-danger);
+}
+.log .ac-diff-line--del .ac-diff-text {
+  color: color-mix(in srgb, var(--j-ink) 82%, var(--j-danger));
+}
+.log .ac-diff-line--ctx {
+  color: var(--j-ink-dim);
+}
+.log .ac-diff-more {
+  padding: 0.3rem 0.6rem 0.1rem;
+  font-size: 0.66rem;
+  font-style: italic;
+  color: var(--j-ink-faint);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TOOL-SPECIFIC RICH VIEWS — file header / link card / checklist / chips
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* — File header (read_file / list_dir input) — */
+.log .ac-file {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid color-mix(in srgb, var(--j-ink) 12%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--j-bg) 50%, var(--j-raised));
+}
+.log .ac-file-ic {
+  flex: none;
+  width: 1.15em;
+  height: 1.15em;
+  color: var(--j-accent-3);
+}
+.log .ac-file-ic svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.log .ac-file-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+  color: var(--j-ink);
+  word-break: break-all;
+}
+.log .ac-file-meta {
+  flex: none;
+  margin-left: auto;
+  font-family: var(--j-font-mono);
+  font-size: 0.64rem;
+  color: var(--j-ink-faint);
+  padding: 0.05rem 0.45rem;
+  border-radius: var(--j-r-pill);
+  background: color-mix(in srgb, var(--j-ink) 7%, transparent);
+}
+
+/* — Link card (web_fetch / fetch input) — */
+.log .ac-link {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid color-mix(in srgb, var(--j-warn) 26%, var(--j-border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--j-warn) 7%, transparent);
+}
+.log .ac-link-ic {
+  flex: none;
+  width: 1.25em;
+  height: 1.25em;
+  color: var(--j-warn);
+}
+.log .ac-link-ic svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.log .ac-link-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.log .ac-link-domain {
+  font-weight: 600;
+  font-size: var(--j-fs-sm);
+  color: var(--j-ink);
+}
+.log .ac-link-url {
+  font-family: var(--j-font-mono);
+  font-size: 0.64rem;
+  color: var(--j-ink-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* — Checklist (todo_write) — */
+.log .ac-todos {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.34rem;
+}
+.log .ac-todo {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  font-size: var(--j-fs-sm);
+  line-height: 1.45;
+}
+.log .ac-todo-box {
+  flex: none;
+  width: 1.15em;
+  height: 1.15em;
+  margin-top: 0.08em;
+}
+.log .ac-todo-box svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.log .ac-todo-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--j-ink);
+}
+.log .ac-todo--completed .ac-todo-box {
+  color: var(--j-energy);
+}
+.log .ac-todo--completed .ac-todo-text {
+  color: var(--j-ink-faint);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--j-ink-faint) 55%, transparent);
+}
+.log .ac-todo--in_progress .ac-todo-box {
+  color: var(--j-accent);
+}
+.log .ac-todo--in_progress .ac-todo-text {
+  color: var(--j-ink);
+  font-weight: 500;
+}
+.log .ac-todo--pending .ac-todo-box {
+  color: var(--j-ink-faint);
+}
+.log .ac-todo--pending .ac-todo-text {
+  color: var(--j-ink-dim);
+}
+
+/* — Task list LIVE card (TodoWrite → renderTodoCard) —
+   INSTEAD OF a collapsing action-card, an always-open, prominent checklist.
+   Consecutive TodoWrite calls update the same card in place via family-dedup. */
+.log .aur-todo-card {
+  margin: 0.5rem 0 0;
+  padding: 0.6rem 0.7rem 0.65rem;
+  border: 1px solid color-mix(in srgb, var(--j-accent) 30%, var(--j-border));
+  border-radius: var(--j-r-md);
+  background: color-mix(in srgb, var(--j-accent) 6%, var(--j-panel));
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  box-sizing: border-box;
+}
+.log .aur-todo-card .aur-todo-head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+.log .aur-todo-card .aur-todo-ic {
+  flex: none;
+  width: 1.3em;
+  height: 1.3em;
+  color: var(--j-accent);
+  display: inline-flex;
+}
+.log .aur-todo-card .aur-todo-ic svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.log .aur-todo-card .aur-todo-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--j-fs-sm);
+  font-weight: 600;
+  color: var(--j-ink);
+  letter-spacing: 0.01em;
+}
+.log .aur-todo-card .aur-todo-count {
+  flex: none;
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+  color: var(--j-ink-dim);
+  padding: 0.04rem 0.45rem;
+  border-radius: var(--j-r-pill);
+  background: color-mix(in srgb, var(--j-accent) 12%, transparent);
+}
+.log .aur-todo-card .aur-todo-count:empty {
+  display: none;
+}
+.log .aur-todo-card[data-status="running"] .aur-todo-ic {
+  animation: aur-todo-pulse 1.2s ease-in-out infinite;
+}
+@keyframes aur-todo-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/* — File/folder chips (list_dir result) — */
+.log .ac-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+.log .ac-file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+  max-width: 100%;
+  padding: 0.12rem 0.5rem 0.12rem 0.4rem;
+  border-radius: 7px;
+  border: 1px solid color-mix(in srgb, var(--j-ink) 11%, transparent);
+  background: color-mix(in srgb, var(--j-bg) 50%, var(--j-raised));
+  font-family: var(--j-font-mono);
+  font-size: 0.7rem;
+  color: var(--j-ink-dim);
+}
+.log .ac-file-chip-ic {
+  flex: none;
+  width: 0.95em;
+  height: 0.95em;
+  color: var(--j-ink-faint);
+}
+.log .ac-file-chip-ic svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.log .ac-file-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.log .ac-file-chip--dir {
+  color: var(--j-ink);
+  background: color-mix(in srgb, var(--j-accent-3) 10%, var(--j-raised));
+  border-color: color-mix(in srgb, var(--j-accent-3) 26%, var(--j-border));
+}
+.log .ac-file-chip--dir .ac-file-chip-ic {
+  color: var(--j-accent-3);
+}
+.log .ac-file-chip--more {
+  color: var(--j-ink-faint);
+  font-style: italic;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SYNTAX HIGHLIGHTING — code shells (bash/json/js) + raw JSON
+   Tokens from the family palette → readable in both themes. render.js safely
+   emits only .tok-* spans (after escaping).
+   ═══════════════════════════════════════════════════════════════════════════ */
+.log .action-card-code .tok-com,
+.log .action-card-pre .tok-com {
+  color: var(--j-ink-faint);
+  font-style: italic;
+}
+.log .action-card-code .tok-str,
+.log .action-card-pre .tok-str {
+  color: color-mix(in srgb, var(--j-energy) 88%, var(--j-ink));
+}
+.log .action-card-code .tok-kw,
+.log .action-card-pre .tok-kw {
+  color: var(--j-accent-2);
+  font-weight: 500;
+}
+.log .action-card-code .tok-num,
+.log .action-card-pre .tok-num {
+  color: var(--j-warn);
+}
+.log .action-card-code .tok-lit,
+.log .action-card-pre .tok-lit {
+  color: var(--j-accent-2);
+}
+.log .action-card-code .tok-prop,
+.log .action-card-pre .tok-prop {
+  color: var(--j-accent-3);
+}
+.log .action-card-code .tok-var,
+.log .action-card-pre .tok-var {
+  color: var(--j-accent-3);
+}
+.log .action-card-code .tok-cmd,
+.log .action-card-pre .tok-cmd {
+  color: var(--j-accent);
+  font-weight: 600;
+}
+.log .action-card-code .tok-op,
+.log .action-card-pre .tok-op {
+  color: var(--j-ink-faint);
+}

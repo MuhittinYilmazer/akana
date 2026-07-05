@@ -1,0 +1,38 @@
+# OPTIONAL packaging metadata — Akana is clone-and-run and does NOT require
+# installation. Dependencies live in requirements*.txt (installed by
+# `python akana.py setup`); the SINGLE runtime mechanism that makes
+# `import akana` resolve to src/akana is _akana_src_bootstrap.ensure_src_on_path(),
+# wired into every entry point (launcher, server, MCP script, pytest).
+#
+# This file exists only so a developer who WANTS an editable install can run
+#     pip install -e .
+# to get IDE/mypy/pytest resolution of the src-layout `akana` package without a
+# path hack. When installed this way the runtime bootstrap becomes a harmless
+# no-op (src/akana is already importable). Installation is never required.
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "akana"
+version = "0.0.1"
+description = "Akana — local-first multi-provider AI assistant with a clean memory core."
+requires-python = ">=3.11"
+license = { text = "MIT" }
+classifiers = ["License :: OSI Approved :: MIT License"]
+# Runtime deps are intentionally NOT pinned here — see requirements*.txt, which
+# `python akana.py setup` installs. Keeping a single source of truth avoids the
+# drift the audit flagged for duplicated declarations.
+dynamic = ["dependencies"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+# src-layout: the clean core package `akana` lives under src/; the app packages
+# sit at the repo root. Listing all three lets `pip install -e .` expose exactly
+# the import names the codebase uses (`akana`, `akana_server`, `akana_cli`).
+[tool.setuptools.packages.find]
+where = ["src", "."]
+include = ["akana*", "akana_server*", "akana_cli*"]
+exclude = ["tests*", "scripts*", "web_ui*", "packs*", "docs*", "venv*"]

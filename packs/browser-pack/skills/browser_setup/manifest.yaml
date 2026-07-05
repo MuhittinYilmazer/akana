@@ -1,0 +1,19 @@
+id: browser_setup
+version: 1
+title: "Browser: autonomous setup (Playwright MCP)"
+description: "Sets up the browser pack autonomously: verify Node/npx, warm up the @playwright/mcp package, download chromium, check DISPLAY for headful, then mount the 'browser' MCP entry into mcp_servers.yaml via canonical consent(). Ends with a ✓/✗ table. The browse skill calls this as a preliminary step."
+triggers:
+  - "set up browser pack"
+  - "install browser pack"
+  - "install playwright"
+  - "browser setup"
+  - "setup browser pack"
+  - "is the browser pack ready"
+risk: medium
+learn_from_success: true
+requires_approval: false
+cursor_skills:
+  - shell
+tools_allowed:
+  - exec
+  - read_file
