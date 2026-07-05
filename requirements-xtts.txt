@@ -1,0 +1,19 @@
+# Local XTTS-v2 TTS (Turkish + voice cloning). OPTIONAL + HEAVY; user opt-in.
+# Model is CPML (non-commercial) licensed, downloaded on first synthesis (~2GB). The
+# torch CUDA build must be installed separately: pip install torch --index-url
+# https://download.pytorch.org/whl/cu124 (CPU torch also works but is very slow).
+# transformers<5 REQUIRED: coqui-tts 0.27.x imports isin_mps_friendly, which was
+# removed in 5.0 (its own >=4.57 pin allows 5.x, where it then breaks).
+#
+# SECURITY NOTE: transformers < 5.3.0 carries an RCE advisory (GHSA-29pf-2h5f-8g72).
+# It is not patchable here without breaking coqui-tts, and no coqui-tts release is
+# compatible with transformers 5.x. The advisory requires LOADING AN UNTRUSTED MODEL;
+# Akana's XTTS engine only loads the fixed, trusted coqui model
+# ("tts_models/multilingual/multi-dataset/xtts_v2") and never sets trust_remote_code,
+# so the RCE path is unreachable here. XTTS is optional and opt-in.
+#
+# Enable: pip install -r requirements-xtts.txt
+coqui-tts>=0.27
+transformers>=4.57,<5
+torch>=2.1
+torchaudio>=2.1

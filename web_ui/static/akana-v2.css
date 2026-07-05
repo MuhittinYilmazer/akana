@@ -1,0 +1,2356 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   AKANA V2 — "NEBULA COMMAND CENTER" SHELL SKIN
+   ─────────────────────────────────────────────────────────────────────────
+   This file loads LAST in index.html and overrides styles.css (the legacy
+   shell). styles.css stays loaded as fallback; the rules here beat it with
+   equal/higher specificity (body prefix, double class).
+
+   New skeleton:
+     body > .app-bg (aurora scene)
+          > .app-frame            ← grid: [sidebar 300px | stage 1fr]
+              > aside.chat-archive.panel.sidebar   (full-height left column)
+              > div.stage > header.top.top-bar + main#layout.layout
+
+   Principles:
+   - ALL color/spacing/radius/shadow from tokens: var(--j-*) (tokens.css).
+     No raw hex; intermediate tones derived via color-mix.
+   - Motion: transform/opacity only; disabled under prefers-reduced-motion.
+   - Hovers never shift layout (transform), cursor:pointer on all interactive,
+     :focus-visible ring visible (--j-glow-accent).
+   - CONTRACT: ID/class names preserved as-is; [hidden] always hides;
+     body.settings-open and message bubbles (akana-chat.css) are OUTSIDE
+     this file's scope — only spacing/width touch-ups here.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ─── 0. Shell metrics (skin-specific derived variables) ────── */
+:root {
+  --v2-sidebar-w: 300px;
+  --v2-topbar-h: 52px;
+  --v2-thread-w: 920px;   /* toolbar strip */
+  /* Gemini-style: centered reading column + side breathing room (not full-screen) */
+  --v2-read-max: 48rem;
+  --v2-read-gutter: clamp(1rem, 4vw, 2.5rem);
+  --v2-read-w: min(var(--v2-read-max), calc(100% - var(--v2-read-gutter) * 2));
+  --v2-glass: color-mix(in srgb, var(--j-overlay) 78%, transparent);
+  --v2-glass-strong: color-mix(in srgb, var(--j-overlay) 90%, transparent);
+  --v2-blur: 18px;
+  --v2-border-grad: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--j-accent) 42%, var(--j-border)),
+    color-mix(in srgb, var(--j-accent-2) 34%, var(--j-border)) 55%,
+    color-mix(in srgb, var(--j-accent-3) 26%, var(--j-border))
+  );
+}
+
+/* ─── 1. Global base: body, selection, focus, hiding contract ─────────────── */
+
+/* Decouple the new root grid from body-flex: app-frame manages its own height
+   (legacy was body{display:flex;flex-direction:column}) */
+body {
+  display: block;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+body ::selection {
+  background: color-mix(in srgb, var(--j-accent) 32%, transparent);
+  color: var(--j-ink);
+}
+
+/* Visible focus ring: same language across all interactive surfaces */
+body :focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--j-accent) 70%, transparent);
+  outline-offset: 2px;
+  box-shadow: var(--j-glow-accent);
+  border-radius: var(--j-r-sm);
+}
+
+/* All interactive: pointer cursor (legacy missed it on some buttons) */
+body button,
+body [role="button"],
+body label.chat-archive-search-wrap,
+body summary {
+  cursor: pointer;
+}
+
+body button:disabled {
+  cursor: not-allowed;
+}
+
+/* Thin premium scrollbar — all scrolling surfaces */
+body *::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+body *::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+body *::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--j-ink-faint) 45%, transparent);
+  border-radius: var(--j-r-pill);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+body *::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--j-accent) 50%, transparent);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+
+/* ─── 2. Aurora scene enrichment (.app-bg is in legacy; depth added here) ── */
+
+/* Nebula dust: very faint starfield — two-layer radial dot pattern */
+body .app-bg .app-bg-grid::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(circle 1px at 18% 22%, color-mix(in srgb, var(--j-ink) 38%, transparent) 0 1px, transparent 1.5px),
+    radial-gradient(circle 1px at 64% 12%, color-mix(in srgb, var(--j-accent) 42%, transparent) 0 1px, transparent 1.5px),
+    radial-gradient(circle 1px at 84% 38%, color-mix(in srgb, var(--j-ink) 30%, transparent) 0 1px, transparent 1.5px),
+    radial-gradient(circle 1px at 38% 48%, color-mix(in srgb, var(--j-accent-2) 35%, transparent) 0 1px, transparent 1.5px),
+    radial-gradient(circle 1px at 8% 64%, color-mix(in srgb, var(--j-ink) 26%, transparent) 0 1px, transparent 1.5px),
+    radial-gradient(circle 1px at 92% 72%, color-mix(in srgb, var(--j-accent-3) 30%, transparent) 0 1px, transparent 1.5px),
+    radial-gradient(circle 1px at 50% 86%, color-mix(in srgb, var(--j-ink) 22%, transparent) 0 1px, transparent 1.5px);
+  background-size: 520px 480px;
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+[data-theme="light"] .app-bg .app-bg-grid::after {
+  opacity: 0.18;
+}
+
+/* ─── 3. APP FRAME — root grid: full-height sidebar | stage ───────────────────── */
+body .app-frame {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: var(--v2-sidebar-w) minmax(0, 1fr);
+  height: 100dvh;
+  width: 100%;
+  overflow: hidden;
+  /* NOTE: grid-template-columns transition gets stuck on this track list in
+     Chrome and leaves the column at 0 indefinitely (class arrives late from
+     JS at boot) → NO transition, open/close is instant. Robustness > polish. */
+}
+
+/* Sidebar closed: column zeroes out, panel hidden.
+   Re-asserting the legacy rule — contract. */
+body:not(.archive-open) .app-frame {
+  grid-template-columns: 0px minmax(0, 1fr);
+}
+
+body:not(.archive-open) .chat-archive,
+body:not(.archive-open) .chat-archive.panel {
+  display: none;
+}
+
+/* ─── 4. SIDEBAR SHELL — full-height glass command column ──────────────────────── */
+/* Fully overrides the legacy "floating panel" look (margin + radius + fixed):
+   now flush with the frame, full height, gradient divider on the right. */
+body .chat-archive,
+body .chat-archive.panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  width: var(--v2-sidebar-w);
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--j-accent) 5%, transparent),
+      transparent 30%
+    ),
+    var(--v2-glass);
+  backdrop-filter: blur(var(--v2-blur)) saturate(1.2);
+  -webkit-backdrop-filter: blur(var(--v2-blur)) saturate(1.2);
+  box-shadow: inset -1px 0 0 var(--j-hairline);
+  overflow: hidden;
+  z-index: 2;
+}
+
+/* right edge: vertical aurora spark — light thread separating sidebar from stage */
+body .chat-archive.panel::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 1px;
+  background: linear-gradient(
+    180deg,
+    transparent,
+    color-mix(in srgb, var(--j-accent) 35%, transparent) 18%,
+    color-mix(in srgb, var(--j-accent-2) 28%, transparent) 55%,
+    transparent 90%
+  );
+  pointer-events: none;
+}
+
+/* ─── 4a. Sidebar brand block ────────────────────────────────────────────── */
+body .sidebar-brand {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--j-sp-3);
+  padding: var(--j-sp-4) var(--j-sp-4) var(--j-sp-3);
+  min-width: 0;
+}
+
+/* 40px squircle brand badge: conic aurora gradient border + inner glass */
+body .sidebar-brand .brand-mark {
+  position: relative;
+  flex: 0 0 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--j-r-md);
+  border: 1px solid transparent;
+  background:
+    linear-gradient(
+      145deg,
+      color-mix(in srgb, var(--j-accent) 14%, var(--j-raised)),
+      color-mix(in srgb, var(--j-bg) 70%, var(--j-raised))
+    ) padding-box,
+    conic-gradient(
+      from 210deg,
+      var(--j-accent),
+      var(--j-accent-2),
+      var(--j-accent-3),
+      var(--j-accent)
+    ) border-box;
+  box-shadow: var(--j-shadow-1), var(--j-shadow-accent);
+}
+
+body .sidebar-brand .brand-text {
+  min-width: 0;
+}
+
+body .sidebar-brand .brand-text h1 {
+  margin: 0;
+  font-family: var(--j-font-display);
+  font-size: var(--j-fs-lg);
+  font-weight: 700;
+  letter-spacing: var(--j-tracking-tight);
+  line-height: 1.15;
+  color: var(--j-ink);
+}
+
+/* ─── 4b. "New chat" CTA — gradient-filled, glowing ───────────────────── */
+body .btn-new-chat.sidebar-new-chat,
+body .sidebar-new-chat {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--j-sp-2);
+  width: calc(100% - var(--j-sp-4) * 2);
+  margin: 0 var(--j-sp-4) var(--j-sp-3);
+  padding: 0.68rem 1rem;
+  border: 1px solid color-mix(in srgb, var(--j-accent) 45%, transparent);
+  border-radius: var(--j-r-md);
+  background: var(--j-accent-grad);
+  color: var(--j-accent-ink);
+  font: inherit;
+  font-size: var(--j-fs-md);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--j-accent-ink) 25%, transparent),
+    var(--j-shadow-accent);
+  transition:
+    transform var(--j-dur-fast) var(--j-ease-snap),
+    box-shadow var(--j-dur-fast) var(--j-ease),
+    filter var(--j-dur-fast) var(--j-ease);
+}
+
+body .sidebar-new-chat:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.07);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--j-accent-ink) 30%, transparent),
+    var(--j-glow-soft),
+    var(--j-shadow-accent);
+}
+
+body .sidebar-new-chat:active {
+  transform: translateY(0) scale(0.99);
+}
+
+body .sidebar-new-chat .btn-new-chat-icon {
+  flex-shrink: 0;
+}
+
+/* ─── 4c. Archive head: title row + tabs + search ────────────────── */
+body .chat-archive-head {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--j-sp-3);
+  padding: 0 var(--j-sp-4) var(--j-sp-3);
+  border-bottom: 1px solid var(--j-hairline);
+}
+
+body .chat-archive-head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--j-sp-2);
+}
+
+body .chat-archive-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  font-family: var(--j-font-display);
+  font-size: var(--j-fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--j-ink-dim);
+}
+
+body .chat-archive-title::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--j-accent-grad);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--j-accent) 55%, transparent);
+}
+
+/* Segmented pill control: Active / Archive */
+body .chat-archive-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-pill);
+  background: color-mix(in srgb, var(--j-bg) 45%, transparent);
+}
+
+body .chat-archive-tab {
+  padding: 0.34rem 0.6rem;
+  border: 1px solid transparent;
+  border-radius: var(--j-r-pill);
+  background: transparent;
+  color: var(--j-ink-dim);
+  font: inherit;
+  font-size: var(--j-fs-sm);
+  font-weight: 600;
+  text-align: center;
+  cursor: pointer;
+  transition:
+    color var(--j-dur-fast) var(--j-ease),
+    background var(--j-dur-fast) var(--j-ease),
+    box-shadow var(--j-dur-fast) var(--j-ease);
+}
+
+body .chat-archive-tab:hover {
+  color: var(--j-ink);
+  background: color-mix(in srgb, var(--j-raised) 80%, transparent);
+}
+
+body .chat-archive-tab.is-active {
+  color: var(--j-ink);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--j-accent) 22%, var(--j-raised)),
+    color-mix(in srgb, var(--j-accent-2) 14%, var(--j-raised))
+  );
+  border-color: color-mix(in srgb, var(--j-accent) 35%, transparent);
+  box-shadow: inset 0 1px 0 var(--j-hairline), var(--j-shadow-1);
+}
+
+/* Search capsule */
+body .chat-archive-search-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-pill);
+  background: color-mix(in srgb, var(--j-bg) 40%, transparent);
+  transition:
+    border-color var(--j-dur-fast) var(--j-ease),
+    box-shadow var(--j-dur-fast) var(--j-ease),
+    background var(--j-dur-fast) var(--j-ease);
+}
+
+body .chat-archive-search-wrap:hover {
+  border-color: var(--j-border-strong);
+}
+
+body .chat-archive-search-wrap:focus-within {
+  border-color: color-mix(in srgb, var(--j-accent) 55%, var(--j-border));
+  background: color-mix(in srgb, var(--j-bg) 60%, transparent);
+  box-shadow: var(--j-glow-soft);
+}
+
+body .chat-archive-search-icon {
+  flex-shrink: 0;
+  color: var(--j-ink-faint);
+}
+
+body .chat-archive-search-wrap:focus-within .chat-archive-search-icon {
+  color: var(--j-accent);
+}
+
+body .chat-archive-search {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--j-ink);
+  font: inherit;
+  font-size: var(--j-fs-sm);
+  outline: none;
+}
+
+body .chat-archive-search::placeholder {
+  color: var(--j-ink-faint);
+}
+
+/* search input inside the capsule — the capsule owns the focus ring */
+body .chat-archive-search:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+/* ─── 4d. Chat list — spacious cards ─────────────────────────────────── */
+body .chat-archive-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  margin: 0;
+  padding: var(--j-sp-2) var(--j-sp-2) var(--j-sp-3);
+  list-style: none;
+  scrollbar-gutter: stable;
+}
+
+/* Phone: keep the last row above the home-indicator → extra bottom padding
+   equal to the safe-area (adds on top of --j-sp-3; critical in standalone). */
+@media (max-width: 560px) {
+  body .chat-archive-list {
+    padding-bottom: calc(var(--j-sp-3) + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+body .chat-archive-list > li {
+  margin: 0;
+  list-style: none;
+}
+
+body .chat-archive-section {
+  padding: var(--j-sp-3) var(--j-sp-2) var(--j-sp-1);
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--j-accent);
+}
+
+body .chat-archive-empty {
+  padding: var(--j-sp-5) var(--j-sp-3);
+  text-align: center;
+  font-size: var(--j-fs-sm);
+  color: var(--j-ink-faint);
+  line-height: 1.5;
+}
+
+body .chat-archive-row {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+}
+
+body .chat-archive-row .chat-archive-item {
+  flex: 1;
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+/* Card: comfy padding, hover glass, active gradient + left rail */
+body .chat-archive-item {
+  position: relative;
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  border-radius: var(--j-r-md);
+  padding: 0.72rem 0.85rem 0.72rem 0.95rem;
+  margin-bottom: 3px;
+  background: transparent;
+  color: var(--j-ink);
+  font: inherit;
+  cursor: pointer;
+  transition:
+    background var(--j-dur-fast) var(--j-ease),
+    border-color var(--j-dur-fast) var(--j-ease),
+    box-shadow var(--j-dur-fast) var(--j-ease),
+    transform var(--j-dur-fast) var(--j-ease);
+}
+
+body .chat-archive-item:hover {
+  background: color-mix(in srgb, var(--j-raised) 85%, transparent);
+  border-color: var(--j-border);
+  box-shadow: inset 0 1px 0 var(--j-hairline), var(--j-shadow-1);
+  transform: translateX(2px);
+}
+
+/* active chat: azure→purple glass + 3px gradient left rail */
+body .chat-archive-item.is-active {
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--j-accent) 16%, var(--j-raised)),
+    color-mix(in srgb, var(--j-accent-2) 10%, var(--j-raised))
+  );
+  border-color: color-mix(in srgb, var(--j-accent) 38%, var(--j-border));
+  box-shadow:
+    inset 0 1px 0 var(--j-hairline),
+    var(--j-glow-soft),
+    var(--j-shadow-1);
+}
+
+body .chat-archive-item.is-active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 9px;
+  bottom: 9px;
+  width: 3px;
+  border-radius: var(--j-r-pill);
+  background: var(--j-accent-grad);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--j-accent) 50%, transparent);
+}
+
+body .chat-archive-item-title {
+  display: block;
+  font-size: var(--j-fs-sm);
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: var(--j-tracking-tight);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--j-ink);
+}
+
+body .chat-archive-item.is-pinned .chat-archive-item-title::before {
+  content: "📌 ";
+  font-size: 0.85em;
+}
+
+body .chat-archive-item-preview {
+  display: block;
+  margin-top: 0.18rem;
+  font-size: var(--j-fs-xs);
+  line-height: 1.4;
+  color: var(--j-ink-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+body .chat-archive-item-meta {
+  display: block;
+  margin-top: 0.32rem;
+  font-family: var(--j-font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.03em;
+  color: var(--j-ink-faint);
+}
+
+/* Hover action icons — stacked vertically on the right of the card */
+body .chat-archive-actions {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  flex-shrink: 0;
+  padding: 2px 2px 2px 0;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity var(--j-dur-fast) var(--j-ease),
+    visibility var(--j-dur-fast) var(--j-ease);
+}
+
+body .chat-archive-row:hover .chat-archive-actions,
+body .chat-archive-row:focus-within .chat-archive-actions,
+body .chat-archive-row.is-menu-open .chat-archive-actions {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+body .chat-archive-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-sm);
+  background: var(--v2-glass-strong);
+  color: var(--j-ink-dim);
+  cursor: pointer;
+  transition:
+    color var(--j-dur-fast) var(--j-ease),
+    border-color var(--j-dur-fast) var(--j-ease),
+    background var(--j-dur-fast) var(--j-ease),
+    box-shadow var(--j-dur-fast) var(--j-ease);
+}
+
+body .chat-archive-action:hover {
+  color: var(--j-accent);
+  border-color: color-mix(in srgb, var(--j-accent) 40%, var(--j-border));
+  background: var(--j-accent-soft);
+  box-shadow: var(--j-glow-soft);
+}
+
+body .chat-archive-menu-btn {
+  display: none;
+  flex-shrink: 0;
+  align-self: center;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-right: 2px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--j-r-sm);
+  background: transparent;
+  color: var(--j-ink-dim);
+  cursor: pointer;
+}
+
+body .chat-archive-menu-btn:hover,
+body .chat-archive-menu-btn:focus-visible {
+  color: var(--j-ink);
+  border-color: var(--j-border);
+  background: var(--j-raised);
+}
+
+/* ─── 4e. Sidebar bottom nav — Memory / settings / theme ─────────────────────────── */
+body .sidebar-foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--j-sp-2);
+  padding: var(--j-sp-3) var(--j-sp-4);
+  border-top: 1px solid var(--j-hairline);
+  background: color-mix(in srgb, var(--j-bg) 30%, transparent);
+}
+
+body .sidebar-foot .sidebar-foot-link,
+body .sidebar-foot .btn-ghost {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  min-width: 0;
+  padding: 0.45rem 0.8rem;
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-pill);
+  background: transparent;
+  color: var(--j-ink);
+  font-size: var(--j-fs-sm);
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background var(--j-dur-fast) var(--j-ease),
+    border-color var(--j-dur-fast) var(--j-ease),
+    color var(--j-dur-fast) var(--j-ease),
+    box-shadow var(--j-dur-fast) var(--j-ease),
+    transform var(--j-dur-fast) var(--j-ease);
+}
+
+body .sidebar-foot .sidebar-foot-link:hover,
+body .sidebar-foot .btn-ghost:hover {
+  background: linear-gradient(135deg, var(--j-accent-soft), var(--j-accent-2-soft));
+  border-color: color-mix(in srgb, var(--j-accent) 40%, var(--j-border));
+  color: var(--j-accent);
+  box-shadow: var(--j-glow-soft);
+  transform: translateY(-1px);
+}
+
+body .sidebar-foot .btn-icon {
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
+}
+
+/* ─── 5. Button base language (icon buttons) — refines legacy ────────── */
+body .btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--j-r-sm);
+  background: transparent;
+  color: var(--j-ink-dim);
+  cursor: pointer;
+  transition:
+    background var(--j-dur-fast) var(--j-ease),
+    border-color var(--j-dur-fast) var(--j-ease),
+    color var(--j-dur-fast) var(--j-ease),
+    box-shadow var(--j-dur-fast) var(--j-ease),
+    transform var(--j-dur-fast) var(--j-ease);
+}
+
+body .btn-icon:hover {
+  border-color: color-mix(in srgb, var(--j-accent) 35%, var(--j-border));
+  background: var(--j-accent-soft);
+  color: var(--j-accent);
+  box-shadow: var(--j-glow-soft);
+  transform: translateY(-1px);
+}
+
+body .btn-icon:active {
+  transform: translateY(0) scale(0.97);
+}
+
+body .btn-icon svg {
+  display: block;
+}
+
+/* CONTRACT: theme icon swap — moon hidden in dark, sun hidden in light */
+[data-theme="dark"] .btn-icon .icon-theme-moon,
+[data-theme="light"] .btn-icon .icon-theme-sun {
+  display: none;
+}
+
+/* ─── 6. STAGE — right column: transparent, vertical flow ──────────────────────────── */
+body .stage {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+}
+
+/* ─── 6a. Top bar — thin glass strip INSIDE the stage ──────────────────────────── */
+body .stage .top.top-bar,
+body .top.top-bar {
+  position: relative;
+  z-index: var(--j-z-nav);
+  flex: 0 0 var(--v2-topbar-h);
+  display: flex;
+  align-items: center;
+  height: var(--v2-topbar-h);
+  margin: var(--j-sp-3) var(--j-sp-3) 0;
+  padding: 0 var(--j-sp-3);
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-lg);
+  background: var(--v2-glass);
+  backdrop-filter: blur(var(--j-blur)) saturate(1.25);
+  -webkit-backdrop-filter: blur(var(--j-blur)) saturate(1.25);
+  box-shadow: inset 0 1px 0 var(--j-hairline), var(--j-shadow-1);
+}
+
+/* nav right block: status pills + wake — toolbar (title/actions) flows from the left */
+body .top-bar .top-nav {
+  flex: 0 0 auto;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--j-sp-3);
+  min-width: 0;
+}
+
+body .top-bar .status-group {
+  display: flex;
+  align-items: center;
+  gap: var(--j-sp-2);
+  min-width: 0;
+}
+
+body .top-bar .top-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--j-sp-2);
+  flex-shrink: 0;
+}
+
+/* Status pills: glass capsule + mono text + breathing dot */
+body .top-bar .status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  max-width: 220px;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid color-mix(in srgb, var(--j-energy) 22%, var(--j-border));
+  border-radius: var(--j-r-pill);
+  background: color-mix(in srgb, var(--j-raised) 75%, transparent);
+  box-shadow: inset 0 1px 0 var(--j-hairline);
+  font-size: var(--j-fs-xs);
+  font-weight: 500;
+  color: var(--j-ink);
+  transition:
+    border-color var(--j-dur-fast) var(--j-ease),
+    background var(--j-dur-fast) var(--j-ease);
+}
+
+body .top-bar .status-pill .status-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+  letter-spacing: 0.01em;
+}
+
+body .top-bar .status-pill-muted {
+  color: var(--j-ink-dim);
+}
+
+/* Connection/model state — pill accent (dot color comes from styles.css).
+   data-state from JS: warn=amber (connecting / model not selected), bad=red
+   (offline / error). High specificity means even the muted pill gains contrast on bad. */
+body .top-bar .status-pill[data-state="warn"] {
+  border-color: color-mix(in srgb, var(--j-warn) 40%, var(--j-border));
+}
+body .top-bar .status-pill[data-state="bad"] {
+  border-color: color-mix(in srgb, var(--j-danger) 45%, var(--j-border));
+  color: var(--j-danger);
+}
+
+/* Hey Akana trigger: compact icon + live dot */
+body .top-bar .btn-wake {
+  flex-shrink: 0;
+  gap: 0;
+  padding: 0;
+}
+
+body .top-bar .btn-wake .btn-label-full {
+  display: none;
+}
+
+body .top-bar .btn-wake.active {
+  border-color: color-mix(in srgb, var(--j-accent) 55%, var(--j-border));
+  color: var(--j-accent);
+  background: var(--j-accent-soft);
+  box-shadow: var(--j-glow-soft);
+}
+
+body .top-actions .wake-meter {
+  font-family: var(--j-font-mono);
+  font-size: 0.65rem;
+  color: var(--j-ink-dim);
+  max-width: 9rem;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ─── 7. LAYOUT — stage main flow: transparent vertical column ────────────────────── */
+/* Archive is now in app-frame; legacy grid-column logic is fully overridden. */
+body .layout,
+body .layout.layout-with-archive,
+body.archive-open .layout.layout-with-archive {
+  position: relative;
+  z-index: 1;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  grid-template-columns: none;
+  gap: 0;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+}
+
+/* chat panel: fully transparent — the conversation floats over the aurora */
+body .panel.chat-panel,
+body .chat-panel {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  width: 100%;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: none;
+}
+
+/* ─── 7a. Conversation toolbar — NOW INSIDE THE TOP BAR (no separate strip).
+   The strip shell dissolved: transparent row; title + actions flow in one bar. */
+body .chat-panel-toolbar,
+body .top-bar .chat-panel-toolbar {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--j-sp-2);
+  width: auto;
+  max-width: none;
+  margin: 0 var(--j-sp-3) 0 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: none;
+}
+
+/* sidebar collapse/expand control stays visible at every width */
+body .chat-panel-toolbar .btn-archive-toggle {
+  display: inline-flex;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+}
+
+body.archive-open .btn-archive-toggle {
+  color: var(--j-accent);
+  border-color: color-mix(in srgb, var(--j-accent) 40%, var(--j-border));
+  background: var(--j-accent-soft);
+}
+
+body .chat-thread-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-family: var(--j-font-display);
+  font-size: var(--j-fs-md);
+  font-weight: 600;
+  letter-spacing: var(--j-tracking-tight);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--j-ink);
+}
+
+body .chat-thread-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+body .btn-icon.btn-thread-action {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--j-r-sm);
+}
+
+body .btn-thread-action.is-on {
+  color: var(--j-accent);
+  border-color: color-mix(in srgb, var(--j-accent) 45%, var(--j-border));
+  background: var(--j-accent-soft);
+}
+
+body .btn-thread-delete:hover {
+  color: var(--j-danger);
+  border-color: color-mix(in srgb, var(--j-danger) 45%, var(--j-border));
+  background: color-mix(in srgb, var(--j-danger) 12%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--j-danger) 14%, transparent);
+}
+
+/* ─── 7b. Setup banner ───────────────────────────────────────────────── */
+body .setup-banner {
+  flex: 0 0 auto;
+  width: min(var(--v2-thread-w), calc(100% - var(--j-sp-4) * 2));
+  margin: var(--j-sp-2) auto 0;
+  padding: 0.6rem 1rem;
+  border: 1px solid color-mix(in srgb, var(--j-warn) 38%, var(--j-border));
+  border-radius: var(--j-r-md);
+  background: color-mix(in srgb, var(--j-warn) 10%, var(--v2-glass));
+  backdrop-filter: blur(var(--j-blur));
+  -webkit-backdrop-filter: blur(var(--j-blur));
+  box-shadow: var(--j-shadow-1);
+}
+
+/* ─── 8. LOG STAGE — scroll + reading column ───────────────────────────── */
+body .log-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: var(--j-sp-4) var(--j-sp-4) var(--j-sp-3);
+  scroll-behavior: smooth;
+  scrollbar-gutter: stable;
+}
+
+/* Idle: small breathing room above the composer. Messages pin to the BOTTOM
+   via margin-top:auto on `body .log` → opening a short/sparse chat or
+   switching from a long chat to another leaves no giant "dead zone" at the
+   bottom (the old "long chat's space is still there" bug). */
+body .log-scroll {
+  padding-bottom: var(--j-sp-6);
+}
+
+/* "Runway" WHILE the reply is streaming: leave ~300px below the last message
+   so the new turn flows generously from the top (Gemini-like). Only during
+   streaming + wide screens; narrow/mobile already uses the bottom-tab gap
+   (aurora-responsive). Once the turn ends it drops to sp-6, content pins to
+   the composer. */
+@media (min-width: 901px) {
+  body .log-scroll:has(#log[data-chat-streaming="1"]) {
+    padding-bottom: min(36vh, 300px);
+  }
+}
+
+body .log-scroll:has(#log-empty:not([hidden])) {
+  justify-content: center;
+  align-items: stretch;
+  padding-top: max(var(--j-sp-6), 2vh);
+  padding-bottom: max(var(--j-sp-6), 2vh);
+}
+
+/* When empty-state is visible (hero shown), the conversation list drops FULLY
+   out of layout so .log-scroll's justify-content:center actually vertically
+   centers the hero. It used to be `#log:empty`; the .conv-pane architecture
+   never leaves #log :empty (a pane container is always inside) → the rule
+   never fired, the hero slid up and left dead space at the bottom. Dropping
+   :empty restores the intent (hero [hidden] → :has misses → #log shows normally). */
+body .log-scroll:has(#log-empty:not([hidden])) #log {
+  display: none;
+  flex: 0 0 0;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+}
+
+body .log-scroll::before {
+  display: none;
+}
+
+/* Keep the hero scene out of layout when [hidden] collides with v2 display:flex */
+body .log-empty[hidden] {
+  display: none !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+body .log,
+body .log-empty {
+  width: 100%;
+  max-width: var(--v2-read-w);
+  margin-left: auto;
+  margin-right: auto;
+}
+
+body .log .row-assistant {
+  width: 100%;
+}
+
+body .log .row-assistant .msg-body {
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: 100%;
+}
+
+/* Message flow: akana-chat.css manages bubbles — here we only set the rhythm.
+   margin-top:auto: when the content is short (short chat / freshly opened chat)
+   it pushes empty space UPWARD → messages pin to the composer, no huge gap
+   at the bottom. Once content overflows, the auto-margin drops to 0; the top
+   stays reachable, scrolling + stick-to-bottom work as usual. */
+body .log {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  gap: var(--j-sp-4);
+  padding-bottom: var(--j-sp-3);
+  margin-top: auto;
+}
+
+/* Per-conversation pane (parallel-chat core): #log is now the container that
+   holds panes; each chat lives in its OWN .conv-pane, switching = show/hide
+   (NEVER innerHTML=""). The pane carries .log's flex-column + inter-row gap.
+   NOTE: because .conv-pane is display:flex it OVERRIDES the UA's
+   [hidden]{display:none} → an explicit rule to hide the pane is REQUIRED. */
+.conv-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--j-sp-4);
+}
+.conv-pane[hidden] { display: none; }
+
+/* ─── 8a. HERO — "Merhaba, ben Akana" empty-state scene ─────────────────── */
+body .log-empty {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  flex: 0 1 auto;
+  width: 100%;
+  min-height: min(420px, calc(100dvh - 18rem));
+  max-width: var(--v2-read-w);
+  padding: var(--j-sp-5) var(--j-sp-4);
+  color: var(--j-ink-dim);
+  animation: v2-hero-in var(--j-dur-slow) var(--j-ease) both;
+}
+
+@keyframes v2-hero-in {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* hero halo: two-color ambient light behind the content */
+body .log-empty::before {
+  content: "";
+  position: absolute;
+  width: min(620px, 84vw);
+  height: min(620px, 84vw);
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -54%);
+  background:
+    radial-gradient(circle at 40% 38%, color-mix(in srgb, var(--j-accent) 15%, transparent), transparent 58%),
+    radial-gradient(circle at 62% 56%, color-mix(in srgb, var(--j-accent-2) 12%, transparent), transparent 60%),
+    radial-gradient(circle at 50% 72%, color-mix(in srgb, var(--j-accent-3) 7%, transparent), transparent 64%);
+  filter: blur(34px);
+  pointer-events: none;
+  z-index: -1;
+}
+
+/* Akana core: 118px arc-reactor — spinning conic aurora + breath */
+body .log-empty-icon {
+  position: relative;
+  width: 118px;
+  height: 118px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: none;
+  margin-bottom: var(--j-sp-6);
+  background: radial-gradient(
+    circle at 50% 42%,
+    color-mix(in srgb, var(--j-accent) 24%, var(--j-raised)),
+    color-mix(in srgb, var(--j-accent) 4%, var(--j-bg)) 76%
+  );
+  color: color-mix(in srgb, var(--j-accent) 35%, var(--j-ink));
+  box-shadow:
+    0 0 44px color-mix(in srgb, var(--j-accent) 36%, transparent),
+    0 0 96px color-mix(in srgb, var(--j-accent-2) 24%, transparent),
+    inset 0 0 26px color-mix(in srgb, var(--j-accent) 20%, transparent);
+}
+
+/* spinning aurora ring — gradient ring mask technique */
+body .log-empty-icon::before {
+  content: "";
+  position: absolute;
+  inset: -5px;
+  border-radius: 50%;
+  padding: 2px;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0deg,
+    var(--j-accent) 70deg,
+    var(--j-accent-2) 150deg,
+    var(--j-accent-3) 215deg,
+    transparent 300deg
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: v2-core-spin 7s linear infinite;
+}
+
+/* inner pulse: breathing light */
+body .log-empty-icon::after {
+  content: "";
+  position: absolute;
+  inset: 14px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--j-accent) 30%, transparent),
+    transparent 70%
+  );
+  animation: v2-core-pulse 3.4s ease-in-out infinite alternate;
+}
+
+@keyframes v2-core-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes v2-core-pulse {
+  from { opacity: 0.45; transform: scale(0.92); }
+  to   { opacity: 1; transform: scale(1.06); }
+}
+
+/* Massive flowing-gradient wordmark */
+body .log-empty-title {
+  margin: 0 0 var(--j-sp-3);
+  font-family: var(--j-font-display);
+  font-size: clamp(1.75rem, 4.5vw, 2.65rem);
+  font-weight: 700;
+  letter-spacing: var(--j-tracking-tight);
+  line-height: 1.12;
+  max-width: 18ch;
+  background: var(--j-title-grad);
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: v2-title-flow 9s ease-in-out infinite alternate;
+}
+
+@keyframes v2-title-flow {
+  from { background-position: 0% 50%; }
+  to   { background-position: 100% 50%; }
+}
+
+body .log-empty-sub {
+  margin: 0 0 var(--j-sp-5);
+  max-width: 460px;
+  font-size: var(--j-fs-lg);
+  line-height: 1.55;
+  color: var(--j-ink-dim);
+}
+
+body .log-empty-nav-hint {
+  margin: calc(-1 * var(--j-sp-2)) 0 var(--j-sp-4);
+  max-width: 380px;
+  font-size: var(--j-fs-sm);
+  color: var(--j-ink-faint);
+}
+
+/* ─── 8b. Prompt chips — gradient-bordered glass invitations ──────────────── */
+body .prompt-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--j-sp-2);
+  margin: 0 0 var(--j-sp-5);
+  max-width: 520px;
+}
+
+body .prompt-chip {
+  padding: 0.58rem 1.15rem;
+  border: 1px solid transparent;
+  border-radius: var(--j-r-pill);
+  background:
+    linear-gradient(
+      color-mix(in srgb, var(--j-raised) 92%, transparent),
+      color-mix(in srgb, var(--j-raised) 92%, transparent)
+    ) padding-box,
+    var(--v2-border-grad) border-box;
+  backdrop-filter: blur(var(--j-blur));
+  -webkit-backdrop-filter: blur(var(--j-blur));
+  color: var(--j-ink);
+  font: inherit;
+  font-size: var(--j-fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: var(--j-shadow-1);
+  transition:
+    background var(--j-dur-fast) var(--j-ease),
+    color var(--j-dur-fast) var(--j-ease),
+    box-shadow var(--j-dur-fast) var(--j-ease),
+    transform var(--j-dur-fast) var(--j-ease);
+}
+
+body .prompt-chip:hover {
+  background:
+    linear-gradient(var(--j-accent-soft), var(--j-accent-2-soft)) padding-box,
+    var(--j-accent-grad) border-box;
+  color: var(--j-accent);
+  box-shadow: var(--j-glow-soft), var(--j-shadow-accent);
+  transform: translateY(-2px);
+}
+
+body .prompt-chip:active {
+  transform: translateY(0) scale(0.98);
+}
+
+/* hint pills */
+body .log-empty-hints {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--j-sp-2);
+  margin: 0;
+  padding: 0;
+  max-width: 560px;
+  list-style: none;
+  font-size: var(--j-fs-sm);
+}
+
+body .log-empty-hints li {
+  padding: 0.42rem 0.9rem;
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-pill);
+  background: color-mix(in srgb, var(--j-panel) 80%, transparent);
+  backdrop-filter: blur(var(--j-blur));
+  -webkit-backdrop-filter: blur(var(--j-blur));
+  color: var(--j-ink-dim);
+  box-shadow: var(--j-shadow-1);
+}
+
+body .log-empty-hints li::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 0.5rem;
+  border-radius: 50%;
+  background: var(--j-accent-grad);
+  vertical-align: middle;
+}
+
+/* ─── 9. COMPOSER — floating glass capsule ─────────────────────────────────────── */
+body .composer {
+  flex-shrink: 0;
+  padding: var(--j-sp-2) var(--j-sp-4) var(--j-sp-4);
+  border-top: none;
+  background: transparent;
+}
+
+body .composer .composer-inner,
+body .composer .composer-attachments,
+body .composer .composer-meta {
+  width: 100%;
+  max-width: var(--v2-read-w);
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* capsule: gradient border + glass + calm accent under-glow */
+body .composer .composer-inner {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--j-sp-2);
+  padding: var(--j-sp-3);
+  border: 1px solid transparent;
+  border-radius: var(--j-r-xl);
+  background:
+    linear-gradient(
+      color-mix(in srgb, var(--j-overlay) 86%, transparent),
+      color-mix(in srgb, var(--j-overlay) 86%, transparent)
+    ) padding-box,
+    var(--v2-border-grad) border-box;
+  backdrop-filter: blur(calc(var(--j-blur) + 6px)) saturate(1.25);
+  -webkit-backdrop-filter: blur(calc(var(--j-blur) + 6px)) saturate(1.25);
+  box-shadow:
+    inset 0 1px 0 var(--j-hairline),
+    var(--j-shadow-2),
+    0 12px 60px -22px color-mix(in srgb, var(--j-accent) 42%, transparent);
+  transition:
+    background var(--j-dur-fast) var(--j-ease),
+    box-shadow var(--j-dur-med) var(--j-ease),
+    transform var(--j-dur-med) var(--j-ease);
+}
+
+/* focus: full gradient border + -2px lift + soft ring */
+body .composer .composer-inner:focus-within {
+  background:
+    linear-gradient(
+      color-mix(in srgb, var(--j-overlay) 92%, transparent),
+      color-mix(in srgb, var(--j-overlay) 92%, transparent)
+    ) padding-box,
+    var(--j-accent-grad) border-box;
+  box-shadow:
+    var(--j-glow-soft),
+    var(--j-shadow-2),
+    var(--j-shadow-accent);
+  transform: translateY(-2px);
+}
+
+body .composer .composer-inner.is-dragover {
+  background:
+    linear-gradient(
+      color-mix(in srgb, var(--j-accent) 8%, var(--j-overlay)),
+      color-mix(in srgb, var(--j-accent) 8%, var(--j-overlay))
+    ) padding-box,
+    var(--j-accent-grad) border-box;
+  box-shadow: var(--j-glow-accent), var(--j-shadow-2);
+}
+
+body .composer-field {
+  flex: 1;
+  min-width: 0;
+}
+
+body .composer-field textarea {
+  width: 100%;
+  display: block;
+  resize: none;
+  min-height: 24px;
+  max-height: 180px;
+  padding: 0.5rem 0.4rem;
+  border: none;
+  background: transparent;
+  color: var(--j-ink);
+  font: inherit;
+  font-size: var(--j-fs-md);
+  line-height: 1.5;
+  caret-color: var(--j-accent);
+}
+
+body .composer-field textarea::placeholder {
+  color: var(--j-ink-faint);
+}
+
+body .composer-field textarea:focus,
+body .composer-field textarea:focus-visible {
+  outline: none;
+  box-shadow: none; /* the capsule owns the focus ring */
+}
+
+body .composer-field textarea.input-live {
+  color: var(--j-accent);
+}
+
+/* mic + attach: calm ghost icons */
+body .composer .btn-mic,
+body .composer .btn-attach {
+  flex: 0 0 42px;
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  border: none;
+  border-radius: var(--j-r-md);
+  background: transparent;
+  color: var(--j-ink-dim);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    color var(--j-dur-fast) var(--j-ease),
+    background var(--j-dur-fast) var(--j-ease),
+    transform var(--j-dur-fast) var(--j-ease);
+}
+
+body .composer .btn-mic:hover,
+body .composer .btn-attach:hover {
+  color: var(--j-accent);
+  background: var(--j-accent-soft);
+  transform: translateY(-1px);
+}
+
+body .composer .btn-mic.active {
+  color: var(--j-accent);
+  background: var(--j-accent-soft);
+  box-shadow: var(--j-glow-soft);
+}
+
+/* send: gradient fill, squircle, accent glow — data-mode swap lives in legacy;
+   we re-confirm the STOP-mode danger look here as well */
+body .composer .btn-send {
+  flex: 0 0 42px;
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  border: none;
+  border-radius: var(--j-r-md);
+  background: var(--j-accent-grad);
+  color: var(--j-accent-ink);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--j-accent-ink) 25%, transparent),
+    var(--j-shadow-accent);
+  transition:
+    transform var(--j-dur-fast) var(--j-ease-snap),
+    filter var(--j-dur-fast) var(--j-ease),
+    opacity var(--j-dur-fast) var(--j-ease);
+}
+
+body .composer .btn-send:hover:not(:disabled) {
+  filter: brightness(1.08);
+  transform: scale(1.05);
+}
+
+body .composer .btn-send:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+body .composer .btn-send:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* CONTRACT: send/stop icon swap — 1:1 compatible with legacy logic */
+body .composer .btn-send .btn-stop-icon {
+  display: none;
+}
+
+body .composer .btn-send[data-mode="stop"] {
+  background: linear-gradient(
+    145deg,
+    var(--j-danger),
+    color-mix(in srgb, var(--j-danger) 60%, var(--j-bg))
+  );
+  color: var(--j-accent-ink);
+  box-shadow: 0 4px 18px color-mix(in srgb, var(--j-danger) 45%, transparent);
+  opacity: 1;
+  cursor: pointer;
+}
+
+body .composer .btn-send[data-mode="stop"] .btn-send-icon {
+  display: none;
+}
+
+body .composer .btn-send[data-mode="stop"] .btn-stop-icon {
+  display: block;
+}
+
+/* meta row: below the capsule, hint centered, tts chip on the right */
+body .composer-meta {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin-top: 0.5rem;
+  margin-left: auto;
+  margin-right: auto;
+  min-height: 1.1rem;
+  padding: 0;
+  --composer-hint-optical-x: -1.65rem;
+}
+
+@media (max-width: 560px) {
+  body .composer-meta {
+    --composer-hint-optical-x: -0.35rem;
+  }
+}
+
+body .composer-hint {
+  flex: 0 1 auto;
+  margin: 0;
+  padding: 0 0.5rem;
+  font-size: var(--j-fs-xs);
+  color: var(--j-ink-faint);
+  text-align: center;
+  transform: translateX(var(--composer-hint-optical-x, 0));
+  transition: color var(--j-dur-fast) var(--j-ease);
+}
+
+body .composer-meta #tts-queue-chip {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 1;
+}
+
+/* ─── 10. ORB and in-brand states (legacy behavior preserved, scale match) ── */
+body .sidebar-brand .brand-mark .orb {
+  position: relative;
+}
+
+/* ─── 11. MOBILE ≤900px — sidebar becomes a drawer ────────────────────────────── */
+@media (max-width: 900px) {
+  /* single column: stage in flow, sidebar as a fixed drawer */
+  body .app-frame,
+  body:not(.archive-open) .app-frame {
+    display: flex;
+    flex-direction: column;
+    grid-template-columns: none;
+  }
+
+  /* stays in the DOM even when closed (slides in) — same contract as legacy */
+  body:not(.archive-open) .chat-archive {
+    display: flex;
+  }
+
+  body .chat-archive,
+  body .chat-archive.panel {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: var(--j-z-drawer);
+    width: min(var(--v2-sidebar-w), 86vw);
+    height: 100dvh;
+    margin: 0;
+    border: none;
+    border-right: 1px solid var(--j-border-strong);
+    border-radius: 0 var(--j-r-lg) var(--j-r-lg) 0;
+    background: var(--v2-glass-strong);
+    transform: translateX(-105%);
+    opacity: 0.6;
+    transition:
+      transform var(--j-dur-med) var(--j-ease-snap),
+      opacity var(--j-dur-med) var(--j-ease);
+    box-shadow: var(--j-shadow-3);
+  }
+
+  body.archive-open .chat-archive,
+  body.archive-open .chat-archive.panel {
+    transform: translateX(0);
+    opacity: 1;
+  }
+
+  /* dimming curtain: full-screen + blur */
+  body .chat-archive-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: calc(var(--j-z-drawer) - 5);
+    background: color-mix(in srgb, var(--j-bg) 60%, transparent);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--j-dur-med) var(--j-ease);
+  }
+
+  body.archive-open .chat-archive-backdrop {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* stage density: side margins shrink */
+  body .stage .top.top-bar,
+  body .top.top-bar {
+    margin: var(--j-sp-2) var(--j-sp-2) 0;
+    padding: 0 var(--j-sp-2);
+  }
+
+  body .chat-panel-toolbar {
+    width: calc(100% - var(--j-sp-2) * 2);
+    margin: var(--j-sp-2) auto 0;
+    padding: 0.45rem 0.7rem;
+  }
+
+  body .log-scroll {
+    padding: var(--j-sp-3) var(--j-sp-3) var(--j-sp-2);
+  }
+
+  body .composer {
+    padding: var(--j-sp-2) var(--j-sp-3) var(--j-sp-3);
+  }
+
+  /* no hover on mobile: actions come from the three-dot menu */
+  body .chat-archive-menu-btn {
+    display: inline-flex;
+  }
+
+  body .chat-archive-row:hover .chat-archive-actions,
+  body .chat-archive-row:focus-within .chat-archive-actions {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+  }
+
+  body .chat-archive-row.is-menu-open .chat-archive-actions {
+    position: absolute;
+    right: 4px;
+    top: 50%;
+    z-index: 3;
+    transform: translateY(-50%);
+    flex-direction: row;
+    padding: 4px;
+    border: 1px solid var(--j-border-strong);
+    border-radius: var(--j-r-sm);
+    background: var(--j-overlay);
+    box-shadow: var(--j-shadow-2);
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+  }
+}
+
+/* ─── 12. Narrow phone ≤480px — density fine-tuning ───────────────────────── */
+@media (max-width: 480px) {
+  body .top-bar .status-pill {
+    max-width: 130px;
+    padding: 0.26rem 0.55rem;
+  }
+
+  body .top-actions .wake-meter {
+    display: none;
+  }
+
+  body .log-empty {
+    min-height: min(440px, 52vh);
+    padding: var(--j-sp-5) var(--j-sp-3);
+  }
+
+  body .log-empty-icon {
+    width: 96px;
+    height: 96px;
+    margin-bottom: var(--j-sp-5);
+  }
+
+  body .log-empty-sub {
+    font-size: var(--j-fs-md);
+  }
+
+  body .prompt-chips {
+    gap: var(--j-sp-1);
+  }
+
+  body .prompt-chip {
+    padding: 0.5rem 0.9rem;
+    font-size: var(--j-fs-xs);
+  }
+
+  body .composer .btn-mic,
+  body .composer .btn-attach,
+  body .composer .btn-send {
+    flex-basis: 38px;
+    width: 38px;
+    height: 38px;
+  }
+
+  body .chat-thread-actions {
+    gap: 0;
+  }
+}
+
+/* ─── 13. Wide stage ≥1440px — reading column breathes ──────────────────── */
+@media (min-width: 1440px) {
+  :root {
+    --v2-sidebar-w: 320px;
+    --v2-read-max: 52rem;
+    --v2-read-gutter: clamp(1.25rem, 3vw, 3rem);
+  }
+}
+
+/* ─── 14. Light theme fine-tuning ───────────────────────────────────────── */
+[data-theme="light"] body .chat-archive,
+[data-theme="light"] body .chat-archive.panel {
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--j-accent) 4%, transparent),
+      transparent 30%
+    ),
+    color-mix(in srgb, var(--j-overlay) 92%, transparent);
+  box-shadow: inset -1px 0 0 var(--j-border);
+}
+
+[data-theme="light"] body .stage .top.top-bar,
+[data-theme="light"] body .top.top-bar,
+[data-theme="light"] body .chat-panel-toolbar {
+  background: color-mix(in srgb, var(--j-overlay) 88%, transparent);
+}
+
+[data-theme="light"] body .composer .composer-inner {
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, #ffffff 70%, transparent),
+    var(--j-shadow-2),
+    0 12px 50px -24px color-mix(in srgb, var(--j-accent) 30%, transparent);
+}
+
+[data-theme="light"] body .log-empty-icon {
+  color: var(--j-accent-strong);
+  box-shadow:
+    0 0 36px color-mix(in srgb, var(--j-accent) 22%, transparent),
+    0 0 80px color-mix(in srgb, var(--j-accent-2) 14%, transparent),
+    inset 0 0 22px color-mix(in srgb, var(--j-accent) 12%, transparent);
+}
+
+[data-theme="light"] body .chat-archive-search-wrap,
+[data-theme="light"] body .chat-archive-tabs {
+  background: color-mix(in srgb, var(--j-bg) 70%, transparent);
+}
+
+/* ─── 15. Accessibility: reduced motion — ALL loops/entries stop ────── */
+@media (prefers-reduced-motion: reduce) {
+  body .log-empty,
+  body .log-empty-icon::before,
+  body .log-empty-icon::after,
+  body .log-empty-title,
+  body .app-bg::before,
+  body .app-bg-orb,
+  body .composer .btn-send[data-mode="stop"],
+  body .status-dot {
+    animation: none !important;
+  }
+
+  body .app-frame,
+  body .chat-archive,
+  body .chat-archive.panel,
+  body .chat-archive-backdrop,
+  body .composer .composer-inner,
+  body .chat-archive-item,
+  body .prompt-chip,
+  body .btn-icon,
+  body .sidebar-new-chat {
+    transition: none !important;
+  }
+}
+
+/* ─── 15b. DESKTOP: SIDEBAR PERMANENTLY OPEN (user decision 2026-06-12) ─────
+   "The whole screen goes away when I hit the hamburger" complaint → on
+   desktop the sidebar no longer closes: toggle button + X hidden, column
+   always 300px. Look stays fixed regardless of the archive-open class
+   (JS state is harmless). Mobile (≤900px) drawer behavior + buttons kept as-is. */
+@media (min-width: 901px) {
+  body .app-frame,
+  body:not(.archive-open) .app-frame {
+    grid-template-columns: var(--v2-sidebar-w) minmax(0, 1fr);
+  }
+
+  body:not(.archive-open) .chat-archive,
+  body:not(.archive-open) .chat-archive.panel {
+    display: flex;
+  }
+
+  body .chat-panel-toolbar .btn-archive-toggle,
+  body .btn-archive-close {
+    display: none;
+  }
+}
+
+/* ─── 15c. EXTRA SECTION (2026-06-12): SCROLL-DOWN FAB + RECORD MODE STAGE ───────
+   The .akana-fab-down arrow injected by akana-shell.js and the mic-record
+   energy ring (signal: akana-voice.js → #btn-mic[aria-pressed="true"]).
+   Motion is transform/opacity only; fully stops under reduced-motion. */
+
+/* FAB positioning context: the arrow anchors to the panel's bottom-right corner */
+body .panel.chat-panel,
+body .chat-panel {
+  position: relative;
+}
+
+/* floating arrow: 40px glass disc + gradient border (padding-box/border-box) */
+body .chat-panel .akana-fab-down {
+  position: absolute;
+  right: var(--j-sp-4);
+  bottom: 140px; /* just above the composer capsule */
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: var(--j-r-pill);
+  background:
+    linear-gradient(
+      color-mix(in srgb, var(--j-overlay) 88%, transparent),
+      color-mix(in srgb, var(--j-overlay) 88%, transparent)
+    ) padding-box,
+    var(--j-accent-grad) border-box;
+  color: var(--j-accent);
+  cursor: pointer;
+  box-shadow: var(--j-shadow-1);
+  backdrop-filter: blur(var(--j-blur));
+  -webkit-backdrop-filter: blur(var(--j-blur));
+  opacity: 0;
+  transform: translateY(8px);
+  pointer-events: none;
+  z-index: calc(var(--j-z-nav) - 1); /* stays below modals/nav */
+  transition:
+    opacity var(--j-dur-med) var(--j-ease),
+    transform var(--j-dur-med) var(--j-ease),
+    box-shadow var(--j-dur-fast) var(--j-ease);
+}
+
+/* Phone: the bottom tab strip (--mnav-h) + home-indicator were covering the
+   FAB → lift it by strip + safe-area; still stays above the composer capsule
+   (when the strip is hidden --mnav-h=0 → only safe-area is added). */
+@media (max-width: 560px) {
+  body .chat-panel .akana-fab-down {
+    bottom: calc(140px + var(--mnav-h, 0px) + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+body .chat-panel .akana-fab-down.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+body .chat-panel .akana-fab-down.is-visible:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--j-shadow-2), var(--j-glow-soft);
+}
+
+/* record mode: capsule border energy-green → accent gradient */
+body .composer .composer-inner:has(#btn-mic[aria-pressed="true"]) {
+  position: relative;
+  background:
+    linear-gradient(
+      color-mix(in srgb, var(--j-overlay) 90%, transparent),
+      color-mix(in srgb, var(--j-overlay) 90%, transparent)
+    ) padding-box,
+    linear-gradient(135deg, var(--j-energy), var(--j-accent)) border-box;
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--j-energy) 18%, transparent),
+    var(--j-shadow-2);
+}
+
+/* breathing glow: pseudo-element with an opacity/transform loop only */
+body .composer .composer-inner:has(#btn-mic[aria-pressed="true"])::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow:
+    0 0 24px color-mix(in srgb, var(--j-energy) 35%, transparent),
+    0 0 60px -10px color-mix(in srgb, var(--j-energy) 28%, transparent);
+  animation: akana-rec-breathe 2.4s ease-in-out infinite alternate;
+}
+
+@keyframes akana-rec-breathe {
+  from {
+    opacity: 0.35;
+    transform: scale(0.995);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* mic button: energy tint + glowing dot in the top-right */
+body .composer .btn-mic[aria-pressed="true"],
+body .composer .btn-mic.active {
+  position: relative;
+  color: var(--j-energy);
+  background: color-mix(in srgb, var(--j-energy) 14%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--j-energy) 35%, transparent),
+    0 0 18px color-mix(in srgb, var(--j-energy) 30%, transparent);
+}
+
+body .composer .btn-mic[aria-pressed="true"]::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--j-r-pill);
+  background: var(--j-energy);
+  box-shadow: 0 0 8px var(--j-energy);
+  animation: akana-rec-breathe 2.4s ease-in-out infinite alternate;
+}
+
+/* reduced motion: loops/entries in this section also stop */
+@media (prefers-reduced-motion: reduce) {
+  body .composer .composer-inner:has(#btn-mic[aria-pressed="true"])::after,
+  body .composer .btn-mic[aria-pressed="true"]::after {
+    animation: none !important;
+  }
+
+  body .chat-panel .akana-fab-down {
+    transition: none !important;
+    transform: none !important;
+  }
+}
+
+/* ─── 15d. EXTRA SECTION (2026-06-12): CODE COPY + LANGUAGE BADGE ────────────────
+   The .akana-code-tools floating capsule injected by akana-shell.js:
+   on hover over <pre> inside bot bubbles, a glass "Copy" button appears in
+   the top-right + a data-lang language badge. Motion is opacity/transform
+   only; fully stops under reduced-motion. */
+
+/* floating capsule positioning context: absolute inside the scroller */
+body .log-scroll {
+  position: relative;
+}
+
+body .log-scroll .akana-code-tools {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: var(--j-sp-2);
+  opacity: 0;
+  transform: translateY(-2px);
+  pointer-events: none;
+  z-index: 5;
+  transition:
+    opacity var(--j-dur-fast) var(--j-ease),
+    transform var(--j-dur-fast) var(--j-ease);
+}
+
+body .log-scroll .akana-code-tools.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+/* language badge: mono xs, calm glass pill */
+body .akana-code-tools .akana-code-lang {
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+  letter-spacing: var(--j-tracking-wide);
+  color: var(--j-ink-dim);
+  background: color-mix(in srgb, var(--j-overlay) 85%, transparent);
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-pill);
+  padding: 2px 8px;
+  backdrop-filter: blur(var(--j-blur));
+  -webkit-backdrop-filter: blur(var(--j-blur));
+}
+
+/* copy button: glass mini button */
+body .akana-code-tools .akana-code-copy {
+  font-family: var(--j-font-ui);
+  font-size: var(--j-fs-xs);
+  color: var(--j-ink);
+  background: color-mix(in srgb, var(--j-overlay) 88%, transparent);
+  border: 1px solid var(--j-border-strong);
+  border-radius: var(--j-r-sm);
+  padding: 3px 10px;
+  cursor: pointer;
+  box-shadow: var(--j-shadow-1);
+  backdrop-filter: blur(var(--j-blur));
+  -webkit-backdrop-filter: blur(var(--j-blur));
+  transition:
+    color var(--j-dur-fast) var(--j-ease),
+    border-color var(--j-dur-fast) var(--j-ease),
+    box-shadow var(--j-dur-fast) var(--j-ease);
+}
+
+body .akana-code-tools .akana-code-copy:hover {
+  color: var(--j-accent);
+  border-color: color-mix(in srgb, var(--j-accent) 45%, transparent);
+  box-shadow: var(--j-shadow-1), var(--j-glow-soft);
+}
+
+/* copied state: energy-green confirmation */
+body .akana-code-tools .akana-code-copy.is-copied {
+  color: var(--j-energy);
+  border-color: color-mix(in srgb, var(--j-energy) 45%, transparent);
+}
+
+/* reduced motion: transitions in this section also stop */
+@media (prefers-reduced-motion: reduce) {
+  body .log-scroll .akana-code-tools,
+  body .akana-code-tools .akana-code-copy {
+    transition: none !important;
+    transform: none !important;
+  }
+}
+
+/* ─── 15e. EXTRA SECTION (2026-06-12): TASK CHIP + PANEL + ORB STATE FACE ────
+   The .akana-task-chip injected by akana-shell.js (status-pill family, inside
+   .top-nav .status-group) and the .akana-task-panel glass menu that opens
+   underneath; plus span#orb's living state core: idle breath (azure), typing
+   (purple pulse + spinning conic ring), speaking (energy-green wave), task
+   running (amber hint, JS: .orb-busy). Motion is transform/opacity only; all
+   loops stop under reduced-motion. */
+
+/* panel positioning context: the chip is anchored to status-group */
+body .top-nav .status-group {
+  position: relative;
+}
+
+/* task chip: <button>-based status-pill — native look reset */
+body .top-bar .status-pill.akana-task-chip {
+  appearance: none;
+  -webkit-appearance: none;
+  font: inherit;
+  cursor: pointer;
+}
+
+body .top-bar .status-pill.akana-task-chip:hover {
+  border-color: color-mix(in srgb, var(--j-accent) 45%, var(--j-border));
+}
+
+/* running dot: only visible while a task is running, and breathes */
+body .akana-task-chip .akana-task-spin {
+  display: none;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--j-r-pill);
+  background: var(--j-accent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--j-accent) 60%, transparent);
+}
+
+body .akana-task-chip.is-working .akana-task-spin {
+  display: inline-block;
+  animation: akana-task-spin-pulse 1.4s var(--j-ease) infinite;
+}
+
+@keyframes akana-task-spin-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* task panel: glass menu that opens below the chip — stays below modals */
+body .akana-task-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(360px, 86vw);
+  max-height: 340px;
+  overflow-y: auto;
+  padding: var(--j-sp-2);
+  border: 1px solid var(--j-border-strong);
+  border-radius: var(--j-r-md);
+  background: var(--v2-glass-strong, color-mix(in srgb, var(--j-overlay) 92%, transparent));
+  box-shadow: var(--j-shadow-3);
+  backdrop-filter: blur(var(--j-blur));
+  -webkit-backdrop-filter: blur(var(--j-blur));
+  z-index: var(--j-z-drawer);
+  animation: akana-task-panel-in var(--j-dur-fast) var(--j-ease);
+}
+
+@keyframes akana-task-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* empty state */
+body .akana-task-panel .akana-task-empty {
+  padding: var(--j-sp-3);
+  font-size: var(--j-fs-sm);
+  color: var(--j-ink-faint);
+  text-align: center;
+}
+
+/* task row: name + time on the left, badge + cancel on the right */
+body .akana-task-panel .akana-task-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--j-sp-2);
+  padding: 0.45rem 0.55rem;
+  border-radius: var(--j-r-sm);
+}
+
+body .akana-task-panel .akana-task-row:hover {
+  background: color-mix(in srgb, var(--j-raised) 70%, transparent);
+}
+
+body .akana-task-row .akana-task-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0; /* so ellipsis works */
+}
+
+body .akana-task-row .akana-task-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--j-fs-sm);
+  color: var(--j-ink);
+}
+
+body .akana-task-row .akana-task-time {
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+  color: var(--j-ink-faint);
+}
+
+body .akana-task-row .akana-task-side {
+  display: flex;
+  align-items: center;
+  gap: var(--j-sp-2);
+  flex-shrink: 0;
+}
+
+/* status badges: running (accent pulse) / done (energy ✓) / error (danger ✕) */
+body .akana-task-row .akana-task-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 1px 8px;
+  border-radius: var(--j-r-pill);
+  border: 1px solid var(--j-border);
+  font-size: var(--j-fs-xs);
+  white-space: nowrap;
+}
+
+body .akana-task-badge.is-run {
+  color: var(--j-accent);
+  border-color: color-mix(in srgb, var(--j-accent) 35%, transparent);
+}
+
+body .akana-task-badge .akana-task-badge-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--j-r-pill);
+  background: var(--j-accent);
+  animation: akana-task-spin-pulse 1.4s var(--j-ease) infinite;
+}
+
+body .akana-task-badge.is-done {
+  color: var(--j-energy);
+  border-color: color-mix(in srgb, var(--j-energy) 35%, transparent);
+}
+
+body .akana-task-badge.is-fail {
+  color: var(--j-danger);
+  border-color: color-mix(in srgb, var(--j-danger) 35%, transparent);
+}
+
+/* cancel button: glass mini button (same language as the code-copy family) */
+body .akana-task-row .akana-task-cancel {
+  font-family: var(--j-font-ui);
+  font-size: var(--j-fs-xs);
+  color: var(--j-ink-dim);
+  background: color-mix(in srgb, var(--j-overlay) 88%, transparent);
+  border: 1px solid var(--j-border-strong);
+  border-radius: var(--j-r-sm);
+  padding: 2px 8px;
+  cursor: pointer;
+  transition:
+    color var(--j-dur-fast) var(--j-ease),
+    border-color var(--j-dur-fast) var(--j-ease);
+}
+
+body .akana-task-row .akana-task-cancel:hover:not(:disabled) {
+  color: var(--j-danger);
+  border-color: color-mix(in srgb, var(--j-danger) 45%, transparent);
+}
+
+body .akana-task-row .akana-task-cancel:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ── ORB STATE FACE — the in-brand #orb becomes a living core ──────────
+   Legacy .orb-idle/.orb-send/.orb-ok classes still live in styles.css;
+   the rules here are an upper layer derived from live signals
+   (data-chat-streaming, TTS .is-speaking, JS .orb-busy). */
+
+/* idle: calm azure breath — the legacy gray dot rises to an azure core */
+body .sidebar-brand .brand-mark #orb.orb-idle {
+  background: var(--j-accent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--j-accent) 40%, transparent);
+  animation: akana-orb-breathe 3.5s var(--j-ease) infinite;
+}
+
+@keyframes akana-orb-breathe {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* task running: amber hint (JS: .orb-busy) — shows when there is no streaming/speaking */
+body .sidebar-brand .brand-mark #orb.orb-busy {
+  background: var(--j-warn);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--j-warn) 50%, transparent);
+  animation: akana-orb-breathe 2.4s var(--j-ease) infinite;
+}
+
+/* thinking/typing: fast purple pulse + tiny spinning conic ring */
+body:has(#log[data-chat-streaming="1"]) .sidebar-brand .brand-mark #orb {
+  background: var(--j-accent-2);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--j-accent-2) 55%, transparent);
+  animation: akana-orb-breathe 1.2s var(--j-ease) infinite;
+}
+
+body:has(#log[data-chat-streaming="1"]) .sidebar-brand .brand-mark #orb::before {
+  content: "";
+  position: absolute;
+  inset: -5px;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 0turn,
+    var(--j-accent-2),
+    color-mix(in srgb, var(--j-accent-2) 30%, transparent) 55%,
+    transparent 70%
+  );
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1px));
+  animation: akana-orb-ring-spin 1.2s linear infinite;
+}
+
+@keyframes akana-orb-ring-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* speaking (TTS): energy-green wave pulse — also beats the typing state */
+body:has(.bubble-bot.is-speaking) .sidebar-brand .brand-mark #orb {
+  background: var(--j-energy);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--j-energy) 55%, transparent);
+  animation: akana-orb-wave 1.6s var(--j-ease) infinite;
+}
+
+@keyframes akana-orb-wave {
+  0%,
+  100% {
+    opacity: 0.7;
+    transform: scale(0.92);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+
+/* reduced motion: all loops/entries in this section stop, colors remain */
+@media (prefers-reduced-motion: reduce) {
+  body .akana-task-chip.is-working .akana-task-spin,
+  body .akana-task-badge .akana-task-badge-dot,
+  body .akana-task-panel,
+  body .sidebar-brand .brand-mark #orb.orb-idle,
+  body .sidebar-brand .brand-mark #orb.orb-busy,
+  body:has(#log[data-chat-streaming="1"]) .sidebar-brand .brand-mark #orb,
+  body:has(#log[data-chat-streaming="1"]) .sidebar-brand .brand-mark #orb::before,
+  body:has(.bubble-bot.is-speaking) .sidebar-brand .brand-mark #orb {
+    animation: none !important;
+  }
+
+  body .akana-task-row .akana-task-cancel {
+    transition: none !important;
+  }
+}
+
+/* ─── 16. FINAL CONTRACT: [hidden] beats everything ───────────────────────────── */
+/* This rule sits at the very end of the file so none of the display rules
+   above can bring a hidden element back. */
+[hidden] {
+  display: none !important;
+}

@@ -1,0 +1,340 @@
+/* Akana Artifacts — live code preview panel + "Preview" trigger.
+   Consumes the token contract (tokens.css); the new --artifact-* tokens are
+   ADD-ONLY (existing --j-* names are left untouched). */
+
+:root {
+  --artifact-w: clamp(360px, 42vw, 760px);
+}
+
+/* ── Action group in the code-block header (Preview + Copy side by side) ──── */
+.log .md-code-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--j-sp-2);
+}
+
+/* Preview button — same language as Copy, accent-highlighted border */
+.log .md-code-preview {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+  color: var(--j-accent);
+  background: var(--j-accent-soft);
+  border: 1px solid color-mix(in srgb, var(--j-accent) 35%, var(--j-border));
+  border-radius: var(--j-r-sm);
+  padding: calc(var(--j-sp-1) / 2) var(--j-sp-2);
+  cursor: pointer;
+  transition:
+    color var(--j-dur-fast) var(--j-ease),
+    border-color var(--j-dur-fast) var(--j-ease),
+    background var(--j-dur-fast) var(--j-ease);
+}
+
+.log .md-code-preview:hover {
+  color: var(--j-accent-ink);
+  background: var(--j-accent);
+  border-color: var(--j-accent);
+}
+
+.log .md-code-preview svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* ── Panel ───────────────────────────────────────────────────────────────── */
+.artifact-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: var(--artifact-w);
+  z-index: var(--j-z-drawer);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--j-overlay);
+  border-left: 1px solid var(--j-border-strong);
+  box-shadow: var(--j-shadow-3);
+  backdrop-filter: blur(var(--j-blur)) saturate(1.05);
+  -webkit-backdrop-filter: blur(var(--j-blur)) saturate(1.05);
+  transform: translateX(101%);
+  visibility: hidden;
+  transition:
+    transform var(--j-dur-med) var(--j-ease),
+    visibility 0s linear var(--j-dur-med);
+}
+
+.artifact-panel[aria-hidden="false"] {
+  transform: none;
+  visibility: visible;
+  transition:
+    transform var(--j-dur-med) var(--j-ease),
+    visibility 0s;
+}
+
+/* Wide screen: shrink the chat (so the panel sits side by side) */
+body .app-frame {
+  transition: padding-right var(--j-dur-med) var(--j-ease);
+}
+body.artifacts-open .app-frame {
+  padding-right: var(--artifact-w);
+}
+
+/* Drag-to-resize handle on the left edge */
+.artifact-resize {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  margin-left: -4px;
+  cursor: ew-resize;
+  z-index: 2;
+  touch-action: none;
+}
+.artifact-resize::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 2px;
+  height: 40px;
+  border-radius: 2px;
+  background: var(--j-border-strong);
+  opacity: 0;
+  transition: opacity var(--j-dur-fast) var(--j-ease), background var(--j-dur-fast) var(--j-ease);
+}
+.artifact-resize:hover::before,
+.artifact-panel.is-resizing .artifact-resize::before {
+  opacity: 1;
+  background: var(--j-accent);
+}
+/* While dragging: no text selection + iframe pointer must not swallow events */
+.artifact-panel.is-resizing {
+  user-select: none;
+  transition: none;
+}
+.artifact-panel.is-resizing .artifact-frame {
+  pointer-events: none;
+}
+
+/* Header strip */
+.artifact-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--j-sp-2);
+  padding: var(--j-sp-2) var(--j-sp-3);
+  border-bottom: 1px solid var(--j-border);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--j-accent-soft) 50%, transparent),
+    transparent
+  );
+}
+
+.artifact-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: var(--j-sp-2);
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.artifact-icon {
+  flex: none;
+  color: var(--j-accent);
+  display: inline-flex;
+}
+
+.artifact-title {
+  margin: 0;
+  font: 600 var(--j-fs-sm) var(--j-font-ui);
+  color: var(--j-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.artifact-lang {
+  flex: none;
+  font: 500 var(--j-fs-xs) var(--j-font-mono);
+  color: var(--j-ink-faint);
+  text-transform: lowercase;
+  letter-spacing: 0.08em;
+}
+
+/* Tabs */
+.artifact-tabs {
+  flex: none;
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--j-panel);
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-pill);
+}
+
+.artifact-tab {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--j-ink-dim);
+  font: 600 var(--j-fs-xs) var(--j-font-ui);
+  padding: 4px 12px;
+  border-radius: var(--j-r-pill);
+  cursor: pointer;
+  transition:
+    color var(--j-dur-fast) var(--j-ease),
+    background var(--j-dur-fast) var(--j-ease);
+}
+
+.artifact-tab:hover {
+  color: var(--j-ink);
+}
+
+.artifact-tab.is-active {
+  color: var(--j-accent-ink);
+  background: var(--j-accent);
+}
+
+/* Action icons */
+.artifact-actions {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.artifact-act,
+.artifact-close {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 8px;
+  font: 500 var(--j-fs-xs) var(--j-font-ui);
+  color: var(--j-ink-dim);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--j-r-sm);
+  cursor: pointer;
+  transition:
+    color var(--j-dur-fast) var(--j-ease),
+    background var(--j-dur-fast) var(--j-ease),
+    border-color var(--j-dur-fast) var(--j-ease);
+}
+
+.artifact-act:hover,
+.artifact-close:hover {
+  color: var(--j-ink);
+  background: var(--j-raised);
+  border-color: var(--j-border);
+}
+
+.artifact-close {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.artifact-close:hover {
+  color: var(--j-danger);
+}
+
+/* Body */
+.artifact-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+
+.artifact-preview {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: none;
+  background:
+    repeating-conic-gradient(var(--j-bg) 0% 25%, transparent 0% 50%) 50% / 22px 22px;
+}
+
+.artifact-panel[data-tab="preview"] .artifact-preview {
+  display: block;
+}
+
+.artifact-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+  display: block;
+}
+
+.artifact-code {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  display: none;
+  overflow: auto;
+  padding: var(--j-sp-4);
+  background: color-mix(in srgb, var(--j-bg) 80%, var(--j-raised));
+}
+
+.artifact-panel[data-tab="code"] .artifact-code {
+  display: block;
+}
+
+.artifact-code code {
+  font: 400 var(--j-fs-sm) / 1.6 var(--j-font-mono);
+  color: var(--j-ink);
+  white-space: pre;
+}
+
+/* Backdrop — visible only on narrow screens (overlay mode) */
+.artifact-backdrop {
+  display: none;
+}
+
+/* ── Responsive: dar ekran → tam-ekran overlay ───────────────────────────── */
+@media (max-width: 900px) {
+  :root {
+    --artifact-w: 100vw;
+  }
+  body.artifacts-open .app-frame {
+    padding-right: 0;
+  }
+  .artifact-resize {
+    display: none;
+  }
+  .artifact-panel {
+    z-index: var(--j-z-modal);
+  }
+  .artifact-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: calc(var(--j-z-modal) - 1);
+    background: color-mix(in srgb, var(--j-bg) 70%, transparent);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--j-dur-med) var(--j-ease);
+  }
+  .artifact-backdrop[aria-hidden="false"] {
+    display: block;
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .artifact-panel,
+  body .app-frame {
+    transition: none;
+  }
+}

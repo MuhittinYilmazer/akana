@@ -1,0 +1,14 @@
+id: pack_skill_add
+version: 1
+title: "Pack: add a skill to an existing pack"
+description: "Adds a contract-compliant new skill (manifest.yaml + SKILL.md) to an existing pack and registers it in pack.yaml."
+triggers:
+  - "add a skill to this pack"
+  - "add a capability to the pack"
+  - "add a skill to the pack"
+  - "add a new skill to the pack"
+risk: medium
+learn_from_success: true
+requires_approval: false
+cursor_skills: []
+tools_allowed: []

@@ -1,0 +1,16 @@
+# Pin line endings by file type so cross-platform contributors don't corrupt
+# platform-specific files. Committing these tells git to enforce the correct
+# end-of-line regardless of a contributor's core.autocrlf setting.
+
+# Windows batch / cmd files MUST be CRLF, or cmd.exe may fail to parse them.
+*.cmd  text eol=crlf
+*.bat  text eol=crlf
+
+# POSIX shell scripts MUST be LF, or /bin/sh may fail with "\r" parse errors.
+*.sh   text eol=lf
+
+# PowerShell scripts work with either but are conventionally CRLF on Windows.
+*.ps1  text eol=crlf
+
+# Everything else: let git renormalize on checkout / commit.
+* text=auto

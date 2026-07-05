@@ -1,0 +1,32 @@
+# Dependabot configuration for the Akana public mirror.
+# Addresses dependency drift and GitHub security alerts via weekly update PRs.
+# Schema reference: https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+version: 2
+updates:
+  # Python dependencies — root holds requirements.txt, requirements-dev.txt,
+  # and the requirements-*.txt extras (gemini, piper, vector, voice, xtts).
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "pip"
+
+  # Node dependencies for the cursor_bridge sub-project (package.json + lockfile).
+  - package-ecosystem: "npm"
+    directory: "/cursor_bridge"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "npm"
+
+  # GitHub Actions used by the workflows in .github/workflows/.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"

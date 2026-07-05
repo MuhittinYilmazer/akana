@@ -1,0 +1,283 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   AURORA · MOTION & MICRO-INTERACTION POLISH  (loads LAST → this layer wins)
+   ───────────────────────────────────────────────────────────────────────────
+   Goal: an elegant/measured motion layer + a SINGLE comprehensive app-wide
+   reduced-motion guard. Color/layout/radius UNCHANGED — only transition +
+   a tiny transform (translate/scale) and opacity. All durations/easing come
+   from tokens.css (--j-*). Because of a history of jank: NEVER a layout/width
+   animation; only compositor-friendly transform + opacity.
+
+   DOM/class contract (akana-chat-render.js + shell):
+     .log > .row(.row-user|.row-assistant)   → message row (entrance on append)
+   No new helper classes; existing classes are targeted. No id/class/--j-*
+   name is ever renamed.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── 1 · Message entrance: a new row appears rising gently ──────────────
+   `rise` runs only once when the element is added to the DOM (CSS animations
+   don't re-trigger on reflow). `backwards` → the start state is applied before
+   the first frame, so there's no "flash". translateY is transform-only — no
+   layout-shift. Since this file loads last it takes over j-msg-in from
+   akana-chat.css (not a conflict; single source is here). */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.log .row,
+.log .row-user,
+.log .row-assistant {
+  animation: rise 240ms var(--j-ease) backwards;
+}
+
+/* ─── 2 · Micro-interactions ─────────────────────────────────────────────────
+   A consistent feel: on hover a gentle translateY(-1px) + slight brightening,
+   on :active scale(0.97). Color/layout unchanged — only transform + transition
+   added (the existing hover color/shadow rules stay in
+   styles.css/aurora-shell.css). Transitions already exist on most buttons;
+   here the missing ones are filled in and the :active feedback is standardized. */
+
+/* A safe transform+filter transition base on all interaction surfaces.
+   (Only transform+filter, so we don't override color/background transitions.) */
+.btn-icon,
+.btn-ghost,
+#send,
+.btn-send,
+.btn-new-chat,
+.prompt-chip,
+.chat-archive-item,
+.accent-swatch {
+  transition:
+    transform var(--j-dur-fast) var(--j-ease),
+    filter var(--j-dur-fast) var(--j-ease);
+}
+
+/* Hover: gentle lift + a touch of brightness. (chat-archive-item keeps its own
+   translateX hover → we don't override it with Y; handled separately below.) */
+.btn-icon:hover,
+.btn-ghost:hover,
+#send:hover:not(:disabled),
+.btn-send:hover:not(:disabled),
+.btn-new-chat:hover,
+.prompt-chip:hover,
+.accent-swatch:hover {
+  filter: brightness(1.05);
+}
+
+/* :active press feedback — consistent app-wide. */
+.btn-icon:active,
+.btn-ghost:active,
+#send:active:not(:disabled),
+.btn-send:active:not(:disabled),
+.btn-new-chat:active,
+.prompt-chip:active,
+.chat-archive-item:active,
+.accent-swatch:active {
+  transform: scale(0.97);
+  filter: brightness(0.98);
+}
+
+/* accent-swatch: a gentle lift on hover (previously only color/border). */
+.accent-swatch:hover {
+  transform: translateY(-1px);
+}
+
+/* disabled surfaces must not move. */
+#send:disabled,
+.btn-send:disabled,
+.btn-icon:disabled,
+.btn-ghost:disabled {
+  transform: none;
+  filter: none;
+}
+
+/* ─── 2·b · BACKGROUND PARALLAX MAPPING (driven by aurora-motion.js) ───────────────────
+   aurora-motion.js writes --par-x/--par-y (px) onto .app-bg on pointer movement;
+   we apply this shift to the ambient layers with a per-layer different
+   coefficient + direction, via the INDEPENDENT `translate` property. `translate`
+   does NOT conflict with each layer's drift `transform` animation — they are
+   separate properties, folded together into one matrix. The variables fall to
+   0px → no effect when JS is absent / when (pointer:fine)+motion is off. Depth:
+   orb-b moves more strongly in the opposite direction, the curtain (::before)
+   shifts less; the three layers read like three planes. */
+.app-bg { --par-x: 0px; --par-y: 0px; }
+.app-bg-orb-a { translate: var(--par-x) var(--par-y); }
+.app-bg-orb-b { translate: calc(var(--par-x) * -1.3) calc(var(--par-y) * -1.3); }
+.app-bg::before { translate: calc(var(--par-x) * 0.45) calc(var(--par-y) * 0.45); }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   3 · COMPREHENSIVE REDUCED-MOTION GUARD  (single block — this file loads last → wins)
+   ───────────────────────────────────────────────────────────────────────────
+   Here we silence ALL infinite/entrance animations in the app. Including the
+   known leaks (composer-dot-pulse, wake/orb pulse, tool-call pulse, app-bg
+   orbs, aurora voice rings, process-card shimmer/spark, running sheen, this
+   file's `rise`). `animation: none !important` + entrance transforms are
+   neutralized. tokens.css already sets the --j-dur-* values to 0ms; this block
+   also turns off `infinite`/keyframe animations and transform start states.
+   ═══════════════════════════════════════════════════════════════════════════ */
+@media (prefers-reduced-motion: reduce) {
+  /* — This file's own motion — */
+  .log .row,
+  .log .row-user,
+  .log .row-assistant {
+    animation: none !important;
+  }
+
+  .btn-icon,
+  .btn-ghost,
+  #send,
+  .btn-send,
+  .btn-new-chat,
+  .prompt-chip,
+  .chat-archive-item,
+  .accent-swatch {
+    transition: none !important;
+  }
+
+  .btn-icon:hover,
+  .btn-ghost:hover,
+  #send:hover:not(:disabled),
+  .btn-send:hover:not(:disabled),
+  .btn-new-chat:hover,
+  .prompt-chip:hover,
+  .accent-swatch:hover,
+  .btn-icon:active,
+  .btn-ghost:active,
+  #send:active:not(:disabled),
+  .btn-send:active:not(:disabled),
+  .btn-new-chat:active,
+  .prompt-chip:active,
+  .chat-archive-item:active,
+  .accent-swatch:active {
+    transform: none !important;
+    filter: none !important;
+  }
+
+  /* — styles.css: composer "thinking" dot — */
+  .composer-hint--thinking::after {
+    animation: none !important;
+  }
+
+  /* — styles.css: «Hey Akana» wake pulse + chip dot — */
+  .btn-wake.wake-autostart-pending,
+  .btn-wake.active .btn-chip-dot {
+    animation: none !important;
+  }
+
+  /* — styles.css: stage background aurora + orb drift — */
+  .app-bg::before,
+  .app-bg::after,
+  .app-bg-orb,
+  .app-bg-orb-a,
+  .app-bg-orb-b {
+    animation: none !important;
+  }
+
+  /* — styles.css: status dot breathing (status-breathe) — */
+  .status-dot {
+    animation: none !important;
+  }
+
+  /* — styles.css + akana-v2.css: empty-state aurora core (core-spin/pulse)
+       + flowing-gradient wordmark (title-flow / hero-in). The same elements are
+       skinned in both files; one selector beats both. — */
+  .log-empty-icon::before,
+  .log-empty-icon::after,
+  .log-empty-title {
+    animation: none !important;
+  }
+
+  /* — styles.css + aurora-shell.css + akana-v2.css: sidebar orb (#orb)
+       — legacy breathe/arc/ring + aurora sphere breathing + live (streaming/TTS)
+       state pulses/rotating ring. #orb and all its pseudos are covered. — */
+  #orb,
+  #orb::before,
+  #orb::after,
+  .orb-idle,
+  .orb-send,
+  .orb-ok,
+  .orb-listen,
+  html:not([data-cockpit="on"]) .orb-send::after,
+  html:not([data-cockpit="on"]) .orb-listen::before,
+  html:not([data-cockpit="on"]) .orb-listen::after {
+    animation: none !important;
+  }
+
+  /* — styles.css: STOP button pulse (voice-stop-pulse) + live transcript
+       recording dot/bars (jlt) + streaming caret (cursor-blink) — */
+  .btn-send[data-mode="stop"],
+  .btn-voice-stop,
+  .akana-live-transcript .jlt-dot,
+  .akana-live-transcript .jlt-bars i,
+  .log .md-content--stream > p:last-child::after,
+  .log .md-content--stream > .md-h:last-child::after,
+  .log .md-content--stream > .md-lead:last-child::after,
+  .log .md-content--stream > ul:last-child > li:last-child::after,
+  .log .md-content--stream > ol:last-child > li:last-child::after,
+  .log .md-content--stream > blockquote:last-child > p:last-child::after {
+    animation: none !important;
+  }
+
+  /* — akana-chat.css: tool-call running pulse + status spinner + group icon
+       pulse + "thinking" wave + TTS wave bars + flow-strip dots — */
+  .log .tool-call[data-status="running"],
+  .log .action-card-status[data-status="running"],
+  .log .tool-calls-group[data-running="1"] .tcg-icon,
+  .log .bubble-bot-pending::after,
+  .log .tts-wave,
+  .log .tts-wave-bars i,
+  .akana-flow-strip,
+  .akana-flow-strip .jfs-dots i {
+    animation: none !important;
+  }
+
+  /* — aurora-chat.css: running sheen (aur-tool-sheen) + process-card spark/shimmer
+       (aur-spark-pulse/aur-shimmer) + shell-current caret (aur-caret) — */
+  .log .tool-call[data-status="running"] .action-card-summary::after,
+  .aur-process.is-live .aur-process-spark::after,
+  .aur-process.is-running .aur-process-spark::after,
+  .aur-process.is-live .aur-process-label,
+  .aur-process.is-running .aur-process-label,
+  .log .akana-thought-feed.aur-process .aur-timeline .akana-thought-line--shell-current::after {
+    animation: none !important;
+  }
+
+  /* — styles.css + aurora-skin.css: stage background aurora flow + orb drifts — */
+  .app-bg::before,
+  .app-bg::after,
+  .app-bg-orb {
+    animation: none !important;
+  }
+
+  /* — aurora-voice.css: voice overlay rings (aur-wave) + sphere breathe/pulse
+       (aur-orb-breathe/pulse) + status dot blink + transcript caret — */
+  .aur-ring,
+  .aur-orb,
+  .aur-orb::before,
+  .aur-voice-state .aur-sdot,
+  .aur-voice-transcript .aur-caret {
+    animation: none !important;
+  }
+
+  /* — akana-v2.css: microphone recording breathing (akana-rec-breathe) + task spinner
+       (akana-task-spin-pulse). #orb live states were covered above. — */
+  .composer .composer-inner:has(#btn-mic[aria-pressed="true"])::after,
+  .composer .btn-mic[aria-pressed="true"]::after,
+  .akana-task-chip.is-working .akana-task-spin {
+    animation: none !important;
+  }
+
+  /* — aurora-motion.js: background parallax layers. JS already doesn't run in
+       this mode (motionOK=false); still a guard against leftover inline translate. — */
+  .app-bg-orb-a,
+  .app-bg-orb-b,
+  .app-bg::before {
+    translate: none !important;
+  }
+}

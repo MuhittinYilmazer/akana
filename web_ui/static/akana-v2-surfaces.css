@@ -1,0 +1,2100 @@
+/* ════════════════════════════════════════════════════════════════════════════
+   AKANA V2 — "NEBULA COMMAND CENTER" · OVERLAY SURFACES
+   ────────────────────────────────────────────────────────────────────────────
+   This file loads LAST and carries the v2 skin for overlay surfaces:
+
+     · Settings panel (+ all panes: general/provider/identity/security/
+       pack/spend/voice/appearance/connection)
+     · Keyboard help modal (.kbd-help)
+     · Toasts (.ui-toast)
+     · In-chat cards: tool-call / memory-use / history-warn + bubble polish
+     · Setup strip (#setup-banner)
+
+   DESIGN LANGUAGE — Nebula:
+     · Glass = color-mix overlay base + backdrop blur(14-20px)
+       + inset 0 1px 0 var(--j-hairline) + --j-shadow-2/3
+     · Identity gradient: azure (--j-accent) → purple (--j-accent-2) → cyan
+       (--j-accent-3); titles use --j-title-grad
+     · Gradient border: linear-gradient(bg,bg) padding-box,
+       gradient border-box + border: 1px solid transparent
+     · Motion is transform/opacity only; ZERO under reduced-motion
+     · Focus-visible = --j-glow-accent ring; interactive = cursor pointer
+     · Hover never shifts layout (transform/shadow/color only)
+
+   CONTRACTS (DO NOT TOUCH):
+     · class/id names are legacy — no delete/rename
+     · body.settings-open .settings-panel open mechanic lives in styles.css;
+       only the VISUAL layer is overridden here
+     · .tool-call stays compact (closed ~24-28px single line)
+     · .bubble-bot-pending::after thinking animation is not broken
+     · [hidden] behavior preserved
+     · Colors ONLY via var(--j-*) + color-mix (no raw hex)
+   ════════════════════════════════════════════════════════════════════════════ */
+
+
+/* ════════════════════════════════════════════════════════════════════════════
+   §1 · SETTINGS — BACKDROP + PANEL SHELL
+   Full-screen-feeling command surface: wider glass slab, gradient top
+   hairline, gradient border, deep ambient shadow.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+.settings-backdrop {
+  background:
+    radial-gradient(
+      90% 70% at 50% 0%,
+      color-mix(in srgb, var(--j-accent-2) 7%, transparent),
+      transparent 65%
+    ),
+    color-mix(in srgb, var(--j-bg) 66%, transparent);
+  backdrop-filter: blur(8px) saturate(1.05);
+  -webkit-backdrop-filter: blur(8px) saturate(1.05);
+}
+
+.settings-panel {
+  /* wider command slab — widen legacy --settings-w in place */
+  width: min(1180px, 95vw);
+  /* gradient border: glass base padding-box + identity gradient border-box */
+  background:
+    linear-gradient(var(--j-overlay), var(--j-overlay)) padding-box,
+    linear-gradient(
+      150deg,
+      color-mix(in srgb, var(--j-accent) 42%, var(--j-border-strong)),
+      color-mix(in srgb, var(--j-accent-2) 34%, var(--j-border-strong)) 55%,
+      color-mix(in srgb, var(--j-accent-3) 26%, var(--j-border-strong))
+    ) border-box;
+  border: 1px solid transparent;
+  border-radius: var(--j-r-xl);
+  backdrop-filter: blur(calc(var(--j-blur) + 6px)) saturate(1.25);
+  -webkit-backdrop-filter: blur(calc(var(--j-blur) + 6px)) saturate(1.25);
+  box-shadow:
+    inset 0 1px 0 var(--j-hairline),
+    var(--j-shadow-3),
+    var(--j-shadow-accent);
+}
+
+/* gradient top hairline — the panel's "energy line" */
+.settings-panel::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--j-title-grad);
+  opacity: 0.85;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* calm nebula glow in the top corners — decor only, does not swallow interaction */
+.settings-panel::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 180px;
+  background:
+    radial-gradient(
+      70% 100% at 18% 0%,
+      color-mix(in srgb, var(--j-accent) 10%, transparent),
+      transparent 70%
+    ),
+    radial-gradient(
+      55% 90% at 85% 0%,
+      color-mix(in srgb, var(--j-accent-2) 8%, transparent),
+      transparent 70%
+    );
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* content flows above the decor layer */
+.settings-panel-head,
+.settings-body {
+  position: relative;
+  z-index: 1;
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════════
+   §2 · SETTINGS — TITLE STRIP
+   Eyebrow gradient text · h2 display font · glass search pill.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+.settings-panel-head {
+  padding: var(--j-sp-5) var(--j-sp-5) var(--j-sp-4);
+  border-bottom: 1px solid color-mix(in srgb, var(--j-border) 80%, transparent);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--j-accent-soft) 34%, transparent),
+    transparent 90%
+  );
+}
+
+.settings-panel-eyebrow {
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  background: var(--j-title-grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
+.settings-panel-head h2,
+#settings-dialog-title {
+  font-family: var(--j-font-display);
+  font-size: var(--j-fs-2xl);
+  font-weight: 600;
+  letter-spacing: var(--j-tracking-tight);
+  line-height: 1.1;
+  color: var(--j-ink);
+}
+
+.settings-panel-sub {
+  color: var(--j-ink-dim);
+  font-size: var(--j-fs-sm);
+}
+
+.btn-settings-close {
+  cursor: pointer;
+  transition:
+    color var(--j-dur-fast) var(--j-ease),
+    transform var(--j-dur-fast) var(--j-ease);
+}
+
+.btn-settings-close:hover {
+  color: var(--j-ink);
+  transform: rotate(90deg);
+}
+
+.btn-settings-close:focus-visible {
+  outline: none;
+  box-shadow: var(--j-glow-accent);
+  border-radius: var(--j-r-sm);
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════════
+   §3 · SETTINGS — LEFT NAV RAIL (tab cards)
+   Tabs are glass cards; the active one gets gradient glass + gradient icon
+   badge + glow. Hover = surface lights up + slight lift (transform — layout
+   does not shift).
+   ════════════════════════════════════════════════════════════════════════════ */
+
+.settings-nav {
+  padding: var(--j-sp-3) var(--j-sp-2);
+  gap: 4px;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--j-accent) 3%, transparent),
+      transparent 40%
+    ),
+    color-mix(in srgb, var(--j-bg) 42%, transparent);
+  scrollbar-width: thin;
+}
+
+.settings-main {
+  border-left: 1px solid color-mix(in srgb, var(--j-border) 85%, transparent);
+}
+
+.settings-tab {
+  position: relative;
+  border: 1px solid transparent;
+  border-radius: var(--j-r-md);
+  color: var(--j-ink-dim);
+  cursor: pointer;
+  transition:
+    background var(--j-dur-fast) var(--j-ease),
+    color var(--j-dur-fast) var(--j-ease),
+    border-color var(--j-dur-fast) var(--j-ease),
+    box-shadow var(--j-dur-fast) var(--j-ease),
+    transform var(--j-dur-fast) var(--j-ease);
+}
+
+/* legacy contract: hidden tab stays hidden */
+.settings-tab[hidden] {
+  display: none;
+}
+
+.settings-tab:hover {
+  color: var(--j-ink);
+  background: color-mix(in srgb, var(--j-raised) 85%, transparent);
+  border-color: var(--j-border);
+  box-shadow: inset 0 1px 0 var(--j-hairline), var(--j-shadow-1);
+  transform: translateY(-1px);
+}
+
+.settings-tab:focus-visible {
+  outline: none;
+  box-shadow: var(--j-glow-accent);
+}
+
+.settings-tab-icon {
+  width: 2.15rem;
+  height: 2.15rem;
+  border-radius: var(--j-r-md);
+  background: color-mix(in srgb, var(--j-raised) 90%, transparent);
+  border: 1px solid var(--j-border);
+  box-shadow: inset 0 1px 0 var(--j-hairline);
+  color: var(--j-accent);
+  font-size: var(--j-fs-lg);
+  transition:
+    background var(--j-dur-fast) var(--j-ease),
+    color var(--j-dur-fast) var(--j-ease),
+    box-shadow var(--j-dur-fast) var(--j-ease);
+}
+
+/* SVG line-icon set (Lucide-style, currentColor) inside the nav icon chip */
+.settings-tab-icon svg {
+  width: 1.2rem;
+  height: 1.2rem;
+  display: block;
+}
+
+.settings-tab-label {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.settings-tab-desc {
+  color: var(--j-ink-faint);
+}
+
+/* ACTIVE tab: gradient glass + gradient border + left energy rail */
+.settings-tab.is-active {
+  color: var(--j-ink);
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--j-accent) 12%, transparent),
+      color-mix(in srgb, var(--j-accent-2) 10%, transparent)
+    ) padding-box,
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--j-accent) 45%, var(--j-border)),
+      color-mix(in srgb, var(--j-accent-2) 38%, var(--j-border))
+    ) border-box;
+  border: 1px solid transparent;
+  box-shadow:
+    inset 0 1px 0 var(--j-hairline),
+    0 6px 22px -10px color-mix(in srgb, var(--j-accent) 55%, transparent);
+}
+
+/* active tab's left light rail */
+.settings-tab.is-active::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 18%;
+  bottom: 18%;
+  width: 3px;
+  border-radius: var(--j-r-pill);
+  background: linear-gradient(180deg, var(--j-accent), var(--j-accent-2));
+  box-shadow: 0 0 10px color-mix(in srgb, var(--j-accent) 55%, transparent);
+}
+
+.settings-tab.is-active .settings-tab-icon {
+  background: var(--j-accent-grad);
+  border-color: transparent;
+  color: var(--j-accent-ink);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--j-accent-ink) 25%, transparent),
+    0 4px 14px -4px color-mix(in srgb, var(--j-accent) 65%, transparent);
+}
+
+.settings-tab.is-active .settings-tab-label {
+  font-weight: 700;
+}
+
+.settings-tab.is-active .settings-tab-desc {
+  color: var(--j-ink-dim);
+}
+
+/* health badges — mini pills with a dot glow */
+.settings-tab-badge {
+  font-family: var(--j-font-mono);
+  border: 1px solid var(--j-border);
+  background: color-mix(in srgb, var(--j-raised) 85%, transparent);
+  color: var(--j-ink-faint);
+}
+
+.settings-tab-badge.is-ok {
+  background: color-mix(in srgb, var(--j-energy) 14%, transparent);
+  border-color: color-mix(in srgb, var(--j-energy) 38%, transparent);
+  color: var(--j-energy);
+  box-shadow: 0 0 8px -2px color-mix(in srgb, var(--j-energy) 45%, transparent);
+}
+
+.settings-tab-badge.is-warn {
+  background: color-mix(in srgb, var(--j-warn) 14%, transparent);
+  border-color: color-mix(in srgb, var(--j-warn) 38%, transparent);
+  color: var(--j-warn);
+  box-shadow: 0 0 8px -2px color-mix(in srgb, var(--j-warn) 45%, transparent);
+}
+
+.settings-tab-badge.is-bad {
+  background: color-mix(in srgb, var(--j-danger) 14%, transparent);
+  border-color: color-mix(in srgb, var(--j-danger) 38%, transparent);
+  color: var(--j-danger);
+  box-shadow: 0 0 8px -2px color-mix(in srgb, var(--j-danger) 45%, transparent);
+}
+
+/* Memory Studio link tab — outside door, cyan-signed */
+.settings-tab-link {
+  text-decoration: none;
+}
+
+.settings-tab-link .settings-tab-icon {
+  color: var(--j-accent-3);
+}
+
+.settings-tab-link:hover {
+  border-color: color-mix(in srgb, var(--j-accent-3) 35%, var(--j-border));
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════════
+   §4 · SETTINGS — PANE TOOLBAR + BREADCRUMB
+   Breadcrumb: mono / uppercase / wide tracking — telemetry aesthetic.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+.settings-pane-toolbar {
+  border-bottom: 1px solid color-mix(in srgb, var(--j-border) 80%, transparent);
+  background: color-mix(in srgb, var(--j-bg) 30%, transparent);
+}
+
+.settings-breadcrumb {
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--j-ink-faint);
+}
+
+.settings-breadcrumb-sep {
+  color: var(--j-accent);
+  opacity: 0.6;
+}
+
+#settings-breadcrumb-current {
+  background: var(--j-accent-grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
+.settings-pane-toolbar-desc {
+  color: var(--j-ink-dim);
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════════
+   §5 · SETTINGS — PANE BODY + BLOCK CARDS
+   Instead of legacy "sections separated by a line": each .settings-block is
+   a GLASS CARD. Gradient dot in the title; the first block is also a card
+   (legacy first-of-type reset is overridden — equal specificity + loading
+   later wins for us).
+   ════════════════════════════════════════════════════════════════════════════ */
+
+.settings-scroll {
+  padding: var(--j-sp-4) var(--j-sp-5) var(--j-sp-6);
+  scrollbar-width: thin;
+}
+
+.settings-pane-header h3 {
+  font-family: var(--j-font-display);
+  font-weight: 600;
+  letter-spacing: var(--j-tracking-tight);
+  color: var(--j-ink);
+}
+
+.settings-pane-desc {
+  color: var(--j-ink-dim);
+}
+
+.settings-pane-header-compact {
+  border-bottom: 1px solid color-mix(in srgb, var(--j-border) 70%, transparent);
+}
+
+.settings-block,
+.settings-block:first-of-type {
+  margin-top: var(--j-sp-3);
+  padding: var(--j-sp-4);
+  border: 1px solid var(--j-border);
+  border-top: 1px solid var(--j-border);
+  border-radius: var(--j-r-lg);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--j-raised) 55%, transparent),
+      color-mix(in srgb, var(--j-panel) 70%, transparent)
+    );
+  box-shadow: inset 0 1px 0 var(--j-hairline), var(--j-shadow-1);
+  transition: border-color var(--j-dur-fast) var(--j-ease);
+}
+
+.settings-block:focus-within {
+  border-color: color-mix(in srgb, var(--j-accent) 28%, var(--j-border));
+}
+
+/* block title: gradient dot + wide tracking */
+.settings-block-title {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: var(--j-fs-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--j-ink-dim);
+}
+
+.settings-block-title::before {
+  content: "";
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--j-r-pill);
+  background: var(--j-accent-grad);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--j-accent) 55%, transparent);
+}
+
+.settings-block-head-row .settings-block-title {
+  margin-bottom: 0;
+}
+
+/* fieldset = in-block sub glass compartment */
+.settings-fieldset {
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-md);
+  background: color-mix(in srgb, var(--j-panel) 65%, transparent);
+  box-shadow: inset 0 1px 0 var(--j-hairline);
+}
+
+.settings-fieldset legend {
+  font-family: var(--j-font-mono);
+  letter-spacing: 0.12em;
+  color: var(--j-accent);
+}
+
+.settings-fieldset legend::before {
+  background: var(--j-accent-grad);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--j-accent) 50%, transparent);
+}
+
+/* advanced settings <details> — calm glass */
+.settings-advanced {
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-md);
+  background: color-mix(in srgb, var(--j-panel) 60%, transparent);
+}
+
+.settings-advanced summary {
+  cursor: pointer;
+  transition: color var(--j-dur-fast) var(--j-ease);
+}
+
+.settings-advanced summary:hover {
+  color: var(--j-ink);
+}
+
+.settings-advanced summary:focus-visible {
+  outline: none;
+  box-shadow: var(--j-glow-accent);
+  border-radius: var(--j-r-sm);
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════════
+   §6 · SETTINGS — FORM CONTROLS
+   Inputs: glass fill + accent focus ring. Toggle: gradient checked rail.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+.settings-block input,
+.settings-block select,
+.settings-block textarea {
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-sm);
+  background: color-mix(in srgb, var(--j-bg) 55%, var(--j-panel));
+  color: var(--j-ink);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--j-hairline) 60%, transparent);
+  transition:
+    border-color var(--j-dur-fast) var(--j-ease),
+    background var(--j-dur-fast) var(--j-ease),
+    box-shadow var(--j-dur-fast) var(--j-ease);
+}
+
+.settings-block input::placeholder,
+.settings-block textarea::placeholder {
+  color: var(--j-ink-faint);
+}
+
+.settings-block input:hover:not(:focus),
+.settings-block select:hover:not(:focus),
+.settings-block textarea:hover:not(:focus) {
+  border-color: var(--j-border-strong);
+}
+
+.settings-block input:focus,
+.settings-block input:focus-visible,
+.settings-block select:focus,
+.settings-block select:focus-visible,
+.settings-block textarea:focus,
+.settings-block textarea:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--j-accent) 60%, var(--j-border));
+  background: color-mix(in srgb, var(--j-accent) 5%, var(--j-bg));
+  box-shadow: var(--j-glow-accent);
+}
+
+/* range — accent-tinted */
+.settings-block input[type="range"] {
+  padding: 0;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  accent-color: var(--j-accent);
+  cursor: pointer;
+}
+
+.settings-block input[type="range"]:focus-visible {
+  outline: none;
+  box-shadow: var(--j-glow-soft);
+  border-radius: var(--j-r-pill);
+}
+
+.settings-block label {
+  color: var(--j-ink-dim);
+}
+
+.settings-block output {
+  font-family: var(--j-font-mono);
+  color: var(--j-accent);
+  font-weight: 700;
+}
+
+/* ── toggle: gradient checked rail + glowing head ─────────────────────────── */
+
+.toggle {
+  cursor: pointer;
+}
+
+.toggle-track {
+  background: color-mix(in srgb, var(--j-raised) 90%, transparent);
+  border: 1px solid var(--j-border-strong);
+  box-shadow: inset 0 1px 2px color-mix(in srgb, var(--j-bg) 60%, transparent);
+}
+
+.toggle-track::after {
+  background: var(--j-ink-dim);
+  box-shadow: var(--j-shadow-1);
+}
+
+.toggle input:checked + .toggle-track {
+  background: var(--j-accent-grad);
+  border-color: transparent;
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--j-accent-ink) 25%, transparent),
+    0 2px 14px -3px color-mix(in srgb, var(--j-accent) 60%, transparent);
+}
+
+.toggle input:checked + .toggle-track::after {
+  background: var(--j-accent-ink);
+  box-shadow: 0 1px 4px color-mix(in srgb, var(--j-bg) 55%, transparent);
+}
+
+.toggle input:focus-visible + .toggle-track {
+  box-shadow: var(--j-glow-accent);
+}
+
+.toggle:hover .toggle-track {
+  border-color: color-mix(in srgb, var(--j-accent) 40%, var(--j-border-strong));
+}
+
+.toggle-label {
+  color: var(--j-ink);
+}
+
+/* ── theme picker: segmented glass pills ─────────────────────────────────────── */
+
+.theme-picker-option {
+  cursor: pointer;
+}
+
+.theme-picker-option span {
+  border: 1px solid var(--j-border);
+  background: color-mix(in srgb, var(--j-panel) 75%, transparent);
+  color: var(--j-ink-dim);
+  box-shadow: inset 0 1px 0 var(--j-hairline);
+  cursor: pointer;
+  transition:
+    border-color var(--j-dur-fast) var(--j-ease),
+    background var(--j-dur-fast) var(--j-ease),
+    color var(--j-dur-fast) var(--j-ease),
+    box-shadow var(--j-dur-fast) var(--j-ease);
+}
+
+.theme-picker-option:hover span {
+  color: var(--j-ink);
+  border-color: var(--j-border-strong);
+}
+
+.theme-picker-option input:checked + span {
+  color: var(--j-ink);
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--j-accent) 14%, transparent),
+      color-mix(in srgb, var(--j-accent-2) 11%, transparent)
+    ) padding-box,
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--j-accent) 50%, var(--j-border)),
+      color-mix(in srgb, var(--j-accent-2) 42%, var(--j-border))
+    ) border-box;
+  border: 1px solid transparent;
+  box-shadow: 0 4px 16px -8px color-mix(in srgb, var(--j-accent) 55%, transparent);
+}
+
+.theme-picker-option input:focus-visible + span {
+  box-shadow: var(--j-glow-accent);
+}
+
+/* ── runtime fields (dynamically generated by akana-settings.js) ──────────────────── */
+
+.runtime-field {
+  border-radius: var(--j-r-md);
+  transition: background var(--j-dur-fast) var(--j-ease);
+}
+
+.runtime-field.is-dirty {
+  background: color-mix(in srgb, var(--j-warn) 6%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--j-warn) 25%, transparent);
+}
+
+.runtime-field-control input[type="checkbox"] {
+  accent-color: var(--j-accent);
+  cursor: pointer;
+}
+
+.runtime-field-unit {
+  font-family: var(--j-font-mono);
+  color: var(--j-ink-faint);
+}
+
+.runtime-field-status {
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+}
+
+.field-hint,
+.hint {
+  color: var(--j-ink-faint);
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════════
+   §7 · SETTINGS — OVERVIEW: HEALTH / HERO / STAT / ACTION CARDS
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* health pills: glowing status dot via ::before */
+.settings-health-pill {
+  border: 1px solid var(--j-border);
+  background: color-mix(in srgb, var(--j-panel) 80%, transparent);
+  box-shadow: inset 0 1px 0 var(--j-hairline);
+  color: var(--j-ink-dim);
+}
+
+.settings-health-pill::before {
+  content: "";
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--j-r-pill);
+  background: var(--j-ink-faint);
+  box-shadow: 0 0 0 0 transparent;
+  transition: background var(--j-dur-fast) var(--j-ease);
+}
+
+.settings-health-pill.is-ok {
+  border-color: color-mix(in srgb, var(--j-energy) 35%, var(--j-border));
+  color: var(--j-energy);
+}
+
+.settings-health-pill.is-ok::before {
+  background: var(--j-energy);
+  box-shadow:
+    0 0 8px color-mix(in srgb, var(--j-energy) 70%, transparent),
+    0 0 0 3px color-mix(in srgb, var(--j-energy) 14%, transparent);
+}
+
+.settings-health-pill.is-warn {
+  border-color: color-mix(in srgb, var(--j-warn) 35%, var(--j-border));
+  color: var(--j-warn);
+}
+
+.settings-health-pill.is-warn::before {
+  background: var(--j-warn);
+  box-shadow:
+    0 0 8px color-mix(in srgb, var(--j-warn) 70%, transparent),
+    0 0 0 3px color-mix(in srgb, var(--j-warn) 14%, transparent);
+}
+
+.settings-health-pill.is-bad {
+  border-color: color-mix(in srgb, var(--j-danger) 35%, var(--j-border));
+  color: var(--j-danger);
+}
+
+.settings-health-pill.is-bad::before {
+  background: var(--j-danger);
+  box-shadow:
+    0 0 8px color-mix(in srgb, var(--j-danger) 70%, transparent),
+    0 0 0 3px color-mix(in srgb, var(--j-danger) 14%, transparent);
+}
+
+/* HERO card: gradient top rail + nebula glass + mono value */
+.settings-hero {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--j-accent) 30%, var(--j-border));
+  border-radius: var(--j-r-lg);
+  background:
+    radial-gradient(
+      120% 140% at 12% 0%,
+      color-mix(in srgb, var(--j-accent) 12%, transparent),
+      transparent 60%
+    ),
+    radial-gradient(
+      100% 130% at 88% 10%,
+      color-mix(in srgb, var(--j-accent-2) 9%, transparent),
+      transparent 60%
+    ),
+    color-mix(in srgb, var(--j-raised) 60%, transparent);
+  box-shadow:
+    inset 0 1px 0 var(--j-hairline),
+    var(--j-shadow-1),
+    0 10px 36px -18px color-mix(in srgb, var(--j-accent) 40%, transparent);
+}
+
+.settings-hero::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--j-title-grad);
+  opacity: 0.9;
+}
+
+.settings-hero-label {
+  font-family: var(--j-font-mono);
+  letter-spacing: 0.12em;
+  color: var(--j-ink-faint);
+}
+
+.settings-hero-value {
+  font-family: var(--j-font-mono);
+  font-variant-numeric: tabular-nums;
+  background: var(--j-title-grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
+.settings-hero-sub {
+  color: var(--j-ink-dim);
+}
+
+.settings-hero-meta {
+  font-family: var(--j-font-mono);
+  color: var(--j-ink-faint);
+}
+
+/* hero metric table — glass sub-compartment */
+.settings-hero-metrics {
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-md);
+  background: color-mix(in srgb, var(--j-panel) 70%, transparent);
+  box-shadow: inset 0 1px 0 var(--j-hairline);
+}
+
+.settings-hero-metrics dt {
+  font-family: var(--j-font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--j-ink-faint);
+}
+
+.settings-hero-metrics dd {
+  font-family: var(--j-font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--j-ink);
+}
+
+/* meta list (rich view) */
+.settings-meta-list-rich {
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-md);
+  background: color-mix(in srgb, var(--j-panel) 70%, transparent);
+  box-shadow: inset 0 1px 0 var(--j-hairline);
+}
+
+/* STAT cards: gradient top rail (background layer — radius intact) */
+.stat-card {
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-md);
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--j-accent) 55%, transparent),
+      color-mix(in srgb, var(--j-accent-2) 45%, transparent) 60%,
+      color-mix(in srgb, var(--j-accent-3) 35%, transparent)
+    ) top / 100% 2px no-repeat,
+    color-mix(in srgb, var(--j-raised) 60%, transparent);
+  box-shadow: inset 0 1px 0 var(--j-hairline), var(--j-shadow-1);
+  transition: border-color var(--j-dur-fast) var(--j-ease);
+}
+
+.stat-card-label {
+  font-family: var(--j-font-mono);
+  letter-spacing: 0.1em;
+  color: var(--j-ink-faint);
+}
+
+.stat-card-value {
+  font-family: var(--j-font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--j-ink);
+}
+
+.stat-card-desc {
+  color: var(--j-ink-faint);
+}
+
+.stat-card.stat-ok {
+  border-color: color-mix(in srgb, var(--j-energy) 32%, var(--j-border));
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--j-energy) 60%, transparent),
+      color-mix(in srgb, var(--j-accent) 45%, transparent)
+    ) top / 100% 2px no-repeat,
+    color-mix(in srgb, var(--j-raised) 60%, transparent);
+}
+
+.stat-card.stat-bad {
+  border-color: color-mix(in srgb, var(--j-danger) 32%, var(--j-border));
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--j-danger) 60%, transparent),
+      color-mix(in srgb, var(--j-warn) 45%, transparent)
+    ) top / 100% 2px no-repeat,
+    color-mix(in srgb, var(--j-raised) 60%, transparent);
+}
+
+.stat-strip {
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-md);
+  background: color-mix(in srgb, var(--j-panel) 70%, transparent);
+  box-shadow: inset 0 1px 0 var(--j-hairline);
+  color: var(--j-ink-dim);
+}
+
+/* ACTION cards: glass, lift on hover + gradient border breath */
+.action-card {
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-md);
+  background: color-mix(in srgb, var(--j-raised) 60%, transparent);
+  box-shadow: inset 0 1px 0 var(--j-hairline), var(--j-shadow-1);
+  color: var(--j-ink);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.action-card:hover {
+  border-color: color-mix(in srgb, var(--j-accent) 45%, var(--j-border));
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--j-accent) 10%, transparent),
+      color-mix(in srgb, var(--j-accent-2) 8%, transparent)
+    ),
+    color-mix(in srgb, var(--j-raised) 60%, transparent);
+  box-shadow:
+    inset 0 1px 0 var(--j-hairline),
+    0 10px 28px -14px color-mix(in srgb, var(--j-accent) 55%, transparent);
+  transform: translateY(-2px);
+}
+
+.action-card:focus-visible {
+  outline: none;
+  box-shadow: var(--j-glow-accent);
+}
+
+.action-card:active {
+  transform: translateY(0);
+}
+
+.action-card-title {
+  color: var(--j-ink);
+}
+
+.action-card-desc {
+  color: var(--j-ink-faint);
+}
+
+/* info callout — dashed accent glass */
+.info-callout {
+  border: 1px dashed color-mix(in srgb, var(--j-accent) 32%, var(--j-border));
+  border-radius: var(--j-r-md);
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--j-accent) 6%, transparent),
+      color-mix(in srgb, var(--j-accent-2) 4%, transparent)
+    ),
+    color-mix(in srgb, var(--j-panel) 60%, transparent);
+  color: var(--j-ink-dim);
+}
+
+.info-callout strong {
+  color: var(--j-ink);
+}
+
+
+/* voice capability chips */
+.cap-chip {
+  border: 1px solid var(--j-border);
+  background: color-mix(in srgb, var(--j-panel) 75%, transparent);
+  box-shadow: inset 0 1px 0 var(--j-hairline);
+}
+
+.cap-chip.is-ok {
+  border-color: color-mix(in srgb, var(--j-energy) 35%, var(--j-border));
+  background: color-mix(in srgb, var(--j-energy) 9%, transparent);
+  color: var(--j-energy);
+}
+
+.cap-chip.is-warn {
+  border-color: color-mix(in srgb, var(--j-warn) 35%, var(--j-border));
+  background: color-mix(in srgb, var(--j-warn) 9%, transparent);
+  color: var(--j-warn);
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════════
+   §9 · SETUP STRIP (#setup-banner)
+   Amber-toned glass strip + left gradient rail (background layer).
+   ════════════════════════════════════════════════════════════════════════════ */
+
+#setup-banner,
+.setup-banner {
+  position: relative;
+  border-bottom: 1px solid color-mix(in srgb, var(--j-warn) 30%, var(--j-border));
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--j-warn) 80%, transparent),
+      color-mix(in srgb, var(--j-accent) 55%, transparent)
+    ) left / 3px 100% no-repeat,
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--j-warn) 10%, transparent),
+      color-mix(in srgb, var(--j-warn) 5%, transparent) 60%,
+      transparent
+    ),
+    color-mix(in srgb, var(--j-panel) 75%, transparent);
+  -webkit-backdrop-filter: blur(var(--j-blur));
+  backdrop-filter: blur(var(--j-blur));
+  box-shadow: inset 0 1px 0 var(--j-hairline);
+}
+
+/* contract: [hidden] strip stays invisible */
+#setup-banner[hidden] {
+  display: none;
+}
+
+.setup-banner-text {
+  color: var(--j-ink);
+}
+
+.setup-banner-text code {
+  font-family: var(--j-font-mono);
+  padding: 0.05em 0.4em;
+  border-radius: var(--j-r-sm);
+  border: 1px solid color-mix(in srgb, var(--j-warn) 30%, var(--j-border));
+  background: color-mix(in srgb, var(--j-warn) 8%, transparent);
+  color: var(--j-warn);
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════════
+   §10 · KEYBOARD HELP MODAL (.kbd-help)
+   Glass slab + display-font title + raised mini keycaps.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+.kbd-help-backdrop {
+  background:
+    radial-gradient(
+      80% 60% at 50% 30%,
+      color-mix(in srgb, var(--j-accent-2) 6%, transparent),
+      transparent 70%
+    ),
+    color-mix(in srgb, var(--j-bg) 62%, transparent);
+  backdrop-filter: blur(6px) saturate(1.05);
+  -webkit-backdrop-filter: blur(6px) saturate(1.05);
+}
+
+.kbd-help {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--j-overlay), var(--j-overlay)) padding-box,
+    linear-gradient(
+      140deg,
+      color-mix(in srgb, var(--j-accent) 40%, var(--j-border-strong)),
+      color-mix(in srgb, var(--j-accent-2) 32%, var(--j-border-strong))
+    ) border-box;
+  border-radius: var(--j-r-lg);
+  backdrop-filter: blur(calc(var(--j-blur) + 4px)) saturate(1.2);
+  -webkit-backdrop-filter: blur(calc(var(--j-blur) + 4px)) saturate(1.2);
+  box-shadow:
+    inset 0 1px 0 var(--j-hairline),
+    var(--j-shadow-3),
+    var(--j-shadow-accent);
+}
+
+.kbd-help-head h2 {
+  font-family: var(--j-font-display);
+  font-weight: 600;
+  letter-spacing: var(--j-tracking-tight);
+  background: var(--j-title-grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
+.kbd-help-head .btn-icon {
+  cursor: pointer;
+}
+
+.kbd-help-head .btn-icon:focus-visible {
+  outline: none;
+  box-shadow: var(--j-glow-accent);
+  border-radius: var(--j-r-sm);
+}
+
+.kbd-help-list dd {
+  color: var(--j-ink-dim);
+}
+
+/* keycap: inner light on top, 2px base at the bottom — physical key feel */
+.kbd-help kbd {
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+  font-weight: 600;
+  padding: 0.18em 0.55em;
+  border: 1px solid var(--j-border-strong);
+  border-bottom-width: 2px;
+  border-bottom-color: color-mix(in srgb, var(--j-accent) 35%, var(--j-border-strong));
+  border-radius: 6px;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--j-raised) 95%, transparent),
+      color-mix(in srgb, var(--j-panel) 90%, transparent)
+    );
+  color: var(--j-ink);
+  box-shadow:
+    inset 0 1px 0 var(--j-hairline),
+    0 2px 4px -1px color-mix(in srgb, var(--j-bg) 70%, transparent);
+}
+
+.kbd-help-foot {
+  color: var(--j-ink-faint);
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════════
+   §11 · TOASTS (.ui-toast-stack / .ui-toast)
+   Glass card + 3px gradient left rail. Entry: soft lift from below
+   (legacy transition mechanic via .is-visible — preserved).
+   ════════════════════════════════════════════════════════════════════════════ */
+
+.ui-toast {
+  border: 1px solid var(--j-border-strong);
+  border-radius: var(--j-r-md);
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--j-accent) 6%, transparent),
+      transparent 45%
+    ),
+    var(--j-overlay);
+  backdrop-filter: blur(calc(var(--j-blur) + 2px)) saturate(1.15);
+  -webkit-backdrop-filter: blur(calc(var(--j-blur) + 2px)) saturate(1.15);
+  box-shadow:
+    inset 0 1px 0 var(--j-hairline),
+    var(--j-shadow-2);
+}
+
+/* left gradient rail — identity (default: azure→purple) */
+.ui-toast::before {
+  width: 3px;
+  background: linear-gradient(180deg, var(--j-accent), var(--j-accent-2));
+  box-shadow: 0 0 10px color-mix(in srgb, var(--j-accent) 40%, transparent);
+}
+
+/* success: energy→azure rail + green breath */
+.ui-toast--ok {
+  border-color: color-mix(in srgb, var(--j-energy) 38%, var(--j-border-strong));
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--j-energy) 7%, transparent),
+      transparent 45%
+    ),
+    var(--j-overlay);
+}
+
+.ui-toast--ok::before {
+  background: linear-gradient(180deg, var(--j-energy), var(--j-accent));
+  box-shadow: 0 0 10px color-mix(in srgb, var(--j-energy) 45%, transparent);
+}
+
+/* error: danger→amber rail + red breath */
+.ui-toast--err {
+  border-color: color-mix(in srgb, var(--j-danger) 42%, var(--j-border-strong));
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--j-danger) 8%, transparent),
+      transparent 45%
+    ),
+    var(--j-overlay);
+  color: color-mix(in srgb, var(--j-danger) 70%, var(--j-ink));
+}
+
+.ui-toast--err::before {
+  background: linear-gradient(180deg, var(--j-danger), var(--j-warn));
+  box-shadow: 0 0 10px color-mix(in srgb, var(--j-danger) 45%, transparent);
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════════
+   §13 · CHAT CARDS — TOOL-CALL (compact contract PRESERVED)
+   Closed: single-line ~24-28px glass strip, gradient left rail (background
+   layer — NOT border-image, radius stays intact). Open: rises to a glass card.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+.log .action-card {
+  border: 1px solid var(--j-border);
+  background: color-mix(in srgb, var(--j-raised) 68%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--j-hairline) 70%, transparent);
+}
+
+/* tool card: left gradient rail + glass base (background layer stack) */
+.log .action-card--tool {
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--j-accent) 75%, transparent),
+      color-mix(in srgb, var(--j-accent-2) 60%, transparent)
+    ) left / 3px 100% no-repeat,
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--j-accent) 5%, transparent),
+      transparent 40%
+    ),
+    color-mix(in srgb, var(--j-raised) 68%, transparent);
+}
+
+.log .action-card:hover {
+  border-color: color-mix(in srgb, var(--j-accent) 38%, var(--j-border));
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--j-hairline) 70%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--j-accent) 14%, transparent),
+    0 4px 14px -8px color-mix(in srgb, var(--j-accent) 45%, transparent);
+}
+
+.log .action-card-summary {
+  cursor: pointer;
+}
+
+.log .action-card-summary:focus-visible {
+  outline: none;
+  box-shadow: var(--j-glow-accent);
+  border-radius: inherit;
+}
+
+/* OPEN card: rises from compact to a glass card — shadow + strong border */
+.log .tool-call[open] {
+  border-color: color-mix(in srgb, var(--j-accent) 32%, var(--j-border));
+  box-shadow:
+    inset 0 1px 0 var(--j-hairline),
+    var(--j-shadow-2);
+}
+
+.log .tool-call--compact[open] {
+  border-radius: var(--j-r-md);
+}
+
+.log .tool-call[open] .action-card-summary {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--j-accent-soft) 30%, transparent),
+    transparent
+  );
+}
+
+/* row text: dim when closed & compact; lights up on hover */
+.log .tool-call--compact .action-card-title {
+  transition: color var(--j-dur-fast) var(--j-ease);
+}
+
+.log .tool-call--compact:hover .action-card-title,
+.log .tool-call--compact[open] .action-card-title {
+  color: var(--j-ink);
+}
+
+/* running card: azure pulse preserved, rail more vivid */
+.log .tool-call[data-status="running"] {
+  border-color: color-mix(in srgb, var(--j-accent) 40%, var(--j-border));
+}
+
+.log .action-card--tool[data-status="running"] {
+  background:
+    linear-gradient(
+      180deg,
+      var(--j-accent),
+      var(--j-accent-2)
+    ) left / 3px 100% no-repeat,
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--j-accent) 7%, transparent),
+      transparent 45%
+    ),
+    color-mix(in srgb, var(--j-raised) 68%, transparent);
+}
+
+/* error card: danger rail */
+.log .tool-call[data-status="error"] {
+  border-color: color-mix(in srgb, var(--j-danger) 40%, var(--j-border));
+}
+
+.log .action-card--tool[data-status="error"] {
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--j-danger) 80%, transparent),
+      color-mix(in srgb, var(--j-warn) 60%, transparent)
+    ) left / 3px 100% no-repeat,
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--j-danger) 7%, transparent),
+      transparent 45%
+    ),
+    color-mix(in srgb, var(--j-raised) 68%, transparent);
+}
+
+/* arg chip + result preview — mono telemetry, existing single-line flow preserved */
+.log .tool-call-chip {
+  border: 1px solid color-mix(in srgb, var(--j-accent) 20%, var(--j-border));
+  background: color-mix(in srgb, var(--j-bg) 65%, var(--j-accent-soft));
+}
+
+.log .tool-call-result-preview::before {
+  color: var(--j-energy);
+  text-shadow: 0 0 6px color-mix(in srgb, var(--j-energy) 45%, transparent);
+}
+
+/* detail panels: deep glass base */
+.log .action-card-panel {
+  border-top: 1px solid color-mix(in srgb, var(--j-border) 85%, transparent);
+  background: color-mix(in srgb, var(--j-bg) 58%, transparent);
+}
+
+.log .action-card-pre {
+  border: 1px solid var(--j-border);
+  background: color-mix(in srgb, var(--j-bg) 78%, var(--j-raised));
+  scrollbar-width: thin;
+}
+
+.log .action-card-copy {
+  cursor: pointer;
+  transition:
+    color var(--j-dur-fast) var(--j-ease),
+    border-color var(--j-dur-fast) var(--j-ease);
+}
+
+.log .action-card-copy:hover {
+  color: var(--j-ink);
+  border-color: color-mix(in srgb, var(--j-accent) 40%, var(--j-border-strong));
+}
+
+.log .action-card-copy:focus-visible {
+  outline: none;
+  box-shadow: var(--j-glow-accent);
+}
+
+/* tool group toggle pill (N tool calls ⌄) */
+.log .tool-calls-toggle {
+  cursor: pointer;
+  background: color-mix(in srgb, var(--j-raised) 58%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--j-hairline) 60%, transparent);
+}
+
+.log .tool-calls-toggle:hover {
+  border-color: color-mix(in srgb, var(--j-accent) 30%, var(--j-border-strong));
+}
+
+.log .tool-calls-group[data-running="1"] .tool-calls-toggle {
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--j-hairline) 60%, transparent),
+    0 0 12px -4px color-mix(in srgb, var(--j-accent) 45%, transparent);
+}
+
+/* open group body: gradient rail */
+.log .tool-calls-body {
+  border-left: 2px solid transparent;
+  border-image: none; /* we don't touch radius; a flat rail is enough */
+  border-left-color: color-mix(in srgb, var(--j-accent) 35%, var(--j-border));
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════════
+   §14 · CHAT CARDS — MEMORY CHIP + WARNINGS
+   memory-use: azure→purple gradient pill + purple glow.
+   history-warn: amber glass strip.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+.log .memory-use,
+.log .action-card--memory {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--j-accent) 11%, var(--j-raised)),
+      color-mix(in srgb, var(--j-accent-2) 11%, var(--j-raised))
+    ) padding-box,
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--j-accent) 45%, var(--j-border)),
+      color-mix(in srgb, var(--j-accent-2) 50%, var(--j-border))
+    ) border-box;
+  box-shadow:
+    inset 0 1px 0 var(--j-hairline),
+    0 4px 16px -6px color-mix(in srgb, var(--j-accent-2) 50%, transparent);
+}
+
+.log .memory-use:hover,
+.log .action-card--memory:hover {
+  box-shadow:
+    inset 0 1px 0 var(--j-hairline),
+    0 6px 22px -8px color-mix(in srgb, var(--j-accent-2) 65%, transparent);
+}
+
+.log .memory-use .action-card-title,
+.log .action-card--memory .action-card-title {
+  background: var(--j-accent-grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
+/* history-trim warning: amber glass */
+.log .history-warn {
+  border: 1px dashed color-mix(in srgb, var(--j-warn) 38%, var(--j-border));
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--j-warn) 10%, transparent),
+      color-mix(in srgb, var(--j-warn) 4%, transparent)
+    );
+  -webkit-backdrop-filter: blur(var(--j-blur));
+  backdrop-filter: blur(var(--j-blur));
+  color: var(--j-warn);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--j-hairline) 50%, transparent);
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════════
+   §15 · CHAT — BUBBLE POLISH
+   ONLY bg/border/shadow are refined — geometry (radius/padding/width) and
+   the .bubble-bot-pending::after thinking animation contract are UNTOUCHED.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* user bubble: gradient-bordered accent glass */
+.log .bubble-user {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--j-accent) 11%, var(--j-panel)),
+      color-mix(in srgb, var(--j-accent-2) 9%, var(--j-panel))
+    ) padding-box,
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--j-accent) 38%, var(--j-border)),
+      color-mix(in srgb, var(--j-accent-2) 30%, var(--j-border))
+    ) border-box;
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--j-hairline) 80%, transparent),
+    var(--j-shadow-1);
+}
+
+/* assistant bubble: premium glass — only system/error rows (Gemini rows are plain text) */
+.log .row:not(.row-assistant) .bubble-bot,
+.log .row:not(.row-assistant) .bubble-assistant {
+  border: 1px solid var(--j-border);
+  background:
+    linear-gradient(
+      160deg,
+      color-mix(in srgb, var(--j-accent) 3%, transparent),
+      transparent 50%
+    ),
+    color-mix(in srgb, var(--j-raised) 86%, transparent);
+  box-shadow:
+    inset 0 1px 0 var(--j-hairline),
+    var(--j-shadow-1);
+}
+
+/* Gemini-style assistant: surfaces layer must not override the akana-chat override */
+.log .row-assistant .bubble-bot,
+.log .row-assistant .bubble-assistant {
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* error bubble: danger glass */
+.log .bubble-bot-err {
+  border-color: color-mix(in srgb, var(--j-danger) 45%, var(--j-border));
+  background:
+    linear-gradient(
+      160deg,
+      color-mix(in srgb, var(--j-danger) 8%, transparent),
+      transparent 60%
+    ),
+    color-mix(in srgb, var(--j-danger) 6%, var(--j-raised));
+}
+
+/* TTS speaking bubble: energy ring — soft double layer */
+.log .bubble-assistant.is-speaking,
+.log .bubble-bot.is-speaking {
+  border-color: color-mix(in srgb, var(--j-energy) 38%, var(--j-border));
+  box-shadow:
+    inset 0 1px 0 var(--j-hairline),
+    0 0 0 1px color-mix(in srgb, var(--j-energy) 22%, transparent),
+    0 4px 18px -8px color-mix(in srgb, var(--j-energy) 45%, transparent);
+}
+
+/* assistant avatar: identity gradient + calm glow (without touching geometry) */
+.log .row-assistant .msg-avatar {
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--j-accent-ink) 25%, transparent),
+    0 4px 16px -6px color-mix(in srgb, var(--j-accent) 60%, transparent);
+}
+
+.log .msg-label {
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════════
+   §16 · LIGHT THEME ([data-theme="light"]) — bump glass opacity
+   Tokens flip automatically; transparent glass layers can dissolve too much
+   on a light base → opacity is raised on critical surfaces.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+[data-theme="light"] .settings-panel {
+  background:
+    linear-gradient(var(--j-overlay), var(--j-overlay)) padding-box,
+    linear-gradient(
+      150deg,
+      color-mix(in srgb, var(--j-accent) 35%, var(--j-border-strong)),
+      color-mix(in srgb, var(--j-accent-2) 28%, var(--j-border-strong)) 55%,
+      color-mix(in srgb, var(--j-accent-3) 22%, var(--j-border-strong))
+    ) border-box;
+}
+
+[data-theme="light"] .settings-panel::after {
+  opacity: 0.6;
+}
+
+[data-theme="light"] .settings-block,
+[data-theme="light"] .settings-block:first-of-type {
+  background: color-mix(in srgb, var(--j-panel) 88%, transparent);
+}
+
+[data-theme="light"] .settings-nav {
+  background: color-mix(in srgb, var(--j-bg) 70%, transparent);
+}
+
+[data-theme="light"] .settings-tab:hover {
+  background: color-mix(in srgb, var(--j-panel) 92%, transparent);
+}
+
+[data-theme="light"] .settings-block input,
+[data-theme="light"] .settings-block select,
+[data-theme="light"] .settings-block textarea {
+  background: var(--j-panel);
+}
+
+[data-theme="light"] .settings-hero {
+  background:
+    radial-gradient(
+      120% 140% at 12% 0%,
+      color-mix(in srgb, var(--j-accent) 8%, transparent),
+      transparent 60%
+    ),
+    radial-gradient(
+      100% 130% at 88% 10%,
+      color-mix(in srgb, var(--j-accent-2) 6%, transparent),
+      transparent 60%
+    ),
+    var(--j-panel);
+}
+
+[data-theme="light"] .stat-card {
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--j-accent) 50%, transparent),
+      color-mix(in srgb, var(--j-accent-2) 40%, transparent) 60%,
+      color-mix(in srgb, var(--j-accent-3) 30%, transparent)
+    ) top / 100% 2px no-repeat,
+    var(--j-panel);
+}
+
+[data-theme="light"] .stat-strip,
+[data-theme="light"] .settings-hero-metrics,
+[data-theme="light"] .settings-meta-list-rich,
+[data-theme="light"] .action-card {
+  background: var(--j-panel);
+}
+
+[data-theme="light"] .ui-toast {
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--j-accent) 4%, transparent),
+      transparent 45%
+    ),
+    var(--j-overlay);
+}
+
+[data-theme="light"] .log .action-card {
+  background: color-mix(in srgb, var(--j-panel) 92%, transparent);
+}
+
+[data-theme="light"] .log .action-card--tool {
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--j-accent) 70%, transparent),
+      color-mix(in srgb, var(--j-accent-2) 55%, transparent)
+    ) left / 3px 100% no-repeat,
+    color-mix(in srgb, var(--j-panel) 92%, transparent);
+}
+
+[data-theme="light"] .log .row:not(.row-assistant) .bubble-bot,
+[data-theme="light"] .log .row:not(.row-assistant) .bubble-assistant {
+  background:
+    linear-gradient(
+      160deg,
+      color-mix(in srgb, var(--j-accent) 3%, transparent),
+      transparent 50%
+    ),
+    var(--j-panel);
+}
+
+[data-theme="light"] .log .row-assistant .bubble-bot,
+[data-theme="light"] .log .row-assistant .bubble-assistant {
+  background: transparent;
+}
+
+[data-theme="light"] .log .history-warn {
+  background: color-mix(in srgb, var(--j-warn) 10%, var(--j-panel));
+}
+
+[data-theme="light"] #setup-banner,
+[data-theme="light"] .setup-banner {
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--j-warn) 75%, transparent),
+      color-mix(in srgb, var(--j-accent) 50%, transparent)
+    ) left / 3px 100% no-repeat,
+    color-mix(in srgb, var(--j-warn) 8%, var(--j-panel));
+}
+
+[data-theme="light"] .kbd-help kbd {
+  background: var(--j-panel);
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════════
+   §17 · RESPONSIVE — narrow-screen fixes (only touches v2 visuals)
+   ════════════════════════════════════════════════════════════════════════════ */
+
+@media (max-width: 1240px) {
+  .settings-panel {
+    width: min(1024px, 95vw);
+  }
+}
+
+@media (max-width: 900px) {
+  .settings-panel {
+    width: calc(100vw - var(--j-sp-4));
+    border-radius: var(--j-r-lg);
+  }
+
+  .settings-panel-head {
+    padding: var(--j-sp-4);
+  }
+
+  .settings-scroll {
+    padding: var(--j-sp-3) var(--j-sp-3) var(--j-sp-5);
+  }
+
+  .settings-block,
+  .settings-block:first-of-type {
+    padding: var(--j-sp-3);
+    border-radius: var(--j-r-md);
+  }
+
+  /* on narrow screens nav becomes a horizontal strip (legacy media query
+     layout) — active left rail is hidden, no bottom rail used: stays clean */
+  .settings-tab.is-active::before {
+    display: none;
+  }
+}
+
+@media (max-width: 600px) {
+  .ui-toast-stack {
+    right: var(--j-sp-2);
+    left: var(--j-sp-2);
+    max-width: none;
+  }
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════════
+   §18 · REDUCED MOTION — all v2-added transforms turn off
+   (tokens already zero the durations; leftover transforms are neutralized too)
+   ════════════════════════════════════════════════════════════════════════════ */
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-tab:hover,
+  .action-card:hover,
+  .action-card:active {
+    transform: none;
+  }
+
+  .btn-settings-close:hover {
+    transform: none;
+  }
+
+  .settings-tab,
+  .action-card,
+  .toggle-track,
+  .toggle-track::after,
+  .theme-picker-option span,
+  .ui-toast,
+  .log .action-card,
+  .log .tool-call--compact .action-card-title,
+  .log .action-card-copy {
+    transition: none;
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   §19 · CHAT ARCHIVE — PINNED GROUPING (chat-archive-group)
+   "Pinned" / "Chats" group headers in the sidebar list.
+   The header <li> is inert (role=presentation, aria-hidden) — the listbox
+   stays clean.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+.chat-archive-group {
+  padding: 0.8rem 0.9rem 0.3rem;
+  list-style: none;
+  font-family: var(--j-font-ui);
+  font-size: var(--j-fs-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: var(--j-tracking-wide);
+  color: var(--j-ink-faint);
+  user-select: none;
+  pointer-events: none; /* inert: never interferes with click/menu delegation */
+}
+
+/* Keep the first group flush against the top of the list */
+.chat-archive-group:first-child {
+  padding-top: 0.35rem;
+}
+
+/* "Pinned" group (always the first group when present): tiny gradient pin-dot on the span head */
+.chat-archive-group:first-child span::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 0.45em;
+  border-radius: 50%;
+  background: var(--j-accent-grad);
+  vertical-align: 0.08em;
+}
+
+/* Pinned item: drop the old 📌 emoji prefix (styles.css + akana-v2.css) —
+   replace with a clean 6px gradient dot before the title (design rule: no emoji) */
+body .chat-archive-item.is-pinned .chat-archive-item-title::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 0.45em;
+  border-radius: 50%;
+  background: var(--j-accent-grad);
+  vertical-align: 0.08em;
+  font-size: inherit;
+}
+
+/* Very subtle accent left-tint on the pinned item (in glass language, restrained).
+   :not(.is-active): don't override the active chat's azure→purple glass background */
+body .chat-archive-item.is-pinned:not(.is-active) {
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--j-accent) 9%, transparent),
+      transparent 55%
+    );
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   §20 · CHAT ARCHIVE — TIME GROUPS (chat-archive-group--time)
+   "Today / Yesterday / This week / Older" headers inherit the §19 micro-label
+   style; to sharpen separation a thin hairline is added to the right of the
+   label (flex row). The header <li> stays inert.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* Label + hairline extending to the right: span becomes a flex row */
+.chat-archive-group--time span {
+  display: flex;
+  align-items: center;
+  gap: 0.55em;
+}
+
+/* Hairline: 1px line filling the remaining width after the label */
+.chat-archive-group--time span::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--j-hairline);
+}
+
+/* When there is no Pinned group a time group drops into first place — §19's
+   :first-child pin-dot must NOT be inherited by it (the pin-dot belongs only
+   to the "Pinned" header) */
+.chat-archive-group--time:first-child span::before {
+  content: none;
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════════
+   §21 · APPROVAL CARD STACK (.akana-approval-stack) — approval reflex surface
+   akana-settings.js injects a single fixed container into body; each card is
+   an approval request (plan_update "proposed" / tools.recent approval entry).
+   Nebula language: glass slab + gradient WARN border (warn→danger), motion
+   only transform/opacity, zero under reduced-motion. Colors ONLY via
+   var(--j-*). Layer: ABOVE nav (40), BELOW modal (80) → calc(var(--j-z-modal) - 10).
+   ════════════════════════════════════════════════════════════════════════════ */
+
+.akana-approval-stack {
+  position: fixed;
+  top: 76px; /* below the top bar */
+  right: var(--j-sp-4);
+  z-index: calc(var(--j-z-modal) - 10);
+  display: flex;
+  flex-direction: column;
+  gap: var(--j-sp-3);
+  width: min(360px, calc(100vw - 2 * var(--j-sp-4)));
+  pointer-events: none; /* empty area must not swallow clicks */
+  font-family: var(--j-font-ui);
+}
+
+.akana-approval-stack > * {
+  pointer-events: auto;
+}
+
+/* Overflow chip ("+N more") is the FIRST child of the container; flex order sends it last */
+.akana-approval-overflow {
+  order: 99;
+  align-self: flex-end;
+  padding: 0.2rem 0.65rem;
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-pill);
+  background: color-mix(in srgb, var(--j-panel) 60%, var(--j-overlay));
+  backdrop-filter: blur(var(--j-blur));
+  -webkit-backdrop-filter: blur(var(--j-blur));
+  color: var(--j-ink-dim);
+  font-size: var(--j-fs-xs);
+  font-weight: 700;
+  letter-spacing: var(--j-tracking-wide);
+  text-transform: uppercase;
+}
+
+/* ── Card: glass base + gradient warn border (padding-box / border-box) ────── */
+.akana-approval-card {
+  border: 1px solid transparent;
+  border-radius: var(--j-r-md);
+  background:
+    linear-gradient(
+        color-mix(in srgb, var(--j-overlay) 88%, var(--j-warn)),
+        color-mix(in srgb, var(--j-overlay) 92%, var(--j-warn))
+      )
+      padding-box,
+    linear-gradient(
+        135deg,
+        color-mix(in srgb, var(--j-warn) 70%, transparent),
+        color-mix(in srgb, var(--j-danger) 45%, transparent) 60%,
+        color-mix(in srgb, var(--j-accent-2) 40%, transparent)
+      )
+      border-box;
+  backdrop-filter: blur(var(--j-blur));
+  -webkit-backdrop-filter: blur(var(--j-blur));
+  box-shadow: var(--j-shadow-2), inset 0 1px 0 var(--j-hairline);
+  padding: var(--j-sp-3) var(--j-sp-4);
+  /* Entry: slides in from the right — transform/opacity only */
+  opacity: 0;
+  transform: translate3d(14px, -6px, 0);
+  transition:
+    transform var(--j-dur-med) var(--j-ease),
+    opacity var(--j-dur-med) var(--j-ease);
+}
+
+.akana-approval-card.is-in {
+  opacity: 1;
+  transform: none;
+}
+
+.akana-approval-card.is-out {
+  opacity: 0;
+  transform: translate3d(18px, 0, 0);
+}
+
+.akana-approval-card.is-busy {
+  opacity: 0.72;
+}
+
+.akana-approval-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--j-sp-2);
+}
+
+.akana-approval-title {
+  font-family: var(--j-font-display);
+  font-size: var(--j-fs-sm);
+  font-weight: 700;
+  letter-spacing: var(--j-tracking-wide);
+  text-transform: uppercase;
+  /* Identity gradient in the title — shifted to a warn tone in warning context */
+  background: linear-gradient(110deg, var(--j-warn), var(--j-accent-2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Risk badge — low/medium/high families */
+.akana-approval-risk {
+  flex: none;
+  padding: 0.1rem 0.55rem;
+  border-radius: var(--j-r-pill);
+  font-size: var(--j-fs-xs);
+  font-weight: 700;
+  letter-spacing: var(--j-tracking-wide);
+  text-transform: uppercase;
+  border: 1px solid var(--j-border);
+  color: var(--j-ink-dim);
+}
+
+.akana-approval-risk.is-low {
+  color: var(--j-energy);
+  border-color: color-mix(in srgb, var(--j-energy) 45%, transparent);
+  background: color-mix(in srgb, var(--j-energy) 12%, transparent);
+}
+
+.akana-approval-risk.is-medium {
+  color: var(--j-warn);
+  border-color: color-mix(in srgb, var(--j-warn) 45%, transparent);
+  background: color-mix(in srgb, var(--j-warn) 12%, transparent);
+}
+
+.akana-approval-risk.is-high {
+  color: var(--j-danger);
+  border-color: color-mix(in srgb, var(--j-danger) 45%, transparent);
+  background: color-mix(in srgb, var(--j-danger) 12%, transparent);
+}
+
+.akana-approval-summary {
+  margin: var(--j-sp-2) 0 0;
+  color: var(--j-ink);
+  font-size: var(--j-fs-sm);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+/* ── Action/command text: when closed, ~3-line-clamped mono preview ──────── */
+.akana-approval-cmd {
+  margin-top: var(--j-sp-2);
+  border: 1px solid var(--j-hairline);
+  border-radius: var(--j-r-sm);
+  background: color-mix(in srgb, var(--j-panel) 70%, transparent);
+}
+
+.akana-approval-cmd-preview {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+  padding: var(--j-sp-2) var(--j-sp-3);
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+  line-height: 1.45;
+  color: var(--j-ink-dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  list-style: none; /* default disclosure arrow hidden — the text itself is the trigger */
+}
+
+.akana-approval-cmd-preview::-webkit-details-marker {
+  display: none;
+}
+
+.akana-approval-cmd-preview:focus-visible {
+  outline: none;
+  box-shadow: var(--j-glow-accent);
+  border-radius: var(--j-r-sm);
+}
+
+/* When open, hide the preview and show the full-text <pre> (avoid double text) */
+.akana-approval-cmd[open] .akana-approval-cmd-preview {
+  display: block;
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
+  max-height: 1.6em;
+  overflow: hidden;
+  opacity: 0.55;
+}
+
+.akana-approval-cmd-full {
+  margin: 0;
+  padding: 0 var(--j-sp-3) var(--j-sp-2);
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+  line-height: 1.45;
+  color: var(--j-ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 220px;
+  overflow: auto;
+}
+
+/* ── Action buttons: Allow (gradient fill) / Deny (ghost danger) ───── */
+.akana-approval-actions {
+  display: flex;
+  gap: var(--j-sp-2);
+  margin-top: var(--j-sp-3);
+}
+
+.akana-approval-allow,
+.akana-approval-deny {
+  flex: 1;
+  padding: 0.45rem 0.9rem;
+  border-radius: var(--j-r-sm);
+  font-family: var(--j-font-ui);
+  font-size: var(--j-fs-sm);
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    transform var(--j-dur-fast) var(--j-ease),
+    opacity var(--j-dur-fast) var(--j-ease),
+    box-shadow var(--j-dur-fast) var(--j-ease);
+}
+
+.akana-approval-allow {
+  border: 1px solid transparent;
+  background: var(--j-accent-grad);
+  color: var(--j-accent-ink);
+  box-shadow: var(--j-shadow-accent);
+}
+
+.akana-approval-allow:hover {
+  transform: translateY(-1px);
+}
+
+.akana-approval-deny {
+  border: 1px solid color-mix(in srgb, var(--j-danger) 45%, transparent);
+  background: transparent;
+  color: var(--j-danger);
+}
+
+.akana-approval-deny:hover {
+  transform: translateY(-1px);
+  background: color-mix(in srgb, var(--j-danger) 10%, transparent);
+}
+
+.akana-approval-allow:focus-visible,
+.akana-approval-deny:focus-visible {
+  outline: none;
+  box-shadow: var(--j-glow-accent);
+}
+
+.akana-approval-allow:disabled,
+.akana-approval-deny:disabled {
+  cursor: default;
+  opacity: 0.55;
+  transform: none;
+}
+
+/* Narrow screen: stack spans the full width */
+@media (max-width: 600px) {
+  .akana-approval-stack {
+    right: var(--j-sp-2);
+    left: var(--j-sp-2);
+    width: auto;
+  }
+}
+
+/* Reduced motion: entry/exit transforms fully turn off
+   (token durations are already 0ms — leftover transforms neutralized too) */
+@media (prefers-reduced-motion: reduce) {
+  .akana-approval-card,
+  .akana-approval-card.is-out,
+  .akana-approval-allow:hover,
+  .akana-approval-deny:hover {
+    transform: none;
+  }
+
+  .akana-approval-card {
+    opacity: 1;
+    transition: none;
+  }
+}

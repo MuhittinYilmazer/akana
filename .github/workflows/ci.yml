@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      CURSOR_API_KEY: ci-placeholder-not-used-in-tests
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Setup Akana (no voice models)
+        run: python akana.py setup -y --voice none
+
+      - name: Core smoke
+        run: python akana.py smoke
+
+      - name: Full test suite
+        run: python akana.py test
+
+  # Exercise the ACTUAL bootstrap scripts (install.sh / install.ps1) — the code a
+  # first-time user runs, and the highest-drift-risk files (three parallel Python
+  # discovery + arg-forwarding implementations). The main `test` job calls
+  # `python akana.py setup` directly and never touches these wrappers, so the
+  # Python-discovery logic in install.sh/install.ps1 ships untested otherwise.
+  bootstrap:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            script: bash install.sh --yes
+          - os: windows-latest
+            script: powershell -ExecutionPolicy Bypass -File install.ps1 --yes
+    runs-on: ${{ matrix.os }}
+    env:
+      CURSOR_API_KEY: ci-placeholder-not-used-in-tests
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Bootstrap via install script
+        run: ${{ matrix.script }}
+
+      - name: Verify the bootstrapped install (Python discovery + venv)
+        run: python akana.py doctor

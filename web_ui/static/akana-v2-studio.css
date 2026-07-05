@@ -1,0 +1,1308 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   AKANA V2 — "NEBULA COMMAND CENTER" · Memory Studio skin
+   ───────────────────────────────────────────────────────────────────────────
+   This file loads LAST in memory.html; it overrides tokens.css / styles.css /
+   akana-memory-studio.css. The old file uses the pattern
+   `body.memory-studio-page .x` + occasional !important — here we counter it
+   with the same (or higher) specificity; on equal specificity + !important
+   collisions the LATER-loaded file wins → we win.
+
+   Design language — NEBULA:
+   · dark-first premium; azure→purple→cyan aurora identity
+   · glass panels: color-mix base + backdrop blur + inner light (hairline)
+   · gradient borders: padding-box / border-box double-background technique
+   · titles in display font (600, tight tracking), metrics mono tabular
+   · motion only transform/opacity; fully off under reduced-motion
+   · hover never shifts layout (transform only); focus ring visible
+
+   CONTRACT: class/id names untouched; nothing display:none'd besides
+   [hidden]; the view-switch mechanic is preserved.
+   Colors 100% token: var(--j-*) + color-mix — NO raw hex.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── 0. SCENE: nebula base ─────────────────────────────────────────────
+   Pulls the styles.css .app-bg orbs into the aurora palette; the page breathes. */
+body.memory-studio-page {
+  background: radial-gradient(120% 90% at 85% -10%, color-mix(in srgb, var(--j-accent-2) 7%, transparent), transparent 60%), radial-gradient(110% 80% at -10% 20%, color-mix(in srgb, var(--j-accent) 7%, transparent), transparent 55%), radial-gradient(90% 70% at 50% 110%, color-mix(in srgb, var(--j-accent-3) 5%, transparent), transparent 60%), linear-gradient(180deg, var(--j-bg-grad-a), var(--j-bg-grad-b));
+  background-attachment: fixed;
+}
+
+body.memory-studio-page .app-bg-orb-a {
+  background: radial-gradient(circle, color-mix(in srgb, var(--j-accent) 22%, transparent), transparent 70%);
+}
+
+body.memory-studio-page .app-bg-orb-b {
+  background: radial-gradient(circle, color-mix(in srgb, var(--j-accent-2) 18%, transparent), transparent 70%);
+}
+
+body.memory-studio-page ::selection {
+  background: color-mix(in srgb, var(--j-accent) 30%, transparent);
+  color: var(--j-ink);
+}
+
+/* ─── 1. TOP BAR: thin glass strip ─────────────────────────────────────────── */
+body.memory-studio-page .mem-topbar {
+  gap: var(--j-sp-4);
+  background: color-mix(in srgb, var(--j-bg) 55%, transparent) !important;
+  border-bottom: 1px solid var(--j-hairline) !important;
+  backdrop-filter: blur(18px) saturate(1.25);
+  -webkit-backdrop-filter: blur(18px) saturate(1.25);
+  box-shadow: 0 1px 0 0 color-mix(in srgb, var(--j-accent) 8%, transparent);
+}
+
+/* Brand: display font + flowing gradient text */
+body.memory-studio-page .memory-studio-brand-text h1 {
+  margin: 0;
+  font-family: var(--j-font-display);
+  font-size: var(--j-fs-lg);
+  font-weight: 600;
+  letter-spacing: var(--j-tracking-tight);
+  background: var(--j-title-grad);
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
+body.memory-studio-page .memory-studio-subtitle {
+  display: inline-block;
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+  letter-spacing: var(--j-tracking-wide);
+  text-transform: uppercase;
+  color: var(--j-ink-faint);
+}
+
+/* Back link: quiet pill; aurora breath on hover */
+body.memory-studio-page .memory-studio-back {
+  border-radius: var(--j-r-pill);
+  cursor: pointer;
+  transition: color var(--j-dur-fast) var(--j-ease), background var(--j-dur-fast) var(--j-ease), box-shadow var(--j-dur-fast) var(--j-ease);
+}
+
+body.memory-studio-page .memory-studio-back:hover {
+  color: var(--j-accent);
+  background: color-mix(in srgb, var(--j-accent) 10%, transparent);
+}
+
+body.memory-studio-page .memory-studio-back:focus-visible,
+body.memory-studio-page .memory-studio-nav-chat:focus-visible,
+body.memory-studio-page #btn-theme:focus-visible {
+  outline: 2px solid var(--j-accent);
+  outline-offset: 2px;
+  border-radius: var(--j-r-pill);
+}
+
+/* ─── 1b. GLOBAL SEARCH: gradient-bordered glass pill ──────────────────────────
+   Border = double background (padding-box base + border-box aurora); on focus
+   the gradient hits full saturation and the pill glows outward. */
+body.memory-studio-page .mem-topbar-search {
+  flex: 1 1 auto;
+  display: flex;
+  justify-content: center;
+  min-width: 0;
+  padding-inline: var(--j-sp-4);
+}
+
+body.memory-studio-page .mem-topbar-search .mem-search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: min(480px, 100%);
+  border: 1px solid transparent;
+  border-radius: var(--j-r-pill);
+  background: linear-gradient( color-mix(in srgb, var(--j-bg) 78%, transparent), color-mix(in srgb, var(--j-bg) 78%, transparent) ) padding-box, linear-gradient( 120deg, color-mix(in srgb, var(--j-accent) 45%, var(--j-border)), color-mix(in srgb, var(--j-accent-2) 38%, var(--j-border)) 50%, color-mix(in srgb, var(--j-accent-3) 38%, var(--j-border)) ) border-box;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: inset 0 1px 0 var(--j-hairline), var(--j-shadow-1);
+  transition: box-shadow var(--j-dur-med) var(--j-ease);
+}
+
+body.memory-studio-page .mem-topbar-search .mem-search-wrap:focus-within {
+  background: linear-gradient( color-mix(in srgb, var(--j-bg) 86%, transparent), color-mix(in srgb, var(--j-bg) 86%, transparent) ) padding-box, linear-gradient( 120deg, var(--j-accent), var(--j-accent-2) 50%, var(--j-accent-3) ) border-box;
+  box-shadow: inset 0 1px 0 var(--j-hairline), 0 0 0 4px color-mix(in srgb, var(--j-accent) 14%, transparent), 0 0 28px -6px color-mix(in srgb, var(--j-accent) 45%, transparent);
+}
+
+body.memory-studio-page .mem-topbar-search .memory-search-icon {
+  position: absolute;
+  left: 0.9rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--j-ink-faint);
+  pointer-events: none;
+  transition: color var(--j-dur-fast) var(--j-ease);
+}
+
+body.memory-studio-page .mem-topbar-search .mem-search-wrap:focus-within .memory-search-icon {
+  color: var(--j-accent);
+}
+
+body.memory-studio-page #memory-global-search {
+  width: 100%;
+  padding: 0.55rem 1rem 0.55rem 2.4rem;
+  border: 0 !important;
+  border-radius: var(--j-r-pill);
+  background: transparent !important;
+  box-shadow: none !important;
+  color: var(--j-ink);
+  font-family: var(--j-font-ui);
+  font-size: var(--j-fs-sm);
+}
+
+body.memory-studio-page #memory-global-search:focus {
+  outline: none; /* the ring lives on the shell (.mem-search-wrap) */
+}
+
+body.memory-studio-page #memory-global-search::placeholder {
+  color: var(--j-ink-faint);
+}
+
+/* Theme button: soft aurora on hover */
+body.memory-studio-page #btn-theme {
+  cursor: pointer;
+  transition: color var(--j-dur-fast) var(--j-ease), background var(--j-dur-fast) var(--j-ease), transform var(--j-dur-fast) var(--j-ease);
+}
+
+body.memory-studio-page #btn-theme:hover {
+  color: var(--j-accent);
+  background: color-mix(in srgb, var(--j-accent) 12%, transparent);
+}
+
+/* ─── 2. SHELL: floating glass command deck ────────────────────────────────
+   Narrower (~1040px) and more "object"-like: deep shadow + gradient top
+   thread + inner light. */
+body.memory-studio-page .memory-studio-layout {
+  width: min(1040px, 100%);
+  margin-inline: auto;
+  padding-block: var(--j-sp-5);
+}
+
+body.memory-studio-page .mem-shell {
+  position: relative;
+  display: grid;
+  grid-template-columns: 224px minmax(0, 1fr);
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  background: linear-gradient( 180deg, color-mix(in srgb, var(--j-raised) 80%, transparent), color-mix(in srgb, var(--j-panel) 60%, transparent) 30% ) !important;
+  border: 1px solid color-mix(in srgb, var(--j-accent) 14%, var(--j-border-strong)) !important;
+  border-radius: var(--j-r-xl) !important;
+  box-shadow: inset 0 1px 0 var(--j-hairline), var(--j-shadow-3), 0 0 80px -40px color-mix(in srgb, var(--j-accent) 35%, transparent);
+  backdrop-filter: blur(20px) saturate(1.3);
+  -webkit-backdrop-filter: blur(20px) saturate(1.3);
+}
+
+/* Top thread: azure→purple→cyan sweep (the deck's signature) */
+body.memory-studio-page .mem-shell::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  z-index: 1;
+  background: linear-gradient( 90deg, transparent, color-mix(in srgb, var(--j-accent) 80%, transparent) 25%, color-mix(in srgb, var(--j-accent-2) 75%, transparent) 55%, color-mix(in srgb, var(--j-accent-3) 65%, transparent) 80%, transparent );
+  pointer-events: none;
+}
+
+/* In-deck nebula breath: calm azure ambient from the top-left */
+body.memory-studio-page .mem-shell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: radial-gradient(60% 40% at 12% 0%, color-mix(in srgb, var(--j-accent) 7%, transparent), transparent 70%), radial-gradient(50% 35% at 95% 8%, color-mix(in srgb, var(--j-accent-2) 5%, transparent), transparent 70%);
+  pointer-events: none;
+}
+
+/* Content flows above the pseudo-ambient */
+body.memory-studio-page .mem-rail,
+body.memory-studio-page .mem-content {
+  position: relative;
+  z-index: 1;
+}
+
+/* ─── 3. RAIL: inner glass column ────────────────────────────────────────────────
+   Its own glass + a thread on the right; items are spacious; active = aurora
+   fill + gradient left bar + glow. */
+body.memory-studio-page .mem-rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--j-sp-2);
+  padding: var(--j-sp-5) var(--j-sp-3) var(--j-sp-4);
+  border-right: 1px solid var(--j-hairline);
+  background: linear-gradient( 180deg, color-mix(in srgb, var(--j-raised) 70%, transparent), color-mix(in srgb, var(--j-panel) 30%, transparent) 70% );
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+body.memory-studio-page .mem-rail-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+}
+
+body.memory-studio-page .mem-rail-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--j-sp-3);
+  width: 100%;
+  padding: 0.7rem 0.8rem !important;
+  border: 1px solid transparent !important;
+  border-radius: var(--j-r-md) !important;
+  background: transparent !important;
+  color: var(--j-ink-dim) !important;
+  font-family: var(--j-font-ui) !important;
+  font-size: var(--j-fs-sm) !important;
+  font-weight: 600 !important;
+  letter-spacing: 0 !important;
+  text-transform: none !important;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--j-dur-fast) var(--j-ease), color var(--j-dur-fast) var(--j-ease), border-color var(--j-dur-fast) var(--j-ease), box-shadow var(--j-dur-fast) var(--j-ease), transform var(--j-dur-fast) var(--j-ease);
+}
+
+body.memory-studio-page .mem-rail-item:hover {
+  color: var(--j-ink) !important;
+  background: color-mix(in srgb, var(--j-accent) 8%, transparent) !important;
+  border-color: var(--j-hairline) !important;
+  transform: translateX(2px); /* layout does not shift: transform only */
+}
+
+/* Active: azure→purple glass fill, gradient border nuance, outer glow */
+body.memory-studio-page .mem-rail-item.is-active {
+  color: var(--j-ink) !important;
+  background: linear-gradient( 135deg, color-mix(in srgb, var(--j-accent) 16%, transparent), color-mix(in srgb, var(--j-accent-2) 13%, transparent) ) !important;
+  border-color: color-mix(in srgb, var(--j-accent) 38%, transparent) !important;
+  box-shadow: inset 0 1px 0 var(--j-hairline), 0 0 22px -8px color-mix(in srgb, var(--j-accent) 60%, transparent), var(--j-shadow-1);
+  transform: none;
+}
+
+/* Gradient left marker bar: vertical azure→purple→cyan */
+body.memory-studio-page .mem-rail-item.is-active::before {
+  content: "";
+  position: absolute;
+  left: -0.8rem;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 64%;
+  border-radius: var(--j-r-pill);
+  background: linear-gradient(180deg, var(--j-accent), var(--j-accent-2) 60%, var(--j-accent-3));
+  box-shadow: 0 0 10px color-mix(in srgb, var(--j-accent) 55%, transparent);
+}
+
+body.memory-studio-page .mem-rail-item:focus-visible {
+  outline: 2px solid var(--j-accent);
+  outline-offset: 2px;
+}
+
+body.memory-studio-page .mem-rail-icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  color: currentColor;
+  transition: color var(--j-dur-fast) var(--j-ease), filter var(--j-dur-fast) var(--j-ease);
+}
+
+/* Active icon: azure tint + thin light halo (since stroke=currentColor,
+   we fake the "gradient feel" with color + drop-shadow instead of a gradient) */
+body.memory-studio-page .mem-rail-item.is-active .mem-rail-icon {
+  color: var(--j-accent);
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--j-accent) 55%, transparent));
+}
+
+body.memory-studio-page .mem-rail-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Active label: aurora gradient text */
+body.memory-studio-page .mem-rail-item.is-active > .mem-rail-label {
+  background: var(--j-accent-grad);
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Rail badge: gradient pill (inbox pending count) */
+body.memory-studio-page .mem-rail-badge,
+body.memory-studio-page .mem-rail-badge.memory-tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.35rem;
+  margin-left: auto;
+  padding: 0.08rem 0.45rem;
+  border: 0;
+  border-radius: var(--j-r-pill);
+  background: var(--j-accent-grad);
+  color: var(--j-accent-ink);
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 2px 10px -2px color-mix(in srgb, var(--j-accent) 60%, transparent);
+}
+
+body.memory-studio-page .mem-rail-badge[hidden] {
+  display: none;
+}
+
+/* Rail foot: refresh button */
+body.memory-studio-page .mem-rail-foot {
+  margin-top: auto;
+  padding-top: var(--j-sp-3);
+  border-top: 1px solid var(--j-hairline);
+}
+
+body.memory-studio-page .mem-rail-refresh {
+  display: flex;
+  align-items: center;
+  gap: var(--j-sp-2);
+  width: 100%;
+  justify-content: flex-start;
+  border-radius: var(--j-r-md);
+  cursor: pointer;
+  transition: color var(--j-dur-fast) var(--j-ease), background var(--j-dur-fast) var(--j-ease);
+}
+
+body.memory-studio-page .mem-rail-refresh:hover {
+  color: var(--j-accent);
+  background: color-mix(in srgb, var(--j-accent) 10%, transparent);
+}
+
+body.memory-studio-page .mem-rail-refresh:focus-visible {
+  outline: 2px solid var(--j-accent);
+  outline-offset: 2px;
+}
+
+/* ─── 4. CONTENT + VIEW HEADERS ──────────────────────────────────────
+   Title in display font, gradient text via --j-title-grad; subtitle calm.
+   View-switch animation is transform/opacity-only. */
+body.memory-studio-page .mem-content {
+  min-width: 0;
+  padding: var(--j-sp-6) var(--j-sp-6) calc(var(--j-sp-6) + var(--j-sp-3));
+}
+
+body.memory-studio-page .mem-view {
+  animation: jv2-view-in var(--j-dur-med) var(--j-ease) both;
+}
+
+@keyframes jv2-view-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+
+body.memory-studio-page .mem-view-head {
+  margin-bottom: var(--j-sp-5);
+}
+
+body.memory-studio-page .mem-view-title {
+  margin: 0 0 var(--j-sp-2);
+  width: fit-content;
+  font-family: var(--j-font-display);
+  font-size: var(--j-fs-2xl);
+  font-weight: 600;
+  letter-spacing: var(--j-tracking-tight);
+  line-height: 1.1;
+  background: var(--j-title-grad);
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
+body.memory-studio-page .mem-view-sub {
+  margin: 0;
+  max-width: 62ch;
+  font-size: var(--j-fs-sm);
+  line-height: 1.55;
+  color: var(--j-ink-dim);
+}
+
+body.memory-studio-page .mem-view-sub strong {
+  color: var(--j-ink);
+  font-weight: 600;
+}
+
+/* ─── 5. HERO METRIC CARDS: dramatic glass ───────────────────────────────
+   3px gradient top rail (azure→purple sweep), 2.2rem mono value + text
+   glow, hover = -2px lift + accent border. pending semantics preserved
+   (warn/danger rail + value color). */
+body.memory-studio-page .mem-hero-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  gap: var(--j-sp-3);
+  margin-bottom: var(--j-sp-5);
+}
+
+body.memory-studio-page .mem-hero-card {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: var(--j-sp-1);
+  min-height: 6.6rem;
+  padding: var(--j-sp-4);
+  background: radial-gradient(120% 80% at 50% -20%, color-mix(in srgb, var(--j-accent) 7%, transparent), transparent 60%), color-mix(in srgb, var(--j-raised) 85%, transparent) !important;
+  border: 1px solid var(--j-border) !important;
+  border-radius: var(--j-r-lg) !important;
+  box-shadow: inset 0 1px 0 var(--j-hairline), var(--j-shadow-1);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  transition: border-color var(--j-dur-fast) var(--j-ease), box-shadow var(--j-dur-fast) var(--j-ease), transform var(--j-dur-fast) var(--j-ease);
+}
+
+/* Gradient top rail (the card's signature stripe) */
+body.memory-studio-page .mem-hero-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  background: linear-gradient( 90deg, color-mix(in srgb, var(--j-accent) 85%, transparent), color-mix(in srgb, var(--j-accent-2) 80%, transparent) 60%, color-mix(in srgb, var(--j-accent-3) 60%, transparent) );
+  opacity: 0.85;
+  pointer-events: none;
+  transition: opacity var(--j-dur-fast) var(--j-ease);
+}
+
+body.memory-studio-page .mem-hero-card:hover::before {
+  opacity: 1;
+}
+
+body.memory-studio-page .mem-hero-card:hover {
+  border-color: color-mix(in srgb, var(--j-accent) 45%, var(--j-border)) !important;
+  box-shadow: inset 0 1px 0 var(--j-hairline), var(--j-shadow-2), 0 0 32px -10px color-mix(in srgb, var(--j-accent) 45%, transparent);
+  transform: translateY(-2px);
+}
+
+/* Value: large mono, tabular, subtle glow */
+body.memory-studio-page .mem-hero-value {
+  font-family: var(--j-font-mono) !important;
+  font-size: 2.2rem !important;
+  font-weight: 600;
+  line-height: 1.02;
+  letter-spacing: var(--j-tracking-tight);
+  font-variant-numeric: tabular-nums;
+  color: var(--j-ink) !important;
+  text-shadow: 0 0 18px color-mix(in srgb, var(--j-accent) 28%, transparent);
+}
+
+body.memory-studio-page .mem-hero-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--j-font-ui) !important;
+  font-size: var(--j-fs-xs) !important;
+  font-weight: 600;
+  letter-spacing: 0.07em !important;
+  text-transform: uppercase;
+  color: var(--j-ink-dim) !important;
+}
+
+/* Pending card: amber semantics */
+body.memory-studio-page .mem-hero-card-pending::before {
+  background: linear-gradient( 90deg, color-mix(in srgb, var(--j-warn) 85%, transparent), color-mix(in srgb, var(--j-warn) 35%, transparent) );
+}
+
+body.memory-studio-page .mem-hero-card-pending {
+  background: radial-gradient(120% 80% at 50% -20%, color-mix(in srgb, var(--j-warn) 8%, transparent), transparent 60%), color-mix(in srgb, var(--j-raised) 85%, transparent) !important;
+}
+
+body.memory-studio-page .mem-hero-card-pending .mem-hero-value {
+  color: var(--j-warn) !important;
+  text-shadow: 0 0 18px color-mix(in srgb, var(--j-warn) 30%, transparent);
+}
+
+body.memory-studio-page .mem-hero-card-pending:hover {
+  border-color: color-mix(in srgb, var(--j-warn) 45%, var(--j-border)) !important;
+  box-shadow: inset 0 1px 0 var(--j-hairline), var(--j-shadow-2), 0 0 32px -10px color-mix(in srgb, var(--j-warn) 40%, transparent);
+}
+
+/* Vector card live dot: energy pulse (semantics preserved) */
+body.memory-studio-page .memory-stat-card-vector .mem-hero-label::before {
+  content: "";
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--j-r-pill);
+  background: var(--j-ink-faint);
+  transition: background var(--j-dur-med) var(--j-ease), box-shadow var(--j-dur-med) var(--j-ease);
+}
+
+body.memory-studio-page .memory-stat-card-vector.is-live .mem-hero-label::before {
+  background: var(--j-energy);
+  box-shadow: 0 0 9px color-mix(in srgb, var(--j-energy) 70%, transparent);
+  animation: jv2-dot-pulse 2.6s var(--j-ease) infinite;
+}
+
+@keyframes jv2-dot-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 4px color-mix(in srgb, var(--j-energy) 45%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 12px color-mix(in srgb, var(--j-energy) 85%, transparent);
+  }
+}
+
+/* ─── 6. OVERVIEW: panels + timeline + quick actions ────────── */
+body.memory-studio-page .mem-overview-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: var(--j-sp-4);
+  align-items: start;
+}
+
+body.memory-studio-page .mem-panel {
+  padding: var(--j-sp-4);
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-lg);
+  background: color-mix(in srgb, var(--j-panel) 80%, transparent);
+  box-shadow: inset 0 1px 0 var(--j-hairline);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+body.memory-studio-page .mem-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--j-sp-2);
+  margin-bottom: var(--j-sp-3);
+}
+
+body.memory-studio-page .mem-panel-title {
+  margin: 0;
+  font-family: var(--j-font-display);
+  font-size: var(--j-fs-md);
+  font-weight: 600;
+  letter-spacing: var(--j-tracking-tight);
+  color: var(--j-ink);
+}
+
+/* Timeline: gradient spine + glowing dots.
+   The spine is a vertical aurora line flowing through the middle of the dot
+   column (≈4px). */
+body.memory-studio-page .mem-timeline {
+  position: relative;
+  margin: 0;
+  list-style: none;
+  padding: 0;
+}
+
+body.memory-studio-page .mem-timeline::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 12px;
+  bottom: 12px;
+  width: 1px;
+  background: linear-gradient( 180deg, transparent, color-mix(in srgb, var(--j-accent) 50%, transparent) 12%, color-mix(in srgb, var(--j-accent-2) 45%, transparent) 60%, color-mix(in srgb, var(--j-accent-3) 35%, transparent) 90%, transparent );
+  pointer-events: none;
+}
+
+body.memory-studio-page .mem-timeline .memory-timeline-item {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  gap: var(--j-sp-3);
+  padding: var(--j-sp-2) 0;
+  margin: 0;
+  border: none;
+  background: transparent;
+}
+
+/* Old separator line retired: the spine already sets the rhythm */
+body.memory-studio-page .mem-timeline .memory-timeline-item + .memory-timeline-item {
+  border-top: 1px solid transparent;
+}
+
+body.memory-studio-page .mem-timeline .memory-timeline-dot {
+  position: relative;
+  z-index: 1;
+  margin-top: 0.42rem;
+  width: 9px;
+  height: 9px;
+  border-radius: var(--j-r-pill);
+  background: var(--j-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--j-accent) 18%, transparent), 0 0 10px color-mix(in srgb, var(--j-accent) 55%, transparent);
+}
+
+body.memory-studio-page .mem-timeline .memory-timeline-item[data-kind*="approve"] .memory-timeline-dot,
+body.memory-studio-page .mem-timeline .memory-timeline-item[data-kind*="fact"] .memory-timeline-dot {
+  background: var(--j-energy);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--j-energy) 18%, transparent), 0 0 10px color-mix(in srgb, var(--j-energy) 55%, transparent);
+}
+
+body.memory-studio-page .mem-timeline .memory-timeline-item[data-kind*="staging"] .memory-timeline-dot,
+body.memory-studio-page .mem-timeline .memory-timeline-item[data-kind*="pending"] .memory-timeline-dot {
+  background: var(--j-warn);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--j-warn) 18%, transparent), 0 0 10px color-mix(in srgb, var(--j-warn) 55%, transparent);
+}
+
+body.memory-studio-page .memory-timeline-title {
+  font-size: var(--j-fs-sm);
+  font-weight: 600;
+  color: var(--j-ink);
+  word-break: break-word;
+}
+
+body.memory-studio-page .memory-timeline-ts {
+  margin-left: auto;
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--j-ink-faint);
+  white-space: nowrap;
+}
+
+body.memory-studio-page .memory-timeline-detail {
+  margin: 2px 0 0;
+  font-size: var(--j-fs-xs);
+  line-height: 1.5;
+  color: var(--j-ink-dim);
+  word-break: break-word;
+}
+
+/* ─── 7. CARD LISTS (inbox / facts / recall results) ─────────────
+   Shared language: glass card + left aurora accent; hover only changes light. */
+body.memory-studio-page .memory-hit-list li {
+  padding: var(--j-sp-4);
+  margin-bottom: var(--j-sp-3);
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-md);
+  background: color-mix(in srgb, var(--j-raised) 92%, transparent);
+  box-shadow: inset 0 1px 0 var(--j-hairline);
+  font-size: var(--j-fs-sm);
+  line-height: 1.55;
+  transition: border-color var(--j-dur-fast) var(--j-ease), box-shadow var(--j-dur-fast) var(--j-ease), opacity var(--j-dur-fast) var(--j-ease);
+}
+
+body.memory-studio-page .memory-fact-card {
+  border-left: 3px solid color-mix(in srgb, var(--j-accent) 55%, transparent);
+}
+
+body.memory-studio-page .memory-fact-card:hover {
+  border-color: color-mix(in srgb, var(--j-accent) 30%, var(--j-border));
+  border-left-color: var(--j-accent);
+  box-shadow: inset 0 1px 0 var(--j-hairline), 0 0 26px -12px color-mix(in srgb, var(--j-accent) 50%, transparent), var(--j-shadow-1);
+}
+
+body.memory-studio-page .memory-card-key {
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-md);
+  font-weight: 600;
+  color: var(--j-ink);
+}
+
+body.memory-studio-page .memory-hit-text {
+  font-size: var(--j-fs-md);
+  color: var(--j-ink);
+}
+
+body.memory-studio-page .memory-inbox-reason {
+  margin: 0;
+  padding-left: var(--j-sp-3);
+  border-left: 2px solid color-mix(in srgb, var(--j-accent-2) 45%, var(--j-border-strong));
+  font-size: var(--j-fs-xs);
+  font-style: italic;
+  color: var(--j-ink-dim);
+}
+
+/* Inbox approve/reject: always visible, clear semantics.
+   Approve = energy-filled pill; Reject = quiet pill with a danger frame. */
+body.memory-studio-page .memory-fact-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--j-sp-2);
+  margin-top: var(--j-sp-2);
+}
+
+body.memory-studio-page .memory-approve-btn {
+  padding: 0.38rem 0.95rem;
+  border: 1px solid color-mix(in srgb, var(--j-energy) 55%, transparent);
+  border-radius: var(--j-r-pill);
+  background: linear-gradient( 135deg, color-mix(in srgb, var(--j-energy) 22%, transparent), color-mix(in srgb, var(--j-energy) 12%, transparent) );
+  color: var(--j-energy);
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 0 18px -8px color-mix(in srgb, var(--j-energy) 50%, transparent);
+  transition: background var(--j-dur-fast) var(--j-ease), box-shadow var(--j-dur-fast) var(--j-ease), transform var(--j-dur-fast) var(--j-ease);
+}
+
+body.memory-studio-page .memory-approve-btn:hover {
+  background: linear-gradient( 135deg, color-mix(in srgb, var(--j-energy) 32%, transparent), color-mix(in srgb, var(--j-energy) 18%, transparent) );
+  box-shadow: 0 0 24px -8px color-mix(in srgb, var(--j-energy) 65%, transparent);
+  transform: translateY(-1px);
+  filter: none;
+}
+
+body.memory-studio-page .memory-fact-delete {
+  border-radius: var(--j-r-pill);
+  color: var(--j-danger);
+  border-color: color-mix(in srgb, var(--j-danger) 35%, var(--j-border));
+  cursor: pointer;
+  transition: background var(--j-dur-fast) var(--j-ease), border-color var(--j-dur-fast) var(--j-ease), box-shadow var(--j-dur-fast) var(--j-ease);
+}
+
+body.memory-studio-page .memory-fact-delete:hover {
+  color: var(--j-danger);
+  background: color-mix(in srgb, var(--j-danger) 14%, transparent);
+  border-color: color-mix(in srgb, var(--j-danger) 60%, transparent);
+  box-shadow: 0 0 18px -8px color-mix(in srgb, var(--j-danger) 45%, transparent);
+}
+
+body.memory-studio-page .memory-approve-btn:focus-visible,
+body.memory-studio-page .memory-fact-delete:focus-visible,
+body.memory-studio-page .btn-ghost:focus-visible,
+body.memory-studio-page .btn-primary:focus-visible {
+  outline: 2px solid var(--j-accent);
+  outline-offset: 2px;
+}
+
+/* Primary button: aurora fill + ambient shadow */
+body.memory-studio-page .btn-primary {
+  border-radius: var(--j-r-pill);
+  background: var(--j-accent-grad);
+  color: var(--j-accent-ink);
+  box-shadow: var(--j-shadow-accent);
+  cursor: pointer;
+  transition: box-shadow var(--j-dur-fast) var(--j-ease), transform var(--j-dur-fast) var(--j-ease), filter var(--j-dur-fast) var(--j-ease);
+}
+
+body.memory-studio-page .btn-primary:hover {
+  filter: brightness(1.08);
+  box-shadow: var(--j-shadow-accent), 0 0 28px -8px color-mix(in srgb, var(--j-accent-2) 55%, transparent);
+  transform: translateY(-1px);
+}
+
+body.memory-studio-page .btn-ghost {
+  cursor: pointer;
+}
+
+/* Tab intro strip: glass + gradient left thread */
+body.memory-studio-page .memory-tab-intro {
+  margin: 0 0 var(--j-sp-3);
+  padding: var(--j-sp-3) var(--j-sp-4);
+  border: 1px solid var(--j-border);
+  border-left: 2px solid transparent;
+  border-radius: var(--j-r-md);
+  background: linear-gradient( color-mix(in srgb, var(--j-panel) 85%, transparent), color-mix(in srgb, var(--j-panel) 85%, transparent) ) padding-box, linear-gradient( 180deg, color-mix(in srgb, var(--j-accent) 70%, transparent), color-mix(in srgb, var(--j-accent-2) 60%, transparent) ) border-box;
+  border-left-color: transparent;
+  color: var(--j-ink-dim);
+  font-size: var(--j-fs-sm);
+  line-height: 1.55;
+}
+
+/* Invalidated record look preserved (strikethrough + dim) — only refresh tone */
+body.memory-studio-page .memory-fact-card.is-invalidated {
+  opacity: 0.6;
+  border-style: dashed;
+  border-left-color: var(--j-ink-faint);
+}
+
+body.memory-studio-page .memory-fact-card.is-invalidated:hover {
+  opacity: 0.85;
+  box-shadow: inset 0 1px 0 var(--j-hairline);
+}
+
+/* Inline editor: dark glass + aurora frame */
+body.memory-studio-page .memory-fact-editor {
+  border: 1px solid color-mix(in srgb, var(--j-accent) 40%, var(--j-border));
+  border-radius: var(--j-r-lg);
+  background: var(--j-overlay);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  box-shadow: inset 0 1px 0 var(--j-hairline), var(--j-shadow-2), 0 0 32px -12px color-mix(in srgb, var(--j-accent) 45%, transparent);
+}
+
+/* Counter badges: general = aurora gradient pill */
+body.memory-studio-page .memory-tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.3rem;
+  padding: 0.06rem 0.42rem;
+  margin-left: 0.15rem;
+  border: 0;
+  border-radius: var(--j-r-pill);
+  font-family: var(--j-font-mono);
+  font-size: var(--j-fs-xs);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  background: var(--j-accent-grad);
+  color: var(--j-accent-ink);
+  box-shadow: 0 2px 10px -3px color-mix(in srgb, var(--j-accent) 55%, transparent);
+}
+
+body.memory-studio-page .memory-tab-badge[hidden] {
+  display: none;
+}
+
+/* ─── 9. RECALL: search row + score bar + time travel ──────────────── */
+body.memory-studio-page .memory-search-row {
+  display: flex;
+  gap: var(--j-sp-2);
+  align-items: stretch;
+  flex-wrap: wrap;
+}
+
+body.memory-studio-page .memory-search-row input[type="search"] {
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+
+/* Score bar: aurora fill + end glow */
+body.memory-studio-page .memory-score-fill {
+  background: linear-gradient(90deg, var(--j-accent), var(--j-accent-2) 55%, var(--j-accent-3));
+  box-shadow: 0 0 10px color-mix(in srgb, var(--j-accent) 45%, transparent);
+}
+
+/* as_of / observed rows: glass strip (left accent stays in trust tone) */
+body.memory-studio-page .memory-asof-row {
+  border-radius: var(--j-r-md);
+  background: color-mix(in srgb, var(--j-panel) 85%, transparent);
+  box-shadow: inset 0 1px 0 var(--j-hairline);
+}
+
+/* ─── 10. FORM / INPUT LANGUAGE: deep glass + aurora focus ─────────────────────── */
+body.memory-studio-page .memory-studio-pane input[type="search"],
+body.memory-studio-page .memory-studio-pane input[type="text"],
+body.memory-studio-page .memory-studio-pane input[type="date"],
+body.memory-studio-page .memory-studio-pane select,
+body.memory-studio-page .memory-studio-pane textarea {
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-sm);
+  background: color-mix(in srgb, var(--j-bg) 65%, transparent);
+  color: var(--j-ink);
+  transition: border-color var(--j-dur-fast) var(--j-ease), box-shadow var(--j-dur-fast) var(--j-ease), background var(--j-dur-fast) var(--j-ease);
+}
+
+body.memory-studio-page .memory-studio-pane input[type="search"]:focus,
+body.memory-studio-page .memory-studio-pane input[type="text"]:focus,
+body.memory-studio-page .memory-studio-pane input[type="date"]:focus,
+body.memory-studio-page .memory-studio-pane select:focus,
+body.memory-studio-page .memory-studio-pane textarea:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--j-accent) 65%, transparent);
+  background: color-mix(in srgb, var(--j-bg) 80%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--j-accent) 13%, transparent), 0 0 20px -8px color-mix(in srgb, var(--j-accent) 45%, transparent);
+}
+
+body.memory-studio-page .memory-studio-pane input::placeholder,
+body.memory-studio-page .memory-studio-pane textarea::placeholder {
+  color: var(--j-ink-faint);
+}
+
+body.memory-studio-page .memory-history-toggle,
+body.memory-studio-page .memory-fact-editor-mode {
+  cursor: pointer;
+}
+
+/* ─── 11. BADGE (chip) FINE-TUNING ─────────────────────────────────────────
+   Color semantics live in the old file (--chip-c system) — refresh form only. */
+body.memory-studio-page .memory-chip {
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+body.memory-studio-page .memory-chip-strategy {
+  background: linear-gradient( 135deg, color-mix(in srgb, var(--j-accent) 14%, transparent), color-mix(in srgb, var(--j-accent-2) 11%, transparent) );
+  border-color: color-mix(in srgb, var(--j-accent) 40%, transparent);
+}
+
+body.memory-studio-page .memory-chip-vector-on {
+  box-shadow: 0 0 10px color-mix(in srgb, var(--j-energy) 25%, transparent);
+}
+
+/* Provenance popover: dark glass + aurora border */
+body.memory-studio-page .memory-provenance-popover {
+  border: 1px solid color-mix(in srgb, var(--j-accent) 25%, var(--j-border-strong));
+  border-radius: var(--j-r-md);
+  background: var(--j-overlay);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  box-shadow: inset 0 1px 0 var(--j-hairline), var(--j-shadow-2);
+}
+
+/* ─── 12. EMPTY / LOADING / ERROR STATES ───────────────────────────────
+   Empty state: centered, soft aurora halo behind the icon. */
+body.memory-studio-page .memory-hit-list li.memory-state {
+  background: transparent;
+  border: 1px dashed color-mix(in srgb, var(--j-accent) 18%, var(--j-border));
+  border-radius: var(--j-r-lg);
+  box-shadow: none;
+  color: var(--j-ink-dim);
+  text-align: center;
+}
+
+body.memory-studio-page .memory-hit-list li.memory-state-rich {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--j-sp-2);
+  padding: var(--j-sp-6) var(--j-sp-4);
+}
+
+body.memory-studio-page .memory-state-icon {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  margin-bottom: var(--j-sp-2);
+  border-radius: var(--j-r-pill);
+  border: 1px solid color-mix(in srgb, var(--j-accent) 30%, transparent);
+  background: linear-gradient( 135deg, color-mix(in srgb, var(--j-accent) 16%, transparent), color-mix(in srgb, var(--j-accent-2) 12%, transparent) );
+  color: var(--j-accent);
+  /* halo: wide soft light pool behind the icon */
+  box-shadow: 0 0 0 10px color-mix(in srgb, var(--j-accent) 5%, transparent), 0 0 46px -4px color-mix(in srgb, var(--j-accent) 35%, transparent);
+}
+
+body.memory-studio-page .memory-state-icon-error {
+  border-color: color-mix(in srgb, var(--j-danger) 35%, transparent);
+  background: linear-gradient( 135deg, color-mix(in srgb, var(--j-danger) 16%, transparent), color-mix(in srgb, var(--j-danger) 8%, transparent) );
+  color: var(--j-danger);
+  box-shadow: 0 0 0 10px color-mix(in srgb, var(--j-danger) 5%, transparent), 0 0 46px -4px color-mix(in srgb, var(--j-danger) 32%, transparent);
+}
+
+body.memory-studio-page .memory-empty-title {
+  margin: 0;
+  font-family: var(--j-font-display);
+  font-size: var(--j-fs-lg);
+  font-weight: 600;
+  letter-spacing: var(--j-tracking-tight);
+  color: var(--j-ink);
+}
+
+body.memory-studio-page .memory-empty-hint {
+  margin: 0;
+  max-width: 32rem;
+  font-size: var(--j-fs-sm);
+  line-height: 1.6;
+  color: var(--j-ink-dim);
+}
+
+body.memory-studio-page .memory-empty-action {
+  margin-top: var(--j-sp-2);
+  border-radius: var(--j-r-pill);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+body.memory-studio-page .memory-empty-action:focus-visible {
+  outline: 2px solid var(--j-accent);
+  outline-offset: 2px;
+}
+
+/* Spinner: aurora two-color tip */
+body.memory-studio-page .memory-spinner {
+  border-color: color-mix(in srgb, var(--j-accent) 20%, var(--j-border-strong));
+  border-top-color: var(--j-accent);
+  border-right-color: var(--j-accent-2);
+}
+
+/* Facts counter (below list): gradient pill */
+body.memory-studio-page .memory-badge {
+  border: 0;
+  border-radius: var(--j-r-pill);
+  background: var(--j-accent-grad);
+  color: var(--j-accent-ink);
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 2px 10px -3px color-mix(in srgb, var(--j-accent) 50%, transparent);
+}
+
+body.memory-studio-page .memory-badge[hidden] {
+  display: none;
+}
+
+/* ─── 14. SETTINGS TOUCHES ─────────────────────────────────────────────── */
+body.memory-studio-page .settings-block {
+  padding: var(--j-sp-4);
+  margin-bottom: var(--j-sp-4);
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-lg);
+  background: color-mix(in srgb, var(--j-panel) 80%, transparent);
+  box-shadow: inset 0 1px 0 var(--j-hairline);
+}
+
+body.memory-studio-page .settings-block-title {
+  font-family: var(--j-font-display);
+  font-weight: 600;
+  letter-spacing: var(--j-tracking-tight);
+  color: var(--j-ink);
+}
+
+body.memory-studio-page .memory-ledger-path {
+  border: 1px solid color-mix(in srgb, var(--j-accent) 15%, var(--j-border));
+  border-radius: var(--j-r-sm);
+  background: color-mix(in srgb, var(--j-bg) 70%, transparent);
+  font-family: var(--j-font-mono);
+  color: var(--j-ink-dim);
+}
+
+/* "Add new fact" collapsible panel */
+body.memory-studio-page .memory-panel {
+  border: 1px dashed color-mix(in srgb, var(--j-accent) 25%, var(--j-border-strong));
+  border-radius: var(--j-r-lg);
+  background: color-mix(in srgb, var(--j-panel) 70%, transparent);
+}
+
+body.memory-studio-page .memory-panel > summary {
+  cursor: pointer;
+}
+
+body.memory-studio-page .memory-panel > summary:hover,
+body.memory-studio-page .memory-panel[open] > summary {
+  color: var(--j-accent);
+}
+
+body.memory-studio-page .memory-panel > summary:focus-visible {
+  outline: 2px solid var(--j-accent);
+  outline-offset: 2px;
+  border-radius: var(--j-r-sm);
+}
+
+/* ─── 15. LIGHT THEME: glass densifies, glows dim ─────────────────────
+   In light mode, blurred semi-transparent bases lose contrast → more opaque
+   panels, text glows off, shadows soften via tokens. */
+[data-theme="light"] body.memory-studio-page {
+  background: radial-gradient(120% 90% at 85% -10%, color-mix(in srgb, var(--j-accent-2) 6%, transparent), transparent 60%), radial-gradient(110% 80% at -10% 20%, color-mix(in srgb, var(--j-accent) 6%, transparent), transparent 55%), linear-gradient(180deg, var(--j-bg-grad-a), var(--j-bg-grad-b));
+}
+
+[data-theme="light"] body.memory-studio-page .mem-topbar {
+  background: color-mix(in srgb, var(--j-bg) 82%, transparent) !important;
+}
+
+[data-theme="light"] body.memory-studio-page .mem-shell {
+  background: color-mix(in srgb, var(--j-panel) 92%, transparent) !important;
+  box-shadow: inset 0 1px 0 var(--j-hairline), var(--j-shadow-3), 0 0 60px -40px color-mix(in srgb, var(--j-accent) 25%, transparent);
+}
+
+[data-theme="light"] body.memory-studio-page .mem-rail {
+  background: linear-gradient( 180deg, color-mix(in srgb, var(--j-bg) 75%, transparent), color-mix(in srgb, var(--j-bg) 40%, transparent) 70% );
+}
+
+[data-theme="light"] body.memory-studio-page .mem-topbar-search .mem-search-wrap {
+  background: linear-gradient( color-mix(in srgb, var(--j-panel) 96%, transparent), color-mix(in srgb, var(--j-panel) 96%, transparent) ) padding-box, linear-gradient( 120deg, color-mix(in srgb, var(--j-accent) 50%, var(--j-border)), color-mix(in srgb, var(--j-accent-2) 42%, var(--j-border)) 50%, color-mix(in srgb, var(--j-accent-3) 42%, var(--j-border)) ) border-box;
+}
+
+[data-theme="light"] body.memory-studio-page .mem-topbar-search .mem-search-wrap:focus-within {
+  background: linear-gradient(var(--j-panel), var(--j-panel)) padding-box, linear-gradient(120deg, var(--j-accent), var(--j-accent-2) 50%, var(--j-accent-3)) border-box;
+}
+
+[data-theme="light"] body.memory-studio-page .mem-hero-card {
+  background: radial-gradient(120% 80% at 50% -20%, color-mix(in srgb, var(--j-accent) 5%, transparent), transparent 60%), var(--j-raised) !important;
+}
+
+[data-theme="light"] body.memory-studio-page .mem-hero-card-pending {
+  background: radial-gradient(120% 80% at 50% -20%, color-mix(in srgb, var(--j-warn) 7%, transparent), transparent 60%), var(--j-raised) !important;
+}
+
+/* In light theme, neon text glow muddies things → turn off */
+[data-theme="light"] body.memory-studio-page .mem-hero-value,
+[data-theme="light"] body.memory-studio-page .mem-hero-card-pending .mem-hero-value {
+  text-shadow: none;
+}
+
+[data-theme="light"] body.memory-studio-page .memory-hit-list li {
+  background: var(--j-raised);
+}
+
+[data-theme="light"] body.memory-studio-page .mem-panel,
+[data-theme="light"] body.memory-studio-page .settings-block {
+  background: var(--j-panel);
+}
+
+[data-theme="light"] body.memory-studio-page .memory-studio-pane input[type="search"],
+[data-theme="light"] body.memory-studio-page .memory-studio-pane input[type="text"],
+[data-theme="light"] body.memory-studio-page .memory-studio-pane input[type="date"],
+[data-theme="light"] body.memory-studio-page .memory-studio-pane select,
+[data-theme="light"] body.memory-studio-page .memory-studio-pane textarea {
+  background: var(--j-panel);
+}
+
+/* ─── 16. RESPONSIVE ──────────────────────────────────────────────────────
+   ≤960px: overview columns drop to one.
+   ≤900px: rail becomes a horizontally scrollable icon strip; shell goes
+   full width + reduced padding. No horizontal page scroll at 375px. */
+@media (max-width: 960px) {
+  body.memory-studio-page .mem-overview-cols {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 900px) {
+  body.memory-studio-page .memory-studio-layout {
+    width: 100%;
+    padding-block: var(--j-sp-3);
+  }
+
+  body.memory-studio-page .mem-shell {
+    grid-template-columns: minmax(0, 1fr);
+    border-radius: var(--j-r-lg) !important;
+  }
+
+  /* Rail → horizontal strip on top; momentum scroll + thin scrollbar */
+  body.memory-studio-page .mem-rail {
+    flex-direction: row;
+    align-items: center;
+    gap: var(--j-sp-2);
+    padding: var(--j-sp-2) var(--j-sp-3);
+    border-right: none;
+    border-bottom: 1px solid var(--j-hairline);
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--j-accent) 35%, transparent) transparent;
+  }
+
+  body.memory-studio-page .mem-rail::-webkit-scrollbar {
+    height: 4px;
+  }
+
+  body.memory-studio-page .mem-rail::-webkit-scrollbar-thumb {
+    border-radius: var(--j-r-pill);
+    background: color-mix(in srgb, var(--j-accent) 35%, transparent);
+  }
+
+  body.memory-studio-page .mem-rail-list {
+    flex-direction: row;
+    flex: 1 1 auto;
+    gap: var(--j-sp-1);
+  }
+
+  body.memory-studio-page .mem-rail-item {
+    width: auto;
+    padding: 0.5rem 0.7rem !important;
+    white-space: nowrap;
+  }
+
+  body.memory-studio-page .mem-rail-item:hover {
+    transform: none; /* don't collide with the horizontal scroll gesture */
+  }
+
+  /* In horizontal mode: bottom gradient line instead of a left bar */
+  body.memory-studio-page .mem-rail-item.is-active::before {
+    left: 12%;
+    right: 12%;
+    top: auto;
+    bottom: -0.45rem;
+    width: auto;
+    height: 2px;
+    transform: none;
+    background: linear-gradient(90deg, var(--j-accent), var(--j-accent-2) 60%, var(--j-accent-3));
+  }
+
+  body.memory-studio-page .mem-rail-foot {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: none;
+    border-left: 1px solid var(--j-hairline);
+    padding-left: var(--j-sp-2);
+  }
+
+  body.memory-studio-page .mem-rail-refresh .mem-rail-label {
+    display: none; /* narrow screen: refresh icon only */
+  }
+
+  body.memory-studio-page .mem-content {
+    padding: var(--j-sp-4) var(--j-sp-3) var(--j-sp-5);
+  }
+
+  body.memory-studio-page .mem-view-title {
+    font-size: var(--j-fs-xl);
+  }
+}
+
+@media (max-width: 720px) {
+  body.memory-studio-page .mem-hero-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  body.memory-studio-page .mem-hero-value {
+    font-size: 1.7rem !important;
+  }
+
+  body.memory-studio-page .memory-hit-list li .memory-hit-meta {
+    margin-left: 0;
+    white-space: normal;
+  }
+
+  /* Top search hidden (Recall view takes over); not a [hidden] rule but
+     responsive hiding — the old file makes the same call. */
+  body.memory-studio-page .mem-topbar-search {
+    display: none;
+  }
+}
+
+@media (max-width: 560px) {
+  /* Icon row: labels drop out, rail becomes a pure icon strip */
+  body.memory-studio-page .mem-rail-item > .mem-rail-label {
+    display: none;
+  }
+
+  body.memory-studio-page .mem-rail-item {
+    padding: 0.55rem !important;
+    justify-content: center;
+  }
+
+  body.memory-studio-page .mem-rail-badge {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    margin-left: 0;
+    min-width: 1.1rem;
+    padding: 0 0.3rem;
+  }
+
+  body.memory-studio-page .memory-search-row input[type="search"] {
+    flex-basis: 100%;
+  }
+
+  body.memory-studio-page .mem-content {
+    padding: var(--j-sp-3) var(--j-sp-2) var(--j-sp-4);
+  }
+}
+
+/* ─── 17. REDUCED MOTION: everything stops ──────────────────────────────────
+   tokens.css zeroes the durations; here we also turn off animation/transition
+   — all decorative motion, including the spinner, goes silent (status text
+   is enough). */
+@media (prefers-reduced-motion: reduce) {
+  body.memory-studio-page .mem-view,
+  body.memory-studio-page .memory-hit-list li,
+  body.memory-studio-page .memory-fact-editor,
+  body.memory-studio-page .memory-stat-card-vector.is-live .mem-hero-label::before,
+  body.memory-studio-page .memory-spinner {
+    animation: none !important;
+  }
+
+  body.memory-studio-page .mem-rail-item,
+  body.memory-studio-page .mem-hero-card,
+  body.memory-studio-page .memory-approve-btn,
+  body.memory-studio-page .btn-primary,
+  body.memory-studio-page .mem-topbar-search .mem-search-wrap {
+    transition: none !important;
+  }
+
+  body.memory-studio-page .mem-rail-item:hover,
+  body.memory-studio-page .mem-hero-card:hover,
+  body.memory-studio-page .memory-approve-btn:hover,
+  body.memory-studio-page .btn-primary:hover {
+    transform: none !important;
+  }
+}

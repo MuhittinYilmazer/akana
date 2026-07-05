@@ -1,0 +1,64 @@
+name: Windows MCP Diagnostic
+
+# Reproduces the REAL stdio-child spawns (akana_memory / akana_vault MCP servers and
+# the Cursor bridge daemon) on actual Windows — the path the mocked unit suite never
+# exercises. Surfaces "memory MCP won't connect on Windows" in CI logs instead of
+# requiring a manual Windows install + UI repro.
+#
+# Deliberately does NOT call `python akana.py setup`: a minimal `pip install -r
+# requirements.txt` + bridge `npm install` is all the diagnostic needs, and it keeps
+# this job independent of the full interactive installer.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/diagnose_mcp.py"
+      - "src/akana/memory/**"
+      - "akana_server/orchestrator/**"
+      - "akana_server/vault_mcp/**"
+      - "cursor_bridge/**"
+      - ".github/workflows/windows-mcp-diagnostic.yml"
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        # Node 18 is the version that lacks Symbol.dispose — it must stay green via
+        # cursor_bridge/dispose-polyfill.mjs (the diagnostic's Symbol.dispose check
+        # is a trivial pass on 20, so 18 is what actually guards the polyfill).
+        node: ["18", "20"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Install Python deps (core)
+        run: python -m pip install -r requirements.txt
+
+      - name: Install Cursor bridge deps (@cursor/sdk)
+        working-directory: cursor_bridge
+        run: npm install --omit=dev
+
+      - name: MCP + bridge spawn diagnostic
+        run: python scripts/diagnose_mcp.py
+
+      - name: Install claude CLI (for the real-client handshake test)
+        continue-on-error: true
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: claude mcp list (real-client handshake)
+        # Registers the real akana_memory/akana_vault config with the actual claude CLI
+        # and asserts both CONNECT. Self-skips (exit 0) if claude is absent or can't run
+        # a health check here (e.g. no auth) — so it's a gate when possible, never noise.
+        run: python scripts/diagnose_claude_mcp.py

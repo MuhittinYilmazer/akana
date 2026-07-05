@@ -1,0 +1,185 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   AURORA SKIN — drop-in retheme for Akana Cursor
+   ─────────────────────────────────────────────────────────────────────────
+   Load LAST in index.html (after akana-v2-surfaces.css). It only:
+     1. Re-maps the --j-* design tokens to the AURORA palette (light-first,
+        cinematic-nebula). Names are untouched → the id/class contract and all
+        JS keep working. Remove this one <link> to fully revert.
+     2. Retones the .app-bg into a drifting aurora-nebula field.
+     3. Adds light visual polish to tool-call cards + the thought feed.
+   No structure, no ids, no JS touched.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── 1 · TOKEN RETONE — default (dark) ──────────────────────────────────── */
+:root {
+  --j-bg: #070910;
+  --j-bg-grad-a: #0c1019;
+  --j-bg-grad-b: #05060b;
+  --j-panel: rgba(255, 255, 255, 0.04);
+  --j-raised: rgba(255, 255, 255, 0.07);
+  --j-overlay: rgba(14, 18, 30, 0.98);
+  --j-border: rgba(255, 255, 255, 0.08);
+  --j-border-strong: rgba(255, 255, 255, 0.16);
+  --j-hairline: rgba(255, 255, 255, 0.07);
+
+  --j-ink: #eef1f8;
+  --j-ink-dim: #9aa2b4;
+  --j-ink-faint: #7b8395;
+
+  --j-energy: #2fd6a6;
+  --j-warn: #e6b15a;
+  --j-danger: #ef6a72;
+  --j-trust-user: #2fd6a6;
+  --j-trust-inferred: #6c78ff;
+  --j-trust-tool: #e6b15a;
+  --j-trust-synth: #b07cff;
+}
+
+/* Accent family only in the DEFAULT bucket (azure/cyan or no attribute):
+   defining it on :root — since this file loads AFTER tokens.css — was
+   clobbering the title-grad/glow/shadow family of the trio presets
+   (violet/teal/amber) at equal specificity by source order (same fix as in
+   akana-premium.css). */
+:root:not([data-accent]),
+:root[data-accent="cyan"],
+:root[data-accent="azure"] {
+  --j-accent: #6c78ff;
+  --j-accent-strong: #5562f5;
+  --j-accent-soft: rgba(108, 120, 255, 0.14);
+  --j-accent-ink: #ffffff;
+  --j-accent-2: #b07cff;
+  --j-accent-2-soft: rgba(176, 124, 255, 0.14);
+  --j-accent-3: #3fd2ec;
+  --j-accent-grad: linear-gradient(135deg, #6c78ff 0%, #b07cff 100%);
+  --j-title-grad: linear-gradient(110deg, #9aa6ff 0%, #6c78ff 32%, #4fd6ee 66%, #c08cff 100%);
+  --j-accent-glow: radial-gradient(120% 120% at 30% 0%, rgba(108, 120, 255, 0.20), transparent 70%);
+  --j-glow-accent: 0 0 0 3px rgba(108, 120, 255, 0.24);
+  --j-glow-soft: 0 0 0 2px rgba(108, 120, 255, 0.14);
+  --j-shadow-accent: 0 14px 40px -18px rgba(108, 120, 255, 0.45);
+}
+
+/* ─── 1b · TOKEN RETONE — light (Aurora's signature: cinematic, but daylight) */
+[data-theme="light"] {
+  --j-bg: #eaeefa;
+  --j-bg-grad-a: #f4f6fd;
+  --j-bg-grad-b: #e4e9f6;
+  --j-panel: rgba(255, 255, 255, 0.50);
+  --j-raised: rgba(255, 255, 255, 0.78);
+  --j-overlay: rgba(251, 252, 255, 0.98);
+  --j-border: rgba(28, 38, 66, 0.10);
+  --j-border-strong: rgba(28, 38, 66, 0.18);
+  --j-hairline: rgba(255, 255, 255, 0.85);
+
+  --j-ink: #161b27;
+  --j-ink-dim: #545d72;
+  --j-ink-faint: #757d92;
+
+  --j-energy: #10b187;
+  --j-warn: #d68a14;
+  --j-danger: #e9536a;
+  --j-trust-user: #10b187;
+  --j-trust-inferred: #4f57e6;
+  --j-trust-tool: #d68a14;
+  --j-trust-synth: #9a5cf0;
+
+  --j-shadow-1: 0 1px 2px rgba(24, 34, 60, 0.06);
+  --j-shadow-2: 0 18px 48px -22px rgba(34, 44, 80, 0.30);
+  --j-shadow-3: 0 40px 90px -34px rgba(34, 44, 80, 0.42);
+}
+
+/* Light-theme accent family — again only the default bucket (same reason as above). */
+[data-theme="light"]:not([data-accent]),
+[data-theme="light"][data-accent="cyan"],
+[data-theme="light"][data-accent="azure"] {
+  --j-accent: #4f57e6;
+  --j-accent-strong: #3b43d6;
+  --j-accent-soft: rgba(79, 87, 230, 0.10);
+  --j-accent-ink: #ffffff;
+  --j-accent-2: #9a5cf0;
+  --j-accent-2-soft: rgba(154, 92, 240, 0.10);
+  --j-accent-3: #15b6d4;
+  --j-accent-grad: linear-gradient(135deg, #4f57e6 0%, #9a5cf0 100%);
+  --j-title-grad: linear-gradient(110deg, #3b43d6 0%, #4f57e6 32%, #1597c6 66%, #8a4ce6 100%);
+  --j-accent-glow: radial-gradient(120% 120% at 30% 0%, rgba(79, 87, 230, 0.12), transparent 70%);
+  --j-glow-accent: 0 0 0 3px rgba(79, 87, 230, 0.18);
+  --j-glow-soft: 0 0 0 2px rgba(79, 87, 230, 0.10);
+  --j-shadow-accent: 0 14px 40px -18px rgba(79, 87, 230, 0.40);
+}
+
+/* ─── 1c · ACCENT PRESETS (extends the existing [data-accent] family) ─────── */
+[data-accent="violet"] { --j-accent: #8b5cf0; --j-accent-strong: #6d3fd8; --j-accent-2: #5b6cf0; --j-accent-3: #3fd2ec;
+  --j-accent-grad: linear-gradient(135deg, #8b5cf0, #5b6cf0); }
+[data-accent="teal"]   { --j-accent: #15b6d4; --j-accent-strong: #0f93ad; --j-accent-2: #4f57e6; --j-accent-3: #2fd6a6;
+  --j-accent-grad: linear-gradient(135deg, #15b6d4, #4f57e6); }
+[data-accent="amber"]  { --j-accent: #e6a13a; --j-accent-strong: #c9851f; --j-accent-2: #b07cff; --j-accent-3: #4f57e6;
+  --j-accent-grad: linear-gradient(135deg, #e6a13a, #b07cff); }
+/* Light theme: accents are also used as text/icon color on the LIGHT ground
+   (--j-bg #eaeefa) via color: var(--j-accent). Non-default tones had low
+   contrast on light (teal/amber/emerald ~2.6:1 < WCAG 3:1 floor) → we kept
+   the same hue and darkened them; all are now ~4.2–5.6:1 (AA). The
+   [data-theme="light"] selector (0,2,0) beats the base [data-accent] block
+   (0,1,0) in settings. */
+[data-theme="light"][data-accent="violet"]  { --j-accent: #5b43d6; --j-accent-strong: #4a35b5; }
+[data-theme="light"][data-accent="teal"]    { --j-accent: #0a7d8c; --j-accent-strong: #086570; }
+[data-theme="light"][data-accent="amber"]   { --j-accent: #9a6306; --j-accent-strong: #7c4f05; }
+[data-theme="light"][data-accent="sky"]     { --j-accent: #0f6fc0; --j-accent-strong: #0c5a9c; }
+[data-theme="light"][data-accent="emerald"] { --j-accent: #0a7d4d; --j-accent-strong: #08643d; }
+[data-theme="light"][data-accent="sunset"]  { --j-accent: #c4471f; --j-accent-strong: #a23a18; }
+[data-theme="light"][data-accent="rose"]    { --j-accent: #c2335f; --j-accent-strong: #a22a4e; }
+
+/* ─── 2 · AURORA BACKGROUND — drifting nebula + faint star grain ──────────── */
+.app-bg { background: var(--j-bg); }
+.app-bg .app-bg-orb { filter: blur(72px); opacity: 0.6; }
+[data-theme="light"] .app-bg .app-bg-orb { opacity: 0.5; }
+.app-bg .app-bg-orb-a {
+  background: radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--j-accent) 42%, transparent), transparent 64%);
+  animation: aurora-drift-a 28s ease-in-out infinite alternate;
+}
+.app-bg .app-bg-orb-b {
+  background: radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--j-accent-2) 38%, transparent), transparent 64%);
+  animation: aurora-drift-b 34s ease-in-out infinite alternate;
+}
+/* third (cyan) wash + nebula glow via ::after */
+.app-bg::after {
+  content: ""; position: absolute; top: 28%; left: 40%; width: 46vw; height: 46vw; border-radius: 50%;
+  background: radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--j-accent-3) 32%, transparent), transparent 64%);
+  filter: blur(80px); opacity: 0.5; pointer-events: none;
+  animation: aurora-drift-a 40s ease-in-out infinite alternate;
+}
+@keyframes aurora-drift-a { 0% { transform: translate(0,0) scale(1); } 100% { transform: translate(5%, 7%) scale(1.16); } }
+@keyframes aurora-drift-b { 0% { transform: translate(0,0) scale(1); } 100% { transform: translate(-4%, -6%) scale(1.12); } }
+@media (prefers-reduced-motion: reduce) {
+  .app-bg .app-bg-orb, .app-bg::after { animation: none; }
+}
+
+/* ─── 3 · TOOL-CALL CARDS — process-timeline polish (Aurora) ──────────────── */
+/* Left type rail by tool family (safe :has() — falls back gracefully). */
+.log .action-card--tool { position: relative; }
+.log .action-card--tool::after {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+  background: var(--j-accent-grad); opacity: 0.8; border-radius: var(--j-r-md) 0 0 var(--j-r-md);
+}
+.log .tool-call[data-status="error"].action-card--tool::after { background: var(--j-danger); }
+.log .action-card--tool:hover { transform: translateY(-1px); }
+
+/* status dot polish */
+.log .action-card-status[data-status="done"]::before { color: var(--j-energy); }
+.log .action-card-status[data-status="error"]::before { color: var(--j-danger); }
+
+/* result preview chip (if the markup exposes a result preview node) */
+.log .tool-call-result-preview {
+  padding: 0.04rem 0.5rem; border-radius: var(--j-r-pill);
+  background: color-mix(in srgb, var(--j-energy) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--j-energy) 26%, var(--j-border));
+  color: var(--j-energy);
+}
+
+/* ─── 4 · THINKING / THOUGHT FEED — glowing reasoning thread ──────────────── */
+.akana-thought-feed {
+  border-left: 2px solid transparent;
+  border-image: linear-gradient(180deg, color-mix(in srgb, var(--j-accent) 60%, transparent), color-mix(in srgb, var(--j-accent-2) 45%, transparent)) 1;
+}
+.akana-thought-line--think {
+  color: color-mix(in srgb, var(--j-ink) 80%, var(--j-accent));
+  font-style: italic;
+}

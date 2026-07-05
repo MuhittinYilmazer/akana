@@ -1,0 +1,1296 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   AKANA PREMIUM SKIN — "Paper & Iris"
+   ─────────────────────────────────────────────────────────────────────────
+   Loaded LAST in index.html + memory.html (after everything including aurora-*
+   and akana-pair) → wins at equal specificity by source order.
+   Rules:
+     • VISUAL layer only: no id/class/data-attr is renamed, no JS contract
+       (body.archive-open, [hidden], data-state, --mnav-h, .is-active…) is
+       touched.
+     • Colors flow through --j-* tokens; this file RETONES the tokens to the
+       premium palette (same as aurora-skin.css does, loaded after it).
+     • Mobile rules ALWAYS live in their own @media block (project convention).
+       Because this file loads AFTER aurora-responsive/aurora-mobile, non-media
+       rules can override mobile layout rules — so cosmetic properties are
+       handled instead of layout ones (position/bottom/offset); risky layout
+       improvements are guarded by min-width.
+     • NEVER fight aurora-mobile's .mnav display:grid !important rule or the
+       reduced-motion kill-switches.
+   Palette: warm off-white paper ground + indigo→violet iris gradient.
+   Light theme primary; dark theme at full parity.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── 1 · TOKEN RETONE — dark (parity) ───────────────────────────────────── */
+:root {
+  --j-bg: #0b0a13;
+  --j-bg-grad-a: #110f1d;
+  --j-bg-grad-b: #080711;
+  --j-panel: rgba(255, 255, 255, 0.045);
+  --j-raised: rgba(255, 255, 255, 0.075);
+  --j-overlay: rgba(17, 15, 29, 0.98);
+  --j-border: rgba(255, 255, 255, 0.085);
+  --j-border-strong: rgba(255, 255, 255, 0.17);
+  --j-hairline: rgba(255, 255, 255, 0.07);
+
+  --j-ink: #eeecf6;
+  --j-ink-dim: #a09ab8;
+  --j-ink-faint: #6f6a88;
+
+  --j-energy: #34d399;
+  --j-warn: #ecb45e;
+  --j-danger: #f0707c;
+  --j-trust-user: #34d399;
+  --j-trust-inferred: #8d83ff;
+  --j-trust-tool: #ecb45e;
+  --j-trust-synth: #b08cff;
+
+  /* — premium extra tokens (ADD-ONLY; existing names untouched) — */
+  --j-card: rgba(255, 255, 255, 0.05);
+  --j-card-border: rgba(255, 255, 255, 0.09);
+  --j-card-shadow: 0 10px 34px -16px rgba(0, 0, 0, 0.55);
+  --j-ok-soft: rgba(52, 211, 153, 0.14);
+  --j-warn-soft: rgba(236, 180, 94, 0.15);
+  --j-danger-soft: rgba(240, 112, 124, 0.15);
+  /* chip/bubble/rail tokens are DERIVED from --j-accent — [data-accent]
+     presets (violet/teal/amber…) remap --j-accent, so these follow
+     automatically; do not leave a hard-coded violet value (review finding). */
+  --j-accent-chip: color-mix(in srgb, var(--j-accent) 16%, transparent);
+  --j-warn-ink: #ecb45e;
+  --j-ok-ink: #34d399;
+  --j-danger-ink: #f0707c;
+  --j-bubble-user: color-mix(in srgb, var(--j-accent) 13%, transparent);
+  --j-bubble-user-border: color-mix(in srgb, var(--j-accent) 22%, transparent);
+  --j-r-2xl: 22px;
+}
+
+/* ─── 1a · IRIS ACCENT FAMILY — only the DEFAULT accent bucket ───────────
+   This block is separate from :root: because this file loads LAST, defining
+   the accent family on :root was clobbering equal-specificity [data-accent]
+   presets and the custom studio's grouped-rule derivations by source order
+   (iris violet would stick regardless of accent choice). Scoped to the
+   bucket: iris only applies when azure/cyan (the default) is active. */
+:root:not([data-accent]),
+:root[data-accent="cyan"],
+:root[data-accent="azure"] {
+  --j-accent: #8d83ff;
+  --j-accent-strong: #7668ff;
+  --j-accent-soft: rgba(141, 131, 255, 0.14);
+  --j-accent-ink: #ffffff;
+  --j-accent-2: #b08cff;
+  --j-accent-2-soft: rgba(176, 140, 255, 0.14);
+  --j-accent-3: #cf9bff;
+  --j-accent-grad: linear-gradient(135deg, #8d83ff 0%, #a988ff 55%, #c095ff 100%);
+  --j-title-grad: linear-gradient(110deg, #a6a0ff 0%, #8d83ff 30%, #b08cff 62%, #d8aaff 100%);
+  --j-accent-glow: radial-gradient(120% 120% at 30% 0%, rgba(141, 131, 255, 0.20), transparent 70%);
+  --j-glow-accent: 0 0 0 3px rgba(141, 131, 255, 0.24);
+  --j-glow-soft: 0 0 0 2px rgba(141, 131, 255, 0.14);
+  --j-shadow-accent: 0 14px 40px -18px rgba(141, 131, 255, 0.45);
+}
+
+/* ─── 1b · TOKEN RETONE — light (primary premium theme) ───────────────────── */
+[data-theme="light"] {
+  --j-bg: #f6f5f1;
+  --j-bg-grad-a: #fbfaf7;
+  --j-bg-grad-b: #f0eeea;
+  --j-panel: #ffffff;
+  --j-raised: #ffffff;
+  --j-overlay: rgba(253, 252, 250, 0.98);
+  --j-border: rgba(44, 38, 80, 0.09);
+  --j-border-strong: rgba(44, 38, 80, 0.17);
+  --j-hairline: rgba(255, 255, 255, 0.9);
+
+  --j-ink: #1c1a26;
+  --j-ink-dim: #5a5670;
+  /* used in small label text (section title, meta, duration) —
+     darkened for WCAG AA 4.5:1 (#8f8ba3 was stuck at 3.0:1) */
+  --j-ink-faint: #6e6a84;
+
+  --j-energy: #16a06d;
+  --j-warn: #c77414;
+  --j-danger: #e04f5f;
+  --j-trust-user: #16a06d;
+  --j-trust-inferred: #6356f0;
+  --j-trust-tool: #c77414;
+  --j-trust-synth: #8b5cf6;
+
+  --j-shadow-1: 0 1px 2px rgba(38, 30, 80, 0.05);
+  --j-shadow-2: 0 14px 40px -18px rgba(38, 30, 80, 0.16);
+  --j-shadow-3: 0 30px 70px -30px rgba(38, 30, 80, 0.22);
+
+  --j-card: #ffffff;
+  --j-card-border: rgba(44, 38, 80, 0.08);
+  --j-card-shadow: 0 8px 30px -14px rgba(38, 30, 80, 0.14);
+  --j-ok-soft: #e3f5eb;
+  --j-warn-soft: #fdf0dc;
+  --j-danger-soft: #fde6e8;
+  /* chip inks: WCAG AA >=4.5:1 on their soft backgrounds (review finding) */
+  --j-accent-chip: color-mix(in srgb, var(--j-accent) 10%, #ffffff);
+  --j-warn-ink: #9a5a0a;
+  --j-ok-ink: #0b6b47;
+  --j-danger-ink: #c22a3f;
+  --j-bubble-user: color-mix(in srgb, var(--j-accent) 9%, #ffffff);
+  --j-bubble-user-border: color-mix(in srgb, var(--j-accent) 15%, transparent);
+}
+
+/* ─── 1c · IRIS ACCENT FAMILY (light) — again only the default bucket.
+   Comes AFTER the dark bucket in 1a; in the light theme it beats it by
+   source order at equal specificity (0,2,0). Does not touch [data-accent]
+   presets. */
+[data-theme="light"]:not([data-accent]),
+[data-theme="light"][data-accent="cyan"],
+[data-theme="light"][data-accent="azure"] {
+  --j-accent: #6356f0;
+  --j-accent-strong: #5244e0;
+  --j-accent-soft: rgba(99, 86, 240, 0.10);
+  --j-accent-ink: #ffffff;
+  --j-accent-2: #8b5cf6;
+  --j-accent-2-soft: rgba(139, 92, 246, 0.10);
+  --j-accent-3: #b678fa;
+  --j-accent-grad: linear-gradient(135deg, #6356f0 0%, #8b5cf6 55%, #a866f8 100%);
+  --j-title-grad: linear-gradient(110deg, #4f46e5 0%, #6356f0 30%, #8b5cf6 62%, #b678fa 100%);
+  --j-accent-glow: radial-gradient(120% 120% at 30% 0%, rgba(99, 86, 240, 0.10), transparent 70%);
+  --j-glow-accent: 0 0 0 3px rgba(99, 86, 240, 0.16);
+  --j-glow-soft: 0 0 0 2px rgba(99, 86, 240, 0.10);
+  --j-shadow-accent: 0 14px 34px -16px rgba(99, 86, 240, 0.32);
+}
+
+/* ─── 2 · STAGE GROUND — calm paper (light) / night violet (dark) ───────── */
+.app-bg { background: var(--j-bg); }
+/* Nearly extinguish the Nebula star-grid for premium calm */
+.app-bg-grid { opacity: 0.35; }
+[data-theme="light"] .app-bg-grid { opacity: 0.22; }
+.app-bg .app-bg-orb { filter: blur(84px); opacity: 0.42; }
+[data-theme="light"] .app-bg .app-bg-orb { opacity: 0.30; }
+.app-bg .app-bg-orb-a {
+  background: radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--j-accent) 34%, transparent), transparent 64%);
+}
+.app-bg .app-bg-orb-b {
+  background: radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--j-accent-2) 30%, transparent), transparent 64%);
+}
+.app-bg::after {
+  background: radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--j-accent-3) 20%, transparent), transparent 64%);
+  opacity: 0.35;
+}
+[data-theme="light"] .app-bg::before { opacity: 0.5; }
+
+/* ─── 3 · SIDEBAR — white card language on paper ───────────────────── */
+body .chat-archive.panel {
+  background: color-mix(in srgb, var(--j-bg) 55%, transparent);
+  border-right: 1px solid var(--j-border);
+  box-shadow: none;
+  backdrop-filter: none;
+}
+[data-theme="light"] body .chat-archive.panel {
+  background: color-mix(in srgb, #ffffff 42%, transparent);
+}
+
+/* brand */
+body .sidebar-brand { padding: var(--j-sp-4) var(--j-sp-4) var(--j-sp-2); }
+body .sidebar-brand .brand-mark {
+  border-radius: 50%;
+  background:
+    linear-gradient(var(--j-card), var(--j-card)) padding-box,
+    var(--j-accent-grad) border-box;
+  border: 2px solid transparent;
+  box-shadow: 0 4px 14px -6px color-mix(in srgb, var(--j-accent) 55%, transparent);
+}
+body .brand-text h1 {
+  font-family: var(--j-font-display);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  font-size: 1.18rem;
+}
+
+/* New chat — gradient CTA */
+body .chat-archive .btn-new-chat {
+  justify-content: center;
+  gap: 8px;
+  margin: var(--j-sp-2) var(--j-sp-4) var(--j-sp-3);
+  padding: 11px 16px;
+  border: none;
+  border-radius: 14px;
+  background: var(--j-accent-grad);
+  color: var(--j-accent-ink);
+  font-weight: 600;
+  font-size: var(--j-fs-sm);
+  letter-spacing: 0.01em;
+  box-shadow: var(--j-shadow-accent);
+  transition: transform var(--j-dur-fast) var(--j-ease), box-shadow var(--j-dur-fast) var(--j-ease), filter var(--j-dur-fast) var(--j-ease);
+}
+body .chat-archive .btn-new-chat:hover {
+  filter: brightness(1.06);
+  transform: translateY(-1px);
+  box-shadow: 0 18px 40px -16px color-mix(in srgb, var(--j-accent) 55%, transparent);
+}
+body .chat-archive .btn-new-chat:active { transform: translateY(0); }
+body .chat-archive .btn-new-chat .btn-new-chat-icon { opacity: 0.95; }
+
+/* Active/Archive — segmented pill */
+body .chat-archive-tabs {
+  margin: 0 var(--j-sp-4) var(--j-sp-2);
+  padding: 3px;
+  border-radius: var(--j-r-pill);
+  background: color-mix(in srgb, var(--j-ink) 6%, transparent);
+  border: 1px solid var(--j-border);
+  gap: 2px;
+}
+[data-theme="light"] body .chat-archive-tabs { background: #ecebe6; border-color: transparent; }
+body .chat-archive-tab {
+  border-radius: var(--j-r-pill);
+  border: none;
+  padding: 6px 12px;
+  font-weight: 600;
+  font-size: var(--j-fs-xs);
+  color: var(--j-ink-dim);
+  background: transparent;
+  transition: background var(--j-dur-fast) var(--j-ease), color var(--j-dur-fast) var(--j-ease), box-shadow var(--j-dur-fast) var(--j-ease);
+}
+body .chat-archive-tab.is-active {
+  background: var(--j-card);
+  color: var(--j-ink);
+  box-shadow: var(--j-shadow-1);
+  border: none;
+}
+
+/* search — white field + shortcut badge */
+body .chat-archive-search-wrap {
+  margin: 0 var(--j-sp-4) var(--j-sp-2);
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+/* Input has NO box of its own — just text inside the wrap pill (no inner box). */
+body .chat-archive-search {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  color: var(--j-ink);
+}
+body .chat-archive-search:focus {
+  border: none;
+  box-shadow: none;
+  outline: none;
+}
+
+/* message avatars fully round (like the brand icon) */
+body .log .msg-avatar {
+  border-radius: 50%;
+}
+
+/* section headings — PINNED / TODAY / THIS WEEK */
+body li.chat-archive-section {
+  font: 700 10px var(--j-font-ui);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--j-ink-faint);
+  padding: var(--j-sp-3) var(--j-sp-2) var(--j-sp-1);
+}
+
+/* list items */
+body .chat-archive-item {
+  border-radius: 12px;
+  border: 1px solid transparent;
+  transition: background var(--j-dur-fast) var(--j-ease), border-color var(--j-dur-fast) var(--j-ease);
+}
+body .chat-archive-item:hover { background: color-mix(in srgb, var(--j-accent) 5%, transparent); }
+body .chat-archive-item.is-active {
+  background: var(--j-accent-chip);
+  border-color: color-mix(in srgb, var(--j-accent) 16%, transparent);
+}
+body .chat-archive-item .chat-archive-item-title {
+  font-weight: 550;
+  color: var(--j-ink);
+}
+/* status dot: quiet dot on each item; iris when active, green on live activity.
+   Title display:block + ellipsis (akana-v2) — the dot flows inline-block,
+   truncation behavior is preserved. */
+body .chat-archive-item .chat-archive-item-title::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 7px;
+  border-radius: 50%;
+  vertical-align: 0.06em;
+  background: color-mix(in srgb, var(--j-ink-faint) 55%, transparent);
+  transition: background var(--j-dur-fast) var(--j-ease), box-shadow var(--j-dur-fast) var(--j-ease);
+}
+/* pinned-emoji rule (akana-v2-surfaces, 0,3,1) overridden at equal specificity:
+   the pin mark is now a masked iris icon in the item's top-right corner */
+body .chat-archive-item.is-pinned .chat-archive-item-title::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 7px;
+  border-radius: 50%;
+  vertical-align: 0.06em;
+  font-size: inherit;
+  background: color-mix(in srgb, var(--j-accent) 70%, transparent);
+}
+body .chat-archive-item.is-active .chat-archive-item-title::before {
+  background: var(--j-accent);
+  box-shadow: 0 0 0 3px var(--j-accent-soft);
+}
+body .chat-archive-item.has-remote-activity .chat-archive-item-title::before {
+  background: var(--j-energy);
+  box-shadow: 0 0 0 3px var(--j-ok-soft);
+}
+body .chat-archive-item { position: relative; }
+body .chat-archive-item.is-pinned::after {
+  content: "";
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 11px;
+  height: 11px;
+  background: var(--j-accent);
+  pointer-events: none;
+  -webkit-mask: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>') center / contain no-repeat;
+  mask: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>') center / contain no-repeat;
+}
+body .chat-archive-item-preview {
+  color: var(--j-ink-dim);
+  font-size: 12px;
+  line-height: 1.35;
+}
+body .chat-archive-item-meta {
+  color: var(--j-ink-faint);
+  font-size: 11px;
+}
+body .chat-archive-activity-badge {
+  color: var(--j-ok-ink);
+  background: var(--j-ok-soft);
+  border-radius: var(--j-r-pill);
+  padding: 1px 7px;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+/* bottom bar */
+body .sidebar-foot {
+  border-top: 1px solid var(--j-border);
+  padding: var(--j-sp-2) var(--j-sp-3);
+}
+body .sidebar-foot .sidebar-foot-link {
+  background: var(--j-card);
+  border: 1px solid var(--j-card-border);
+  border-radius: 10px;
+  box-shadow: var(--j-shadow-1);
+  padding: 7px 12px;
+  font-weight: 550;
+  color: var(--j-ink-dim);
+  transition: color var(--j-dur-fast) var(--j-ease), border-color var(--j-dur-fast) var(--j-ease);
+}
+body .sidebar-foot .sidebar-foot-link:hover { color: var(--j-accent); border-color: color-mix(in srgb, var(--j-accent) 30%, var(--j-card-border)); }
+
+/* ─── 4 · TOP BAR — quiet strip + premium pills ────────────────────────── */
+body .top.top-bar {
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--j-border);
+  border-radius: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+[data-theme="light"] body .top.top-bar {
+  background: color-mix(in srgb, #ffffff 30%, transparent);
+}
+body .chat-thread-title {
+  font-family: var(--j-font-display);
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+body .chat-thread-actions .btn-thread-action {
+  color: var(--j-ink-faint);
+  border-radius: 9px;
+  transition: color var(--j-dur-fast) var(--j-ease), background var(--j-dur-fast) var(--j-ease);
+}
+/* to beat aurora-shell's `body .top.top-bar …` (0,5,1) hover rule the same
+   ancestor chain is required (review finding: otherwise the delete red
+   was never showing) */
+body .top.top-bar .chat-thread-actions .btn-thread-action:hover {
+  color: var(--j-accent);
+  background: var(--j-accent-soft);
+  border-color: transparent;
+}
+body .top.top-bar .chat-thread-actions .btn-thread-action.btn-thread-delete:hover {
+  color: var(--j-danger-ink);
+  background: var(--j-danger-soft);
+}
+
+/* status pills — NO data-state = green/ok (JS contract: only warn/bad are written) */
+body .top.top-bar .status-pill {
+  background: var(--j-card);
+  border: 1px solid var(--j-card-border);
+  border-radius: var(--j-r-pill);
+  box-shadow: var(--j-shadow-1);
+  color: var(--j-ink-dim);
+  font-weight: 600;
+  font-size: var(--j-fs-xs);
+}
+body .top.top-bar .status-pill .status-dot {
+  background: var(--j-energy);
+  box-shadow: 0 0 0 3px var(--j-ok-soft);
+}
+body .top.top-bar .status-pill[data-state="warn"] .status-dot,
+body .top.top-bar .status-pill.status-pill-warn .status-dot {
+  background: var(--j-warn);
+  box-shadow: 0 0 0 3px var(--j-warn-soft);
+}
+body .top.top-bar .status-pill[data-state="bad"] .status-dot,
+body .top.top-bar .status-pill.status-pill-bad .status-dot {
+  background: var(--j-danger);
+  box-shadow: 0 0 0 3px var(--j-danger-soft);
+}
+body .top.top-bar #model-pill { cursor: pointer; }
+body .top.top-bar #model-pill:hover { border-color: color-mix(in srgb, var(--j-accent) 35%, var(--j-card-border)); }
+
+/* Hey Akana — violet chip */
+body .top.top-bar .btn-wake {
+  background: var(--j-accent-chip);
+  border: 1px solid color-mix(in srgb, var(--j-accent) 18%, transparent);
+  border-radius: var(--j-r-pill);
+  color: var(--j-accent);
+  font-weight: 600;
+  font-size: var(--j-fs-xs);
+}
+body .top.top-bar .btn-wake .btn-chip-dot { background: var(--j-accent); }
+body .top.top-bar .btn-wake:hover { border-color: color-mix(in srgb, var(--j-accent) 40%, transparent); }
+body .top.top-bar .btn-wake.active {
+  background: var(--j-accent);
+  color: var(--j-accent-ink);
+  box-shadow: var(--j-shadow-accent);
+}
+body .top.top-bar .btn-wake.active .btn-chip-dot { background: #fff; }
+
+/* ─── 5 · CHAT COLUMN — bubbles + avatars ─────────────────────────── */
+body .panel.chat-panel {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+/* avatars: assistant = iris ring node */
+body .log .row-assistant .msg-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background:
+    linear-gradient(var(--j-card), var(--j-card)) padding-box,
+    var(--j-accent-grad) border-box;
+  border: 2px solid transparent;
+  color: var(--j-accent);
+  font-weight: 700;
+  font-size: 12px;
+  box-shadow: 0 3px 10px -4px color-mix(in srgb, var(--j-accent) 50%, transparent);
+}
+body .log .row-user .msg-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--j-accent-chip);
+  border: 1px solid var(--j-bubble-user-border);
+  color: var(--j-accent);
+  font-weight: 650;
+  font-size: 12px;
+}
+
+/* role label — AKANA caps + status chip */
+body .log .row-assistant .msg-label {
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font: 700 10.5px var(--j-font-ui);
+  color: var(--j-ink-faint);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+body .log .row-user .msg-label {
+  font: 600 10.5px var(--j-font-ui);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--j-ink-faint);
+}
+body .log .msg-label.meta { font-family: var(--j-font-ui); }
+/* turn status chip (JS: turn-status-chip) */
+body .log .turn-status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+  font: 600 10.5px var(--j-font-ui);
+  padding: 1.5px 8px;
+  border-radius: var(--j-r-pill);
+  background: var(--j-ok-soft);
+  color: var(--j-ok-ink);
+}
+body .log .turn-status-chip::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+body .log .turn-status-chip[data-state="err"] {
+  background: var(--j-danger-soft);
+  color: var(--j-danger-ink);
+}
+
+/* user bubble — lavender */
+body .log .bubble-user {
+  background: var(--j-bubble-user);
+  border: 1px solid var(--j-bubble-user-border);
+  border-radius: 16px 16px 5px 16px;
+  color: var(--j-ink);
+  box-shadow: none;
+  padding: 10px 15px;
+}
+
+/* assistant body — flat premium column (no card, just air) */
+body .log .bubble-assistant.bubble-bot {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* live turn HUD pill */
+body .log .turn-hud {
+  background: var(--j-card);
+  border: 1px solid var(--j-card-border);
+  border-radius: var(--j-r-pill);
+  box-shadow: var(--j-shadow-1);
+  color: var(--j-ink-faint);
+}
+
+/* ─── 6 · TOOL CARDS — single group card + row language ─────────────────────── */
+/* both parallel paths (tool-calls-group / aur-process) are pulled into the same card language */
+body .log .tool-calls-group,
+body .log .akana-thought-feed.aur-process {
+  background: var(--j-card);
+  border: 1px solid var(--j-card-border);
+  border-radius: var(--j-r-md);
+  box-shadow: var(--j-card-shadow);
+  overflow: hidden;
+}
+body .log .tool-calls-toggle,
+body .log .aur-process-head {
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--j-hairline);
+  padding: 9px 14px;
+  font: 600 var(--j-fs-xs) var(--j-font-ui);
+  color: var(--j-ink-dim);
+}
+[data-theme="light"] body .log .tool-calls-toggle,
+[data-theme="light"] body .log .aur-process-head { border-bottom-color: rgba(44, 38, 80, 0.06); }
+body .log .aur-process-spark { color: var(--j-accent); }
+body .log .aur-process-label { color: var(--j-ink); font-weight: 650; }
+body .log .aur-process-sub { color: var(--j-ink-faint); }
+
+/* thought lines — italic quiet preamble */
+body .log .akana-thought-line--think {
+  font-style: italic;
+  color: var(--j-ink-dim);
+  font-size: var(--j-fs-sm);
+}
+/* vertical thread linking tool cards REMOVED (user request B4).
+   Hide aurora-chat.css:454 (0,4,1) at matching specificity (0,4,2);
+   node dots (per-item ::before) and card alignment are preserved. */
+body .log .akana-thought-feed.aur-process .aur-timeline::before {
+  display: none;
+}
+
+/* tool row */
+body .log details.tool-call.action-card {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+body .log details.tool-call.action-card + details.tool-call.action-card {
+  border-top: 1px solid var(--j-hairline);
+}
+[data-theme="light"] body .log details.tool-call.action-card + details.tool-call.action-card {
+  border-top-color: rgba(44, 38, 80, 0.05);
+}
+body .log .action-card-summary { padding: 8px 14px; gap: 10px; }
+body .log .action-card-summary:hover { background: color-mix(in srgb, var(--j-accent) 4%, transparent); }
+body .log .action-card-title {
+  font-family: var(--j-font-mono);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--j-ink);
+}
+body .log .action-card-subtitle {
+  font-family: var(--j-font-mono);
+  font-size: 11.5px;
+  color: var(--j-ink-faint);
+}
+body .log .action-card-duration {
+  font-family: var(--j-font-mono);
+  font-size: 11px;
+  color: var(--j-ink-faint);
+  background: transparent;
+  border: none;
+}
+/* status dot */
+body .log .action-card-status[data-status]::before { color: var(--j-energy); }
+body .log .action-card-status[data-status="running"]::before { color: var(--j-accent); }
+body .log .action-card-status[data-status="error"]::before { color: var(--j-danger); }
+/* result badge — green/orange chip */
+body .log .aur-tool-result {
+  font: 600 10.5px var(--j-font-mono);
+  padding: 2px 8px;
+  border-radius: var(--j-r-pill);
+  border: none;
+}
+body .log .aur-tool-result[data-kind="ok"] { background: var(--j-ok-soft); color: var(--j-ok-ink); }
+body .log .aur-tool-result[data-kind="neutral"] { background: var(--j-warn-soft); color: var(--j-warn-ink); }
+body .log .aur-tool-result[data-kind="err"] { background: var(--j-danger-soft); color: var(--j-danger-ink); }
+body .log .action-card-chevron { color: var(--j-ink-faint); }
+body .log .action-card-panel {
+  background: color-mix(in srgb, var(--j-ink) 3%, transparent);
+  border-top: 1px solid var(--j-hairline);
+}
+/* quiet the left type-rail (aurora-skin): thin iris line instead of a gradient */
+body .log .action-card--tool::after { width: 2px; opacity: 0.55; }
+
+/* ─── 7 · MARKDOWN BODY — premium reading typography ─────────────────────── */
+body .log .row-assistant .bubble-assistant .md-content ul > li::marker,
+body .log .row-assistant .bubble-bot .md-content ul > li::marker {
+  color: var(--j-accent-2);
+}
+body .log .row-assistant .bubble-assistant .md-content a.md-link,
+body .log .row-assistant .bubble-bot .md-content a.md-link {
+  color: var(--j-accent);
+  text-decoration-color: color-mix(in srgb, var(--j-accent) 40%, transparent);
+}
+body .log .row-assistant .bubble-assistant .md-content code.md-inline-code,
+body .log .row-assistant .bubble-bot .md-content code.md-inline-code {
+  background: var(--j-accent-chip);
+  border: none;
+  color: var(--j-accent-strong);
+  border-radius: 6px;
+  padding: 1px 6px;
+}
+body .log .row-assistant .bubble-assistant .md-content .md-code-shell,
+body .log .row-assistant .bubble-bot .md-content .md-code-shell {
+  background: var(--j-card);
+  border: 1px solid var(--j-card-border);
+  border-radius: var(--j-r-md);
+  box-shadow: var(--j-card-shadow);
+  overflow: hidden;
+}
+body .log .row-assistant .bubble-assistant .md-content .md-code-head,
+body .log .row-assistant .bubble-bot .md-content .md-code-head {
+  background: color-mix(in srgb, var(--j-ink) 3.5%, transparent);
+  border-bottom: 1px solid var(--j-hairline);
+}
+[data-theme="light"] body .log .row-assistant .bubble-assistant .md-content .md-code-head,
+[data-theme="light"] body .log .row-assistant .bubble-bot .md-content .md-code-head {
+  border-bottom-color: rgba(44, 38, 80, 0.06);
+}
+body .log .row-assistant .bubble-assistant .md-content blockquote.md-quote,
+body .log .row-assistant .bubble-bot .md-content blockquote.md-quote {
+  border-left: 3px solid color-mix(in srgb, var(--j-accent) 45%, transparent);
+  background: var(--j-accent-soft);
+  border-radius: 8px;
+}
+body .log .row-assistant .bubble-assistant .md-content .md-table-wrap,
+body .log .row-assistant .bubble-bot .md-content .md-table-wrap {
+  border: 1px solid var(--j-card-border);
+  border-radius: var(--j-r-md);
+  box-shadow: var(--j-shadow-1);
+}
+
+/* ─── 8 · COMPOSER — floating white card ─────────────────────────────────────── */
+body .composer .composer-inner {
+  background: var(--j-card);
+  border: 1px solid var(--j-card-border);
+  border-radius: var(--j-r-2xl);
+  box-shadow: var(--j-shadow-2);
+  backdrop-filter: none;
+  transition: border-color var(--j-dur-fast) var(--j-ease), box-shadow var(--j-dur-med) var(--j-ease);
+}
+body .composer .composer-inner:focus-within {
+  border-color: color-mix(in srgb, var(--j-accent) 40%, var(--j-card-border));
+  box-shadow: var(--j-glow-soft), var(--j-shadow-2);
+}
+body .composer textarea#msg { color: var(--j-ink); }
+body .composer textarea#msg::placeholder { color: var(--j-ink-faint); }
+
+/* mic + attach — soft round ghost */
+body .composer .btn-mic,
+body .composer .btn-attach {
+  border-radius: 50%;
+  color: var(--j-ink-dim);
+  background: transparent;
+  border: none;
+  transition: background var(--j-dur-fast) var(--j-ease), color var(--j-dur-fast) var(--j-ease);
+}
+body .composer .btn-mic:hover,
+body .composer .btn-attach:hover {
+  background: var(--j-accent-soft);
+  color: var(--j-accent);
+}
+
+/* effort menu — pill */
+body .composer .btn-effort {
+  background: color-mix(in srgb, var(--j-ink) 5%, transparent);
+  border: 1px solid var(--j-border);
+  border-radius: var(--j-r-pill);
+  color: var(--j-ink-dim);
+  font-weight: 600;
+}
+[data-theme="light"] body .composer .btn-effort { background: #f3f2ee; border-color: transparent; }
+body .composer .btn-effort:hover { color: var(--j-ink); border-color: var(--j-border-strong); }
+body .effort-popover {
+  background: var(--j-overlay);
+  border: 1px solid var(--j-card-border);
+  border-radius: var(--j-r-md);
+  box-shadow: var(--j-shadow-2);
+  padding: 4px;
+}
+body .effort-popover .effort-opt {
+  border-radius: 9px;
+  font-weight: 550;
+}
+body .effort-popover .effort-opt:hover { background: var(--j-accent-soft); }
+body .effort-popover .effort-opt.is-active {
+  background: var(--j-accent-chip);
+  color: var(--j-accent);
+  font-weight: 650;
+}
+
+/* send — circular gradient */
+body .composer .btn-send {
+  border-radius: 50%;
+  background: var(--j-accent-grad);
+  color: var(--j-accent-ink);
+  border: none;
+  box-shadow: var(--j-shadow-accent);
+  transition: transform var(--j-dur-fast) var(--j-ease), filter var(--j-dur-fast) var(--j-ease), box-shadow var(--j-dur-fast) var(--j-ease);
+}
+body .composer .btn-send:hover { filter: brightness(1.07); transform: translateY(-1px); }
+body .composer .btn-send:active { transform: translateY(0); }
+body .composer .btn-send[data-mode="stop"] {
+  background: var(--j-danger);
+  box-shadow: 0 10px 26px -12px color-mix(in srgb, var(--j-danger) 60%, transparent);
+}
+body .composer-hint { color: var(--j-ink-faint); }
+
+/* flow strip (turn status) */
+body .akana-flow-strip {
+  background: var(--j-card);
+  border: 1px solid var(--j-card-border);
+  border-radius: var(--j-r-pill);
+  box-shadow: var(--j-shadow-1);
+  color: var(--j-ink-dim);
+}
+
+/* attached file chips */
+body .composer-chip {
+  background: var(--j-card);
+  border: 1px solid var(--j-card-border);
+  border-radius: 10px;
+  box-shadow: var(--j-shadow-1);
+}
+
+/* ─── 9 · EMPTY STATE — premium welcome ──────────────────────────────────── */
+body #log-empty.log-empty .log-empty-title {
+  background: var(--j-title-grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+body #log-empty.log-empty .log-empty-sub { color: var(--j-ink-dim); }
+body #log-empty .prompt-chips .prompt-chip {
+  background: var(--j-card);
+  border: 1px solid var(--j-card-border);
+  border-radius: var(--j-r-md);
+  box-shadow: var(--j-shadow-1);
+  backdrop-filter: none;
+  transition: transform var(--j-dur-fast) var(--j-ease), box-shadow var(--j-dur-fast) var(--j-ease), border-color var(--j-dur-fast) var(--j-ease);
+}
+body #log-empty .prompt-chips .prompt-chip:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--j-accent) 30%, var(--j-card-border));
+  box-shadow: var(--j-shadow-2);
+}
+body #log-empty .prompt-chip-icon {
+  background: var(--j-accent-chip);
+  color: var(--j-accent);
+  border-radius: 10px;
+}
+body #log-empty .log-empty-keys { color: var(--j-ink-faint); }
+body #log-empty .log-empty-keys kbd {
+  background: var(--j-card);
+  border: 1px solid var(--j-card-border);
+  box-shadow: var(--j-shadow-1);
+}
+
+/* ─── 10 · GLOBAL BUTTONS + FOCUS ────────────────────────────────────────── */
+body .btn-primary {
+  background: var(--j-accent-grad);
+  border: none;
+  color: var(--j-accent-ink);
+  border-radius: 11px;
+  font-weight: 600;
+  box-shadow: var(--j-shadow-accent);
+  transition: filter var(--j-dur-fast) var(--j-ease), transform var(--j-dur-fast) var(--j-ease);
+}
+body .btn-primary:hover { filter: brightness(1.07); transform: translateY(-1px); }
+body .btn-primary:active { transform: translateY(0); }
+body .btn-ghost {
+  border-radius: 10px;
+  border: 1px solid var(--j-border);
+}
+body .btn-ghost:hover {
+  border-color: color-mix(in srgb, var(--j-accent) 30%, var(--j-border));
+  color: var(--j-accent);
+}
+body .btn-icon { border-radius: 10px; }
+body .btn-icon:hover { background: var(--j-accent-soft); color: var(--j-accent); }
+
+::selection { background: color-mix(in srgb, var(--j-accent) 22%, transparent); }
+
+/* thin scrollbars */
+* { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--j-ink) 18%, transparent) transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--j-ink) 16%, transparent);
+  border-radius: 8px;
+}
+*::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--j-ink) 28%, transparent); }
+
+/* ─── 11 · SETTINGS / OVERLAY / TOAST polish ──────────────────────────────── */
+body .settings-panel {
+  border-radius: var(--j-r-lg);
+  border: 1px solid var(--j-card-border);
+  box-shadow: var(--j-shadow-3);
+}
+body .settings-tab { border-radius: 11px; }
+body .settings-tab:hover { background: var(--j-accent-soft); }
+body .settings-tab.is-active {
+  background: var(--j-accent-chip);
+  color: var(--j-accent);
+}
+body .settings-tab.is-active .settings-tab-label { color: var(--j-accent); }
+body .model-switcher {
+  /* NO border: aurora-overlays uses the gradient border-box technique
+     (border-color must be transparent) — an opaque border was covering the gradient edge */
+  border-radius: var(--j-r-md);
+  box-shadow: var(--j-shadow-2);
+}
+body .model-switcher .model-switcher-opt.is-active {
+  background: var(--j-accent-chip);
+  color: var(--j-accent);
+}
+body .ui-toast {
+  border-radius: var(--j-r-md);
+  border: 1px solid var(--j-card-border);
+  box-shadow: var(--j-shadow-2);
+  background: var(--j-overlay);
+}
+body .pair-modal, body dialog#kbd-help {
+  border-radius: var(--j-r-lg);
+  border: 1px solid var(--j-card-border);
+  box-shadow: var(--j-shadow-3);
+}
+body .msg-actionbar {
+  background: var(--j-overlay);
+  border: 1px solid var(--j-card-border);
+  border-radius: var(--j-r-pill);
+  box-shadow: var(--j-shadow-2);
+  padding: 3px;
+}
+body .msg-actionbar .msg-action-btn { border-radius: var(--j-r-pill); }
+body .msg-actionbar .msg-action-btn:hover { background: var(--j-accent-soft); color: var(--j-accent); }
+body .msg-tts-fab {
+  background: var(--j-overlay);
+  border: 1px solid var(--j-card-border);
+  box-shadow: var(--j-shadow-2);
+}
+body .msg-tts-fab:hover { background: var(--j-accent-soft); color: var(--j-accent); }
+
+/* voice stage control buttons — card language */
+body #aur-voice-overlay .aur-vbtn {
+  background: var(--j-card);
+  border: 1px solid var(--j-card-border);
+  border-radius: var(--j-r-pill);
+  box-shadow: var(--j-shadow-1);
+}
+body #aur-voice-overlay .aur-vbtn:hover { border-color: color-mix(in srgb, var(--j-accent) 35%, var(--j-card-border)); }
+body #aur-voice-overlay .aur-voice-end { background: var(--j-danger-soft); color: var(--j-danger); border-color: transparent; }
+
+/* ─── 12 · MEMORY PAGE (memory.html also loads this file) ─────────────── */
+body.memory-studio-page .mem-hero-card {
+  background: var(--j-card);
+  border: 1px solid var(--j-card-border);
+  border-radius: var(--j-r-md);
+  box-shadow: var(--j-card-shadow);
+}
+body.memory-studio-page .mem-rail-item { border-radius: 11px; }
+body.memory-studio-page .mem-rail-item:hover { background: var(--j-accent-soft); }
+body.memory-studio-page .mem-rail-item.is-active {
+  /* aurora-memory uses !important on the same selector — must match */
+  background: var(--j-accent-chip) !important;
+  color: var(--j-accent) !important;
+}
+body.memory-studio-page .memory-fact-card {
+  background: var(--j-card);
+  border: 1px solid var(--j-card-border);
+  border-radius: var(--j-r-md);
+  box-shadow: var(--j-shadow-1);
+}
+body.memory-studio-page .memory-fact-card:hover { box-shadow: var(--j-shadow-2); }
+body.memory-studio-page .memory-score-fill { background: var(--j-accent-grad); }
+
+/* ─── 13 · MOBILE SETTINGS (project rule: everything inside @media) ──────────── */
+@media (max-width: 900px) {
+  /* in drawer mode the sidebar becomes a solid surface (glass translucency
+     must not blend with content under the drawer). The LIGHT theme attr-selector (0,3,1)
+     was overriding the premium base rule → make it explicitly opaque in light theme too. */
+  body .chat-archive.panel { background: var(--j-overlay); }
+  [data-theme="light"] body .chat-archive.panel { background: var(--j-overlay); }
+  /* premium made "New chat" a labeled full-width CTA; the old mobile rule
+     was hiding the label → bring it back (drawer is 300px, there's room) */
+  body .chat-archive .btn-new-chat .btn-label-full { display: inline; }
+}
+@media (max-width: 560px) {
+  /* PRE-EXISTING overflow fix: title nowrap + max-width:none was pushing the top bar
+     to ~530px (533 > 375). Title gets truncated, action row WRAPS to a new line
+     — no action is hidden (export/telegram is the sole entry point,
+     review finding), 40px touch targets are preserved. */
+  body .chat-panel-toolbar { min-width: 0; flex-wrap: wrap; }
+  body .chat-thread-title { min-width: 0; max-width: 56vw; }
+  body .top-nav { min-width: 0; }
+  /* even on a static ground, drop orb blur one more notch for mobile battery */
+  .app-bg .app-bg-orb { filter: blur(44px) !important; }
+}
+/* effort pill (#btn-effort) was 34px on touch → 40px floor */
+@media (hover: none) and (pointer: coarse) {
+  body .composer .btn-effort { min-width: 40px; min-height: 40px; }
+}
+/* mnav (bottom tab strip) was carrying a backdrop blur over an animated ground —
+   constant GPU cost on phones; match aurora-mobile's gate exactly */
+@media (max-width: 560px) and (pointer: coarse), (display-mode: standalone) {
+  body .mnav {
+    background: var(--j-overlay);
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+}
+
+/* ─── 14 · REDUCED MOTION — safety for new transitions ──────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  body .chat-archive .btn-new-chat,
+  body .composer .btn-send,
+  body .btn-primary,
+  body #log-empty .prompt-chips .prompt-chip {
+    transition: none;
+  }
+  body .chat-archive .btn-new-chat:hover,
+  body .composer .btn-send:hover,
+  body .btn-primary:hover,
+  body #log-empty .prompt-chips .prompt-chip:hover {
+    transform: none;
+  }
+}
+
+/* ─── 15 · PERFORMANCE — cut compositor/paint load ──────────────────────────
+   CRITICAL: only the Akana tab was very slow. Measured root cause (live
+   getAnimations + computed style):
+     (a) INFINITE animation on .app-bg layers (aurora-drift/aurora-flow) —
+         it was animating blur(84px) orbs with translate+scale; scale
+         RE-rasterizes the huge Gaussian blur every frame (GPU chokes).
+     (b) 24 backdrop-filter surfaces were re-sampling the constantly changing
+         blurred ground every frame — combined with (a) the compositor locked up.
+   Fix: stop the bg animations (static but still elegant gradient+orb — one-off
+   raster, cached) and remove backdrop-filter from PERSISTENTLY visible surfaces
+   (premium already has solid card backgrounds). Modals/backdrops
+   (settings/pair/kbd/artifact/drop) only render when OPEN, so their
+   blurs stay — no idle cost, appearance preserved. */
+
+/* (a) freeze the stage ground — transform/filter animation = continuous re-raster */
+.app-bg .app-bg-orb,
+.app-bg::before,
+.app-bg::after {
+  animation: none !important;
+}
+/* drop blur one notch for the static orbs (lighten the one-off raster) */
+.app-bg .app-bg-orb { filter: blur(64px) !important; }
+
+/* (b) remove backdrop blur on persistently visible surfaces (solid premium ground exists).
+   In long chats dozens of .action-card/bubble backdrop-filters were being
+   re-blurred every frame → remove them all (premium already renders flat/solid). */
+body .top.top-bar,
+body .stage .top.top-bar,
+body .log .tool-calls-group,
+body .log .akana-thought-feed.aur-process,
+body .log .action-card,
+body .log .bubble-assistant,
+body .log .bubble-bot,
+body .log .bubble-user,
+body .log .memory-use,
+body .log .md-code-shell,
+body #log-empty .prompt-chips .prompt-chip,
+body .akana-flow-strip,
+body .akana-fab-down,
+body .msg-actionbar,
+body .composer .composer-inner,
+body .chat-archive.panel {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* in dark theme premium's top bar is transparent — after removing blur, give it a
+   thin solid wash for readability (light theme already had a white-30% wash) */
+[data-theme="dark"] body .top.top-bar {
+  background: color-mix(in srgb, var(--j-bg) 82%, transparent);
+}
+/* in dark theme tool cards/chips get a more opaque ground (translucent glass → solid) */
+[data-theme="dark"] body .log .tool-calls-group,
+[data-theme="dark"] body .log .akana-thought-feed.aur-process,
+[data-theme="dark"] body #log-empty .prompt-chips .prompt-chip {
+  background: color-mix(in srgb, var(--j-bg) 70%, var(--j-raised)) !important;
+}
+
+/* ─── 16 · ONBOARDING + PAIR — wizard and phone pairing card ──────────────
+   Loaded AFTER aurora-onboard.css and akana-pair.css; visual layer only
+   (no id/class/data-attr renamed, JS contracts untouched).
+   White card language (--j-card/-card-border/-shadow-3/-r-2xl) + gradient CTAs. */
+
+/* backdrops — premium overlay token, no heavy animated blur added */
+body .aur-onb-backdrop,
+body .pair-backdrop {
+  background: var(--j-overlay);
+}
+
+/* wizard body — white/paper card */
+body .aur-onb {
+  background: var(--j-card);
+  border: 1px solid var(--j-card-border);
+  border-radius: var(--j-r-2xl);
+  box-shadow: var(--j-shadow-3);
+}
+
+/* pair modal — same card language (the base rule in §11 is reinforced here) */
+body .pair-modal {
+  background: var(--j-card);
+  border: 1px solid var(--j-card-border);
+  border-radius: var(--j-r-2xl);
+  box-shadow: var(--j-shadow-3);
+}
+body .pair-modal-close {
+  border: 1px solid var(--j-card-border);
+  color: var(--j-ink-dim);
+}
+body .pair-modal-close:hover {
+  color: var(--j-accent);
+  border-color: color-mix(in srgb, var(--j-accent) 35%, var(--j-card-border));
+  background: var(--j-accent-soft);
+}
+
+/* hero + orb — iris gradient */
+body .aur-onb-hero {
+  background: var(--j-accent-glow), linear-gradient(150deg, color-mix(in srgb, var(--j-accent) 12%, var(--j-card)), color-mix(in srgb, var(--j-accent-2) 8%, var(--j-card)));
+  border-bottom: 1px solid var(--j-card-border);
+}
+body .aur-onb-orb-core {
+  background:
+    radial-gradient(circle at 34% 28%, #fff 0%, transparent 40%),
+    conic-gradient(from 210deg, var(--j-accent), var(--j-accent-3), var(--j-accent-2), var(--j-accent));
+  box-shadow: 0 0 0 1px var(--j-card-border), var(--j-shadow-accent);
+}
+body .aur-onb-title {
+  font-family: var(--j-font-display);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--j-ink);
+}
+body .aur-onb-lead { color: var(--j-ink-dim); }
+
+/* body cards — feature/choice/provider/theme */
+body .aur-onb-feat,
+body .aur-onb-choice,
+body .aur-onb-th,
+body .aur-onb-toggle,
+body .aur-onb-status,
+body .aur-onb-prompt {
+  background: var(--j-card);
+  border: 1px solid var(--j-card-border);
+  box-shadow: var(--j-shadow-1);
+}
+body .aur-onb-feat-ic,
+body .aur-onb-cic {
+  background: var(--j-accent-chip);
+  border: 1px solid color-mix(in srgb, var(--j-accent) 20%, var(--j-card-border));
+  color: var(--j-accent);
+}
+body .aur-onb-choice:hover,
+body .aur-onb-th:hover,
+body .aur-onb-toggle:hover,
+body .aur-onb-prompt:hover {
+  border-color: color-mix(in srgb, var(--j-accent) 35%, var(--j-card-border));
+  box-shadow: var(--j-glow-soft);
+}
+/* selected state — soft card with accent ring (same language as §11 settings-tab.is-active) */
+body .aur-onb-choice.on,
+body .aur-onb-th.on,
+body .aur-onb-toggle.on {
+  border-color: transparent;
+  background: var(--j-accent-chip);
+  box-shadow: var(--j-glow-soft);
+}
+body .aur-onb-switch { background: color-mix(in srgb, var(--j-ink-faint) 30%, transparent); }
+body .aur-onb-toggle.on .aur-onb-switch { background: var(--j-accent-grad); }
+
+/* provider/accent chips — pill card */
+body .aur-onb-prov,
+body .aur-onb-acc {
+  background: var(--j-card);
+  border: 1px solid var(--j-card-border);
+  color: var(--j-ink-dim);
+}
+body .aur-onb-prov:hover,
+body .aur-onb-acc:hover {
+  color: var(--j-ink);
+  border-color: color-mix(in srgb, var(--j-accent) 30%, var(--j-card-border));
+}
+body .aur-onb-prov.on,
+body .aur-onb-acc.on {
+  color: var(--j-accent);
+  border-color: transparent;
+  background: var(--j-accent-chip);
+  box-shadow: var(--j-glow-soft);
+}
+body .aur-onb-prov-detail {
+  background: color-mix(in srgb, var(--j-accent) 5%, var(--j-card));
+  border: 1px solid var(--j-card-border);
+}
+body .aur-onb-prov-headic {
+  background: var(--j-accent-chip);
+  border: 1px solid color-mix(in srgb, var(--j-accent) 24%, var(--j-card-border));
+  color: var(--j-accent);
+}
+
+/* status row — premium inks for ok/warn/loading */
+body .aur-onb-status-ok {
+  border-color: color-mix(in srgb, var(--j-ok-ink) 35%, var(--j-card-border));
+  background: var(--j-ok-soft);
+  color: var(--j-ok-ink);
+}
+body .aur-onb-status-ok .aur-onb-status-dot {
+  background: var(--j-ok-ink);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--j-ok-ink) 28%, transparent);
+}
+body .aur-onb-status-warn {
+  border-color: color-mix(in srgb, var(--j-warn-ink) 35%, var(--j-card-border));
+  background: var(--j-warn-soft);
+  color: var(--j-warn-ink);
+}
+body .aur-onb-status-warn .aur-onb-status-dot {
+  background: var(--j-warn-ink);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--j-warn-ink) 28%, transparent);
+}
+body .aur-onb-status-loading { background: var(--j-accent-soft); border-color: color-mix(in srgb, var(--j-accent) 30%, var(--j-card-border)); }
+body .aur-onb-status-btn {
+  border: 1px solid color-mix(in srgb, var(--j-accent) 40%, var(--j-card-border));
+  background: var(--j-accent-soft);
+  color: var(--j-ink);
+}
+body .aur-onb-status-btn:hover {
+  border-color: transparent;
+  background: var(--j-accent-grad);
+  color: var(--j-accent-ink);
+}
+
+/* inputs — white field + focus glow */
+body .aur-onb-name,
+body .aur-onb-key,
+body .pair-host-input {
+  background: var(--j-card);
+  border: 1px solid var(--j-card-border);
+  color: var(--j-ink);
+}
+body .aur-onb-name:focus,
+body .aur-onb-key:focus,
+body .pair-host-input:focus-visible {
+  border-color: color-mix(in srgb, var(--j-accent) 55%, var(--j-card-border));
+  box-shadow: var(--j-glow-soft);
+}
+
+/* primary CTAs — gradient button language (same as §10 .btn-primary) */
+body .aur-onb-next,
+body .aur-onb-keysave,
+body #pair-copy-url {
+  background: var(--j-accent-grad);
+  color: var(--j-accent-ink);
+  border: none;
+  box-shadow: var(--j-shadow-accent);
+  transition: transform var(--j-dur-fast) var(--j-ease), filter var(--j-dur-fast) var(--j-ease);
+}
+body .aur-onb-next:hover,
+body .aur-onb-keysave:hover,
+body #pair-copy-url:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+}
+body .aur-onb-keysave-ghost {
+  background: var(--j-accent-soft);
+  color: var(--j-ink);
+  box-shadow: none;
+  border: 1px solid color-mix(in srgb, var(--j-accent) 38%, var(--j-card-border));
+}
+body .aur-onb-keysave-ghost:hover {
+  border-color: transparent;
+  background: var(--j-accent-grad);
+  color: var(--j-accent-ink);
+}
+
+/* bottom bar — back/skip/dot indicators */
+body .aur-onb-foot { border-top: 1px solid var(--j-card-border); }
+body .aur-onb-back {
+  border: 1px solid var(--j-card-border);
+  color: var(--j-ink-dim);
+}
+body .aur-onb-back:hover {
+  color: var(--j-ink);
+  border-color: var(--j-border-strong);
+}
+body .aur-onb-dots span { background: color-mix(in srgb, var(--j-ink-faint) 35%, transparent); }
+body .aur-onb-dots span.on { background: var(--j-accent-grad); }
+
+/* pair QR box — white ground preserved for readability (scan contrast) */
+body .pair-qr { box-shadow: var(--j-shadow-2); }
+
+@media (prefers-reduced-motion: reduce) {
+  body .aur-onb-next,
+  body .aur-onb-keysave,
+  body #pair-copy-url,
+  body .aur-onb-choice,
+  body .aur-onb-th,
+  body .aur-onb-toggle,
+  body .aur-onb-prompt {
+    transition: none;
+  }
+  body .aur-onb-next:hover,
+  body .aur-onb-keysave:hover,
+  body #pair-copy-url:hover,
+  body .aur-onb-choice:hover,
+  body .aur-onb-th:hover,
+  body .aur-onb-toggle:hover,
+  body .aur-onb-prompt:hover {
+    transform: none;
+  }
+}

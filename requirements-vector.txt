@@ -1,0 +1,5 @@
+# Local (no Ollama) semantic vector recall — fastembed (ONNX, torch NOT required).
+# The multilingual model is downloaded on first use (~220MB). Without it, recall
+# falls back to keyword search (vectors are an upgrade, not a dependency). Enable:
+#   pip install -r requirements-vector.txt
+fastembed>=0.7

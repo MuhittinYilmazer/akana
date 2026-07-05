@@ -1,0 +1,544 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   AURORA · STATES — empty / skeleton / toast / scrollbar / focus polish
+   ─────────────────────────────────────────────────────────────────────────
+   Load LAST (after every other aurora-*.css). This layer touches NO structure
+   and renames NOTHING — it only restyles existing real classes:
+
+     • #log-empty.log-empty  ............  inviting centered welcome
+     • .aur-skeleton  ...................  reusable shimmer placeholder
+     • .chat-archive-empty "Loading…"       → skeleton rows
+     • body .log-empty[data-loading="1"]   → chat skeleton (JS hides it; we
+                                             reveal + skeletonise on load)
+     • .memory-state-loading / .memory-spinner → memory skeleton/shimmer
+     • #ui-toast-stack > .ui-toast(--kind) → frosted glass + slide-in
+     • *::-webkit-scrollbar  ............  thin aurora scrollbars
+     • :focus-visible  ..................  keyboard ring polish
+
+   Only --j-* tokens. New helper classes are `aur-` prefixed.
+   Respects prefers-reduced-motion (shimmer + slide off).
+   Remove this one <link> to fully revert.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   1 · EMPTY / WELCOME STATE (chat) — #log-empty
+   ───────────────────────────────────────────────────────────────────────────
+   Make the empty chat a calm, centered welcome: gradient wordmark title, a
+   living orb behind the existing icon, soft subtitle, glass prompt chips.
+   ═══════════════════════════════════════════════════════════════════════════ */
+#log-empty.log-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.7rem;
+  max-width: 40rem;
+  margin-inline: auto;
+  padding: clamp(1rem, 4vh, 2.5rem) var(--j-sp-4, 1rem);
+  text-align: center;
+  animation: aur-empty-rise var(--j-dur-slow, 420ms) var(--j-ease, ease) both;
+}
+
+/* The .log-empty-icon SVG becomes a LIVING orb — the cinematic big sibling of
+   the sidebar #orb: a volumetric iris sphere (conic iris body + specular top),
+   a slowly rotating aurora ring (::before), inner glass depth (::after), breath.
+   The markup is untouched; it folds v2's "arc-reactor" look (akana-v2.css:1161-1217)
+   into this layer and, at ID specificity (1,2,0), overrides all v2/light variants.
+   Token-based → light + dark harmonious together. */
+#log-empty.log-empty .log-empty-icon {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: clamp(76px, 11vh, 92px);
+  height: clamp(76px, 11vh, 92px);
+  margin-bottom: 0.5rem;
+  color: #fff;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 35% 26%, rgba(255,255,255,0.95), rgba(255,255,255,0.16) 17%, transparent 44%),
+    conic-gradient(from 210deg,
+      var(--j-accent), var(--j-accent-3), var(--j-accent-2), var(--j-accent));
+  box-shadow:
+    inset 0 1px 1px rgba(255,255,255,0.45),
+    inset 0 -10px 20px -10px rgba(0,0,0,0.5),
+    0 0 0 1px var(--j-hairline),
+    0 16px 40px -12px color-mix(in srgb, var(--j-accent) 52%, transparent),
+    0 0 72px -12px color-mix(in srgb, var(--j-accent-2) 34%, transparent);
+  isolation: isolate;
+  animation: aur-hero-breathe 5.6s var(--j-ease, ease) infinite;
+}
+/* slowly rotating aurora ring — a calm energy feel (from the v2 arc-reactor, more serene) */
+#log-empty.log-empty .log-empty-icon::before {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  z-index: -1;
+  border-radius: 50%;
+  padding: 2px;
+  background: conic-gradient(from 0deg,
+    transparent 0deg,
+    var(--j-accent) 70deg,
+    var(--j-accent-2) 150deg,
+    var(--j-accent-3) 215deg,
+    transparent 300deg);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+          mask-composite: exclude;
+  opacity: 0.75;
+  animation: aur-hero-ring 14s linear infinite;
+}
+/* inner glass depth — a soft shadow on the lower half gives the sphere volume */
+#log-empty.log-empty .log-empty-icon::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 116%, rgba(0,0,0,0.26), transparent 52%);
+  pointer-events: none;
+}
+#log-empty.log-empty .log-empty-icon svg {
+  position: relative;
+  z-index: 2;
+  width: 38px;
+  height: 38px;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.4));
+}
+
+@keyframes aur-hero-breathe {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.04); }
+}
+@keyframes aur-hero-ring {
+  to { transform: rotate(360deg); }
+}
+
+/* Gradient wordmark title — sized to sit on one line in the column.
+   max-width:none overrides akana-v2.css's 18ch constraint (otherwise the greeting wraps to 2 lines). */
+#log-empty.log-empty .log-empty-title {
+  margin: 0;
+  max-width: none;
+  font-family: "Space Grotesk", "Outfit", system-ui, sans-serif;
+  font-size: clamp(1.45rem, 2.8vw, 1.9rem);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+  text-wrap: balance;
+  background: var(--j-title-grad, linear-gradient(110deg, #9aa6ff, #6c78ff 32%, #4fd6ee 66%, #c08cff));
+  -webkit-background-clip: text;
+          background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+/* Calm subtitle */
+#log-empty.log-empty .log-empty-sub {
+  margin: 0;
+  max-width: 32rem;
+  font-size: var(--j-fs-sm, 0.9rem);
+  line-height: 1.5;
+  color: var(--j-ink-dim, #9aa2b4);
+}
+
+/* Prompt suggestion cards — a row of 3 equal widths; wraps vertically on narrow screens */
+#log-empty.log-empty .prompt-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  /* C5 spacing scale: the inline (chip↔chip) + top (hero→chips) gap were snapped
+     to the same token (sp-2 = 8px) → sits on the grid, the two are consistent. */
+  gap: var(--j-sp-2, 8px);
+  margin-top: var(--j-sp-2, 8px);
+  width: 100%;
+  max-width: 100%;
+}
+#log-empty.log-empty .prompt-chips .prompt-chip {
+  appearance: none;
+  flex: 1 1 0;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 170px;
+  max-width: 240px;
+  cursor: pointer;
+  padding: 0.62rem 0.8rem;
+  text-align: left;
+  color: var(--j-ink, #eef1f8);
+  border: 1px solid var(--j-border, rgba(255,255,255,0.08));
+  /* C5 border consistency: 14px → token (r-md), same render, now tied to the grid. */
+  border-radius: var(--j-r-md, 14px);
+  background: var(--j-panel, rgba(255,255,255,0.04));
+  backdrop-filter: blur(var(--j-blur, 14px)) saturate(1.15);
+  -webkit-backdrop-filter: blur(var(--j-blur, 14px)) saturate(1.15);
+  box-shadow: inset 0 1px 0 var(--j-hairline, rgba(255,255,255,0.07));
+  transition:
+    transform var(--j-dur-fast, 130ms) var(--j-ease-snap, ease),
+    border-color var(--j-dur-fast, 130ms) var(--j-ease, ease),
+    background var(--j-dur-fast, 130ms) var(--j-ease, ease),
+    box-shadow var(--j-dur-fast, 130ms) var(--j-ease, ease),
+    color var(--j-dur-fast, 130ms) var(--j-ease, ease);
+}
+#log-empty.log-empty .prompt-chips .prompt-chip-icon {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: var(--j-accent-soft, rgba(108,120,255,0.12));
+  color: var(--j-accent, #6c78ff);
+  transition:
+    background var(--j-dur-fast, 130ms) var(--j-ease, ease),
+    color var(--j-dur-fast, 130ms) var(--j-ease, ease);
+}
+#log-empty.log-empty .prompt-chips .prompt-chip-icon svg {
+  width: 17px;
+  height: 17px;
+}
+#log-empty.log-empty .prompt-chips .prompt-chip-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+#log-empty.log-empty .prompt-chips .prompt-chip-title {
+  font-size: var(--j-fs-sm, 0.9rem);
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--j-ink, #eef1f8);
+}
+#log-empty.log-empty .prompt-chips .prompt-chip-sub {
+  overflow: hidden;
+  font-size: var(--j-fs-xs, 0.78rem);
+  line-height: 1.25;
+  color: var(--j-ink-dim, #9aa3b2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#log-empty.log-empty .prompt-chips .prompt-chip:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--j-accent, #6c78ff) 42%, var(--j-border, rgba(255,255,255,0.08)));
+  box-shadow: var(--j-shadow-accent, 0 14px 40px -18px rgba(108,120,255,0.45));
+}
+#log-empty.log-empty .prompt-chips .prompt-chip:hover .prompt-chip-icon {
+  background: var(--j-accent, #6c78ff);
+  color: var(--j-accent-ink, #fff);
+}
+#log-empty.log-empty .prompt-chips .prompt-chip:active {
+  transform: translateY(0) scale(0.98);
+}
+
+/* A single-row, calm shortcut strip — <b> highlights the key, items separated by gaps */
+#log-empty.log-empty .log-empty-keys {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem 1rem;
+  margin: 0.55rem 0 0;
+  padding: 0;
+  font-size: var(--j-fs-xs, 0.78rem);
+  line-height: 1.4;
+  color: var(--j-ink-faint, #626b7e);
+}
+#log-empty.log-empty .log-empty-keys > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  white-space: nowrap;
+}
+/* group of keycaps for one shortcut (e.g. Shift + Enter) */
+#log-empty.log-empty .log-empty-keys .lk-keys {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+#log-empty.log-empty .log-empty-keys kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.55em;
+  height: 1.55em;
+  padding: 0 0.45em;
+  font-family: inherit;
+  font-size: 0.85em;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--j-ink-dim, #9aa2b4);
+  background: color-mix(in srgb, var(--j-ink-faint, #626b7e) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--j-ink-faint, #626b7e) 26%, transparent);
+  border-radius: 6px;
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--j-ink-faint, #626b7e) 22%, transparent);
+}
+
+@keyframes aur-empty-rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes aur-empty-breathe {
+  0%, 100% { opacity: 0.55; transform: scale(0.96); }
+  50%      { opacity: 1;    transform: scale(1.06); }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   2 · SKELETON LOADERS — reusable .aur-skeleton shimmer
+   ───────────────────────────────────────────────────────────────────────────
+   A gradient sweep over a faint surface. Applied to the app's existing
+   "Loading…" / loading placeholders so they read as skeletons.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.aur-skeleton,
+.aur-skeleton-line {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--j-r-sm, 10px);
+  background: color-mix(in srgb, var(--j-ink-faint, #626b7e) 14%, transparent);
+}
+.aur-skeleton::after,
+.aur-skeleton-line::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--j-ink, #eef1f8) 12%, transparent) 50%,
+    transparent 100%
+  );
+  animation: aur-shimmer calc(var(--j-dur-slow, 420ms) * 3) var(--j-ease, ease) infinite;
+}
+.aur-skeleton-line { height: 0.72rem; }
+.aur-skeleton-line + .aur-skeleton-line { margin-top: 0.5rem; }
+.aur-skeleton-line.is-short { width: 55%; }
+.aur-skeleton-line.is-mid   { width: 78%; }
+
+@keyframes aur-shimmer {
+  to { transform: translateX(100%); }
+}
+
+/* ── 2a · Chat archive: ".chat-archive-empty" used as a "Loading…" item ──
+   We can't know whether the single item is the loading copy or a true empty
+   state from CSS alone, so we render shimmering skeleton ROWS *behind* the
+   text via ::before/::after and dim the literal word. This reads as loading
+   without fabricating DOM. (Applies to the live list's loading placeholder.) */
+#chat-archive-list .chat-archive-empty {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.7rem 0.4rem;
+  min-height: 3.5rem;
+  color: var(--j-ink-faint, #626b7e);
+  font-size: var(--j-fs-sm, 0.9rem);
+}
+/* Two shimmer bars that look like list rows loading in. */
+#chat-archive-list .chat-archive-empty::before,
+#chat-archive-list .chat-archive-empty::after {
+  content: "";
+  display: block;
+  height: 2.4rem;
+  border-radius: var(--j-r-md, 14px);
+  background: color-mix(in srgb, var(--j-ink-faint, #626b7e) 13%, transparent);
+  position: relative;
+  overflow: hidden;
+}
+#chat-archive-list .chat-archive-empty::after { width: 82%; opacity: 0.7; }
+
+/* ── 2b · Chat empty in loading mode ──────────────────────────────────────
+   Deliberately EMPTY: akana-shell.js sets .log-empty to `hidden` during
+   hydration (setLogLoading + updateEmptyState, in two places) — i.e. the app
+   chooses NOT to show a welcome/skeleton during loading. Putting a skeleton-orb
+   here with `display:… !important` overrode [hidden] and created an orb that
+   flashed on every chat transition, breaking aurora's "restyle only, don't
+   change behavior" contract. The loading view is the app's job. */
+
+/* ── 2c · Memory studio loading state: .memory-state-loading + spinner ──
+   Turn the spinner row into a shimmering skeleton block; keep the label,
+   make the spinner an aurora dot. (Real classes from akana-memory-render.) */
+.memory-state.memory-state-loading {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.4rem 0.2rem;
+}
+.memory-state.memory-state-loading > span:last-child {
+  /* the "Loading…" / "Searching…" label */
+  color: var(--j-ink-faint, #626b7e);
+  font-size: var(--j-fs-sm, 0.9rem);
+}
+/* Shimmer card rows standing in for memory cards being fetched. */
+.memory-state.memory-state-loading::before {
+  content: "";
+  display: block;
+  width: 100%;
+  height: 3.2rem;
+  border-radius: var(--j-r-md, 14px);
+  position: relative;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--j-ink-faint, #626b7e) 13%, transparent);
+  box-shadow:
+    0 4.4rem 0 color-mix(in srgb, var(--j-ink-faint, #626b7e) 11%, transparent);
+}
+/* Aurora spinner dot (the existing .memory-spinner) */
+.memory-state.memory-state-loading .memory-spinner {
+  width: 1.05rem;
+  height: 1.05rem;
+  border-radius: var(--j-r-pill, 999px);
+  border: 2px solid var(--j-accent-soft, rgba(108,120,255,0.14));
+  border-top-color: var(--j-accent, #6c78ff);
+  animation: aur-spin calc(var(--j-dur-slow, 420ms) * 2) linear infinite;
+}
+@keyframes aur-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   3 · TOASTS — #ui-toast-stack > .ui-toast(.ui-toast--KIND)
+   ───────────────────────────────────────────────────────────────────────────
+   Real classes (akana-core.js): info (default) · ok · err.  We also cover
+   `success` / `warn` aliases so any kind the app emits is themed.
+   Frosted glass card, rounded, left accent bar by kind, subtle slide-in.
+   ═══════════════════════════════════════════════════════════════════════════ */
+#ui-toast-stack.ui-toast-stack {
+  gap: 0.55rem;
+}
+#ui-toast-stack .ui-toast {
+  pointer-events: auto;
+  padding: var(--j-sp-3, 0.7rem) var(--j-sp-4, 1rem);
+  padding-left: calc(var(--j-sp-4, 1rem) + 6px);
+  border-radius: var(--j-r-lg, 20px);
+  border: 1px solid var(--j-border-strong, rgba(255,255,255,0.16));
+  background: var(--j-overlay, rgba(14,18,30,0.98));
+  backdrop-filter: blur(calc(var(--j-blur, 14px) + 4px)) saturate(1.3);
+  -webkit-backdrop-filter: blur(calc(var(--j-blur, 14px) + 4px)) saturate(1.3);
+  color: var(--j-ink, #eef1f8);
+  font-size: var(--j-fs-sm, 0.9rem);
+  line-height: 1.45;
+  box-shadow: inset 0 1px 0 var(--j-hairline, rgba(255,255,255,0.07)), var(--j-shadow-2, 0 18px 50px -16px rgba(0,0,0,0.55));
+  /* slide-in from the right edge of the stack */
+  transform: translateX(14px);
+  transition:
+    opacity var(--j-dur-med, 230ms) var(--j-ease, ease),
+    transform var(--j-dur-med, 230ms) var(--j-ease-snap, ease);
+}
+#ui-toast-stack .ui-toast.is-visible {
+  transform: translateX(0);
+}
+
+/* Left accent bar — wider & rounded; color by kind */
+#ui-toast-stack .ui-toast::before {
+  width: 4px;
+  border-radius: var(--j-r-pill, 999px);
+  margin: 0.4rem 0;
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  background: var(--j-accent, #6c78ff);   /* info default = iris */
+}
+#ui-toast-stack .ui-toast--info::before { background: var(--j-accent, #6c78ff); }
+#ui-toast-stack .ui-toast--ok::before,
+#ui-toast-stack .ui-toast--success::before { background: var(--j-energy, #2fd6a6); }
+#ui-toast-stack .ui-toast--warn::before,
+#ui-toast-stack .ui-toast--warning::before { background: var(--j-warn, #e6b15a); }
+#ui-toast-stack .ui-toast--err::before,
+#ui-toast-stack .ui-toast--error::before { background: var(--j-danger, #ef6a72); }
+
+/* Tint the border faintly to match the kind (uses --j-* only) */
+#ui-toast-stack .ui-toast--ok,
+#ui-toast-stack .ui-toast--success {
+  border-color: color-mix(in srgb, var(--j-energy, #2fd6a6) 38%, var(--j-border-strong, rgba(255,255,255,0.16)));
+}
+#ui-toast-stack .ui-toast--warn,
+#ui-toast-stack .ui-toast--warning {
+  border-color: color-mix(in srgb, var(--j-warn, #e6b15a) 38%, var(--j-border-strong, rgba(255,255,255,0.16)));
+}
+#ui-toast-stack .ui-toast--err,
+#ui-toast-stack .ui-toast--error {
+  border-color: color-mix(in srgb, var(--j-danger, #ef6a72) 42%, var(--j-border-strong, rgba(255,255,255,0.16)));
+  color: color-mix(in srgb, var(--j-danger, #ef6a72) 80%, var(--j-ink, #eef1f8));
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   4 · SCROLLBARS (app-wide) + FOCUS-VISIBLE ring polish
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Thin aurora scrollbars — WebKit/Blink */
+*::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  border-radius: var(--j-r-pill, 999px);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  background-color: var(--j-ink-faint, #626b7e);
+  transition: background-color var(--j-dur-fast, 130ms) var(--j-ease, ease);
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--j-accent, #6c78ff);
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--j-ink-faint, #626b7e) transparent;
+}
+
+/* Keyboard focus ring — 2px iris outline with offset, on interactive elements.
+   Pointer users keep the existing look (:focus-visible only). */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible,
+[role="button"]:focus-visible,
+[role="tab"]:focus-visible,
+[role="option"]:focus-visible {
+  outline: 2px solid var(--j-accent, #6c78ff);
+  outline-offset: 2px;
+  border-radius: var(--j-r-sm, 10px);
+}
+/* Inputs/textareas often already round corners; pair outline with a soft glow. */
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline-offset: 1px;
+  box-shadow: var(--j-glow-soft, 0 0 0 2px rgba(108,120,255,0.14));
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   5 · REDUCED MOTION — kill shimmer, orb breathing, slide & spin
+   ═══════════════════════════════════════════════════════════════════════════ */
+@media (prefers-reduced-motion: reduce) {
+  #log-empty.log-empty,
+  #log-empty.log-empty .log-empty-icon,
+  #log-empty.log-empty .log-empty-icon::before,
+  body .log-empty[data-loading="1"] .log-empty-icon::before,
+  .aur-skeleton::after,
+  .aur-skeleton-line::after,
+  body .log-empty[data-loading="1"]::after,
+  .memory-state.memory-state-loading .memory-spinner {
+    animation: none !important;
+  }
+  /* Skeleton surfaces stay as a calm static tint (no sweep). */
+  .aur-skeleton::after,
+  .aur-skeleton-line::after {
+    display: none;
+  }
+  /* Toasts appear without horizontal slide. */
+  #ui-toast-stack .ui-toast {
+    transform: none;
+    transition: opacity var(--j-dur-med, 230ms) var(--j-ease, ease);
+  }
+  #ui-toast-stack .ui-toast.is-visible {
+    transform: none;
+  }
+}

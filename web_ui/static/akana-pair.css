@@ -1,0 +1,159 @@
+/* Phone pairing modal — QR + host approval. Minimal, built with the project
+   tokens, consistent with the settings modal language. Opened only via
+   #btn-pair-phone. */
+
+/* Pairing block inside Settings → Connection */
+.pair-settings-block {
+  display: grid;
+  gap: var(--j-sp-2);
+}
+.pair-settings-block .pair-host-input {
+  width: 100%;
+}
+#btn-pair-phone {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--j-sp-2);
+}
+
+/* Full-screen overlay — hidden by default (controlled via aria-hidden) */
+.pair-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--j-z-modal, 80);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--j-sp-4);
+  background:
+    radial-gradient(
+      120% 90% at 50% 0%,
+      color-mix(in srgb, var(--j-accent-2) 9%, transparent),
+      transparent 60%
+    ),
+    color-mix(in srgb, var(--j-bg) 74%, transparent);
+  backdrop-filter: blur(10px) saturate(1.06);
+  -webkit-backdrop-filter: blur(10px) saturate(1.06);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.18s var(--j-ease, ease), visibility 0.18s var(--j-ease, ease);
+}
+.pair-backdrop[aria-hidden="false"] {
+  opacity: 1;
+  visibility: visible;
+}
+
+.pair-modal {
+  width: min(380px, 100%);
+  max-height: calc(100dvh - 2 * var(--j-sp-5, 24px));
+  overflow: auto;
+  display: grid;
+  gap: var(--j-sp-3);
+  padding: var(--j-sp-5);
+  border-radius: var(--j-r-lg, 20px);
+  background: var(--j-overlay, var(--j-panel));
+  border: 1px solid var(--j-border-strong, var(--j-border));
+  box-shadow: var(--j-shadow-3);
+  color: var(--j-ink);
+  font-family: var(--j-font-ui, system-ui, sans-serif);
+}
+
+.pair-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--j-sp-3);
+}
+.pair-modal-head h3 {
+  margin: 0;
+  font-family: var(--j-font-display, inherit);
+  font-size: var(--j-fs-lg, 1.1rem);
+  letter-spacing: var(--j-tracking-tight, -0.02em);
+}
+.pair-modal-close {
+  background: transparent;
+  border: 1px solid var(--j-border);
+  color: var(--j-ink-dim);
+  border-radius: var(--j-r-sm, 10px);
+  width: 32px;
+  height: 32px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.pair-modal-close:hover {
+  color: var(--j-ink);
+  border-color: var(--j-border-strong);
+  background: var(--j-raised);
+}
+
+.pair-modal-desc {
+  margin: 0;
+  color: var(--j-ink-dim);
+  font-size: var(--j-fs-sm, 0.84rem);
+  line-height: 1.45;
+}
+
+/* QR container — white ground, high contrast kept for scannability */
+.pair-qr {
+  align-self: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 256px;
+  max-width: 100%;
+  aspect-ratio: 1 / 1;
+  padding: var(--j-sp-3);
+  background: #ffffff;
+  border-radius: var(--j-r-md, 14px);
+  box-shadow: var(--j-shadow-2);
+}
+.pair-qr canvas,
+.pair-qr img,
+.pair-qr svg,
+.pair-qr table {
+  width: 100% !important;
+  height: 100% !important;
+  display: block;
+}
+
+.pair-host-label {
+  font-size: var(--j-fs-xs, 0.72rem);
+  color: var(--j-ink-dim);
+  letter-spacing: var(--j-tracking-wide, 0.04em);
+  text-transform: uppercase;
+}
+.pair-host-row {
+  display: flex;
+  gap: var(--j-sp-2);
+  align-items: center;
+}
+.pair-host-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: var(--j-sp-2) var(--j-sp-3);
+  border-radius: var(--j-r-sm, 10px);
+  border: 1px solid var(--j-border);
+  background: var(--j-panel);
+  color: var(--j-ink);
+  font-family: var(--j-font-mono, monospace);
+  font-size: var(--j-fs-sm, 0.84rem);
+}
+.pair-host-input:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--j-accent) 55%, var(--j-border));
+  box-shadow: var(--j-glow-soft);
+}
+
+.pair-modal-foot {
+  margin: 0;
+  min-height: 1.1em;
+  font-size: var(--j-fs-xs, 0.72rem);
+  color: var(--j-ink-dim);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pair-backdrop {
+    transition: none;
+  }
+}

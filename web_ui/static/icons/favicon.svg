@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Akana">
+  <title>Akana</title>
+  <defs>
+    <radialGradient id="ak-halo" cx="50%" cy="50%" r="50%">
+      <stop offset="46%" stop-color="#a98bff" stop-opacity=".55"/>
+      <stop offset="76%" stop-color="#8a7bff" stop-opacity=".13"/>
+      <stop offset="100%" stop-color="#8a7bff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="ak-body" x1=".28" y1=".08" x2=".72" y2=".98">
+      <stop offset="0%" stop-color="#d0a8ff"/>
+      <stop offset="42%" stop-color="#9b86ff"/>
+      <stop offset="100%" stop-color="#6d64f4"/>
+    </linearGradient>
+    <radialGradient id="ak-shade" cx="66%" cy="76%" r="62%">
+      <stop offset="50%" stop-color="#2b2170" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#241c63" stop-opacity=".5"/>
+    </radialGradient>
+    <radialGradient id="ak-hi" cx="33%" cy="29%" r="40%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity=".92"/>
+      <stop offset="52%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <circle cx="32" cy="32" r="31" fill="url(#ak-halo)"/>
+  <circle cx="32" cy="32" r="21.5" fill="url(#ak-body)"/>
+  <circle cx="32" cy="32" r="21.5" fill="url(#ak-shade)"/>
+  <circle cx="32" cy="32" r="21.5" fill="url(#ak-hi)"/>
+  <circle cx="24.2" cy="23.2" r="2.3" fill="#ffffff" fill-opacity=".95"/>
+</svg>

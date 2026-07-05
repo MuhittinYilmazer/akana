@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light" data-cockpit="off" data-accent="cyan">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="dark light" />
+  <meta name="theme-color" content="#06080d" />
+  <title data-i18n-title="memory.page_title">Memory — Akana</title>
+  <link rel="icon" type="image/svg+xml" href="/static/icons/favicon.svg?v=3" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/icons/favicon-32.png?v=3" />
+  <link rel="apple-touch-icon" href="/static/icons/icon-192.png?v=3" />
+  <!-- FOUC prevention: saved theme (akana.theme) applied before first paint;
+       permanent source akana-settings.js (applyThemePreference) uses the same key. -->
+  <script>
+    // FOUC + theme/accent: identical to index.html (permanent source: akana.theme +
+    // cockpit:accent). Previously only the theme was applied here and the accent was
+    // hard-coded "cyan", so the accent chosen in Settings was not reflected on this page.
+    (() => {
+      try {
+        if (/[?&]reset\b/i.test(location.search)) {
+          for (let i = localStorage.length - 1; i >= 0; i -= 1) {
+            const k = localStorage.key(i);
+            if (k && k.indexOf("akana.") === 0) localStorage.removeItem(k);
+          }
+          try { sessionStorage.clear(); } catch (e) { /* ignore */ }
+        }
+      } catch (e) {
+        /* localStorage closed/inaccessible — ignore */
+      }
+      try {
+        const root = document.documentElement;
+        const saved = localStorage.getItem("akana.theme");
+        // Aurora: light-first — if no saved preference, open as LIGHT.
+        const resolved = saved === "light" || saved === "dark" ? saved : "light";
+        root.dataset.theme = resolved;
+        // Accent is also applied before first paint (without this it flickers to the default accent).
+        const accent = localStorage.getItem("cockpit:accent") || "cyan";
+        root.dataset.accent = accent;
+        if (accent === "custom") {
+          const fam = (JSON.parse(localStorage.getItem("cockpit:accentCustomCss") || "{}") || {})[resolved];
+          if (fam) {
+            root.style.setProperty("--j-accent", fam.accent);
+            root.style.setProperty("--j-accent-strong", fam.strong);
+            root.style.setProperty("--j-accent-2", fam.a2);
+            root.style.setProperty("--j-accent-3", fam.a3);
+            root.style.setProperty("--j-accent-ink", fam.ink);
+          }
+        }
+      } catch {
+        /* if localStorage is closed, default theme/accent stays */
+      }
+    })();
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap"
+    rel="stylesheet"
+  />
+  <!-- ?v=auto is a placeholder: the server rewrites every /static ?v= to a
+       content hash at render time (render_versioned_html). Do not bump by hand. -->
+  <link rel="stylesheet" href="/static/tokens.css?v=auto" />
+  <link rel="stylesheet" href="/static/styles.css?v=auto" />
+  <link rel="stylesheet" href="/static/akana-memory-studio.css?v=auto" />
+  <!-- NEBULA v2 skin — loaded LAST (rewritten from scratch) -->
+  <link rel="stylesheet" href="/static/akana-v2.css?v=auto" />
+  <link rel="stylesheet" href="/static/akana-v2-studio.css?v=auto" />
+  <!-- AURORA skin — LAST of all: first remaps --j-* tokens to the Aurora palette,
+       then aurora-memory.css dresses the Memory surface in frosted-glass nebula. -->
+  <link rel="stylesheet" href="/static/aurora-skin.css?v=auto" />
+  <!-- Holds the full 24-accent [data-accent="…"] palette (skin.css has only 7);
+       without it a non-skin accent falls back to the default azure here. -->
+  <link rel="stylesheet" href="/static/aurora-settings.css?v=auto" />
+  <link rel="stylesheet" href="/static/aurora-memory.css?v=auto" />
+  <link rel="stylesheet" href="/static/aurora-motion.css?v=auto" />
+  <link rel="stylesheet" href="/static/aurora-states.css?v=auto" />
+  <link rel="stylesheet" href="/static/aurora-responsive.css?v=auto" />
+  <!-- PREMIUM SKIN — "Paper & Iris": same file as index.html, MUST load LAST so
+       its token retone wins by cascade order (mirrors the index.html contract). -->
+  <link rel="stylesheet" href="/static/akana-premium.css?v=auto" />
+</head>
+<body class="memory-studio-page">
+  <div class="app-bg" aria-hidden="true">
+    <span class="app-bg-grid"></span>
+    <span class="app-bg-orb app-bg-orb-a"></span>
+    <span class="app-bg-orb app-bg-orb-b"></span>
+  </div>
+
+  <!-- ─── Slim header + global search ─────────────────────────────────────── -->
+  <header class="top top-bar memory-studio-top mem-topbar">
+    <div class="brand">
+      <a href="/" class="memory-studio-back btn-ghost btn-sm" aria-label="Back to chat" data-i18n-aria-label="memory.back_aria"><span data-i18n="memory.back_label">← Chat</span></a>
+      <div class="brand-text memory-studio-brand-text">
+        <h1 data-i18n="memory.page_title">Memory</h1>
+        <span class="phase memory-studio-subtitle" data-i18n="memory.page_subtitle">Command Centre</span>
+      </div>
+    </div>
+    <div class="mem-topbar-search">
+      <label class="sr-only" for="memory-global-search" data-i18n="memory.search_label">Search memory</label>
+      <span class="mem-search-wrap memory-search-wrap">
+        <svg class="memory-search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path
+            d="M10.8 4.4a6.2 6.2 0 1 0 0 12.4 6.2 6.2 0 0 0 0-12.4ZM15.4 15.4 20 20"
+            stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+          />
+        </svg>
+        <input
+          id="memory-global-search"
+          type="search"
+          spellcheck="false"
+          placeholder="Search all memory…  (Enter → Recall)"
+          data-i18n-placeholder="memory.search_ph"
+          autocomplete="off"
+          aria-label="Search memory"
+          data-i18n-aria-label="memory.search_label"
+        />
+      </span>
+    </div>
+  </header>
+
+  <main class="memory-studio-layout mem-cockpit" id="memory-studio-root">
+    <div class="memory-studio-shell mem-shell panel">
+      <!-- ─── Left vertical navigation rail ───────────────────────────────── -->
+      <nav class="mem-rail" aria-label="Memory sections" data-i18n-aria-label="memory.rail_aria">
+        <ul class="mem-rail-list" role="tablist" aria-orientation="vertical">
+          <li>
+            <button type="button" class="mem-rail-item memory-studio-tab is-active" data-memory-view="overview" role="tab" aria-selected="true">
+              <span class="mem-rail-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none"><path d="M4 13h6V4H4v9Zm0 7h6v-5H4v5Zm10 0h6v-9h-6v9Zm0-16v5h6V4h-6Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+              </span>
+              <span class="mem-rail-label" data-i18n="memory.rail_overview">Overview</span>
+            </button>
+          </li>
+          <li>
+            <button type="button" class="mem-rail-item memory-studio-tab" data-memory-view="inbox" role="tab" aria-selected="false">
+              <span class="mem-rail-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none"><path d="M5.2 5.5h13.6l1.7 8v4.4a1.6 1.6 0 0 1-1.6 1.6H5.1a1.6 1.6 0 0 1-1.6-1.6v-4.4l1.7-8ZM3.5 13.5h4.6l1.5 2.5h4.8l1.5-2.5h4.6" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+              </span>
+              <span class="mem-rail-label" data-i18n="memory.rail_inbox">Inbox</span>
+              <span class="mem-rail-badge memory-tab-badge" id="memory-inbox-count" hidden></span>
+            </button>
+          </li>
+          <li>
+            <button type="button" class="mem-rail-item memory-studio-tab" data-memory-view="facts" role="tab" aria-selected="false">
+              <span class="mem-rail-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none"><path d="M12 3.2 3.6 7.7 12 12.2l8.4-4.5L12 3.2ZM3.6 12.2 12 16.7l8.4-4.5M3.6 16.6 12 21.1l8.4-4.5" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+              </span>
+              <span class="mem-rail-label" data-i18n="memory.rail_facts">Facts</span>
+            </button>
+          </li>
+          <li>
+            <button type="button" class="mem-rail-item memory-studio-tab" data-memory-view="recall" role="tab" aria-selected="false">
+              <span class="mem-rail-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none"><path d="M10.8 4.4a6.2 6.2 0 1 0 0 12.4 6.2 6.2 0 0 0 0-12.4ZM15.4 15.4 20 20" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </span>
+              <span class="mem-rail-label" data-i18n="memory.rail_recall">Recall</span>
+            </button>
+          </li>
+          <li>
+            <button type="button" class="mem-rail-item memory-studio-tab" data-memory-view="settings" role="tab" aria-selected="false">
+              <span class="mem-rail-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.7"/><path d="M12 2.8v2.4M12 18.8v2.4M21.2 12h-2.4M5.2 12H2.8M18.5 5.5l-1.7 1.7M7.2 16.8l-1.7 1.7M18.5 18.5l-1.7-1.7M7.2 7.2 5.5 5.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+              </span>
+              <span class="mem-rail-label" data-i18n="memory.rail_settings">Settings</span>
+            </button>
+          </li>
+        </ul>
+        <div class="mem-rail-foot">
+          <button type="button" id="memory-refresh-all" class="mem-rail-refresh btn-ghost btn-sm" title="Refresh all" data-i18n-title="memory.rail_refresh_title">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" aria-hidden="true"><path d="M4.5 12a7.5 7.5 0 0 1 12.8-5.3M19.5 12a7.5 7.5 0 0 1-12.8 5.3M17 4v3h-3M7 20v-3h3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span class="mem-rail-label" data-i18n="memory.rail_refresh_label">Refresh</span>
+          </button>
+        </div>
+      </nav>
+
+      <!-- ─── Content area (view-switch) ────────────────────────────────── -->
+      <div class="mem-content" id="memory-content">
+
+        <!-- ═══ Overview ════════════════════════════════════════════════════ -->
+        <section class="memory-studio-pane mem-view is-active" id="memory-studio-overview" data-memory-view="overview" role="tabpanel" aria-labelledby="overview">
+          <header class="mem-view-head">
+            <h2 class="mem-view-title" data-i18n="memory.overview_title">Overview</h2>
+            <p class="mem-view-sub" data-i18n="memory.overview_sub">Live status of the memory layer — metrics and recent activity.</p>
+          </header>
+
+          <div class="mem-hero-grid" id="memory-stat-grid" aria-live="polite">
+            <div class="mem-hero-card stat-card memory-stat-card" data-metric="facts">
+              <span class="mem-hero-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3.2 3.6 7.7 12 12.2l8.4-4.5L12 3.2ZM3.6 12.2 12 16.7l8.4-4.5M3.6 16.6 12 21.1l8.4-4.5" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg></span>
+              <span class="mem-hero-value stat-card-value" id="memory-stat-facts">—</span>
+              <span class="mem-hero-label stat-card-label" data-i18n="memory.stat_facts_label">Permanent facts</span>
+              <span class="mem-hero-note" data-i18n="memory.stat_facts_note">confirmed permanent records</span>
+            </div>
+            <div class="mem-hero-card stat-card memory-stat-card" data-metric="valid">
+              <span class="mem-hero-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8.4" stroke="currentColor" stroke-width="1.7"/><path d="M8.4 12.2l2.5 2.5 4.7-5.1" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+              <span class="mem-hero-value stat-card-value" id="memory-stat-valid">—</span>
+              <span class="mem-hero-label stat-card-label" data-i18n="memory.stat_valid_label">Valid</span>
+              <span class="mem-hero-note" data-i18n="memory.stat_valid_note">currently valid</span>
+            </div>
+            <div class="mem-hero-card stat-card memory-stat-card" data-metric="turns">
+              <span class="mem-hero-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M4.5 6.2h15a1 1 0 0 1 1 1v7.1a1 1 0 0 1-1 1H9.6L5.5 18.8v-2.5H4.5a1 1 0 0 1-1-1V7.2a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M7.5 9.6h9M7.5 12.4h6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+              <span class="mem-hero-value stat-card-value" id="memory-stat-turns">—</span>
+              <span class="mem-hero-label stat-card-label" data-i18n="memory.stat_turns_label">Conversation turns</span>
+              <span class="mem-hero-note" data-i18n="memory.stat_turns_note">processed chats</span>
+            </div>
+            <div class="mem-hero-card stat-card memory-stat-card mem-hero-card-pending" data-metric="pending">
+              <span class="mem-hero-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8.4" stroke="currentColor" stroke-width="1.7"/><path d="M12 7.2v5l3.2 1.9" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+              <span class="mem-hero-value stat-card-value" id="memory-stat-pending">—</span>
+              <span class="mem-hero-label stat-card-label" data-i18n="memory.stat_pending_label">Awaiting approval</span>
+              <span class="mem-hero-note" data-i18n="memory.stat_pending_note">awaiting approval</span>
+            </div>
+            <div class="mem-hero-card stat-card memory-stat-card memory-stat-card-vector" data-metric="vector">
+              <span class="mem-hero-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3.2l1.7 4.7 4.7 1.7-4.7 1.7L12 16l-1.7-4.7L5.6 9.6l4.7-1.7Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M18.4 15.4l.6 1.7 1.7.6-1.7.6-.6 1.7-.6-1.7-1.7-.6 1.7-.6Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></span>
+              <span class="mem-hero-value stat-card-value" id="memory-stat-vector">—</span>
+              <span class="mem-hero-label stat-card-label" data-i18n="memory.stat_vector_label">Vector embeddings</span>
+              <span class="mem-hero-note" id="memory-stat-vector-note" data-i18n="memory.stat_vector_note">semantic embeddings</span>
+            </div>
+          </div>
+
+          <div class="mem-overview-cols">
+            <section class="mem-panel mem-activity-panel" aria-labelledby="mem-activity-title">
+              <header class="mem-panel-head">
+                <h3 class="mem-panel-title" id="mem-activity-title" data-i18n="memory.activity_title">Recent activity</h3>
+                <button type="button" id="memory-timeline-refresh" class="btn-ghost btn-sm" data-i18n="memory.activity_refresh">Refresh</button>
+              </header>
+              <ul
+                id="memory-timeline-list"
+                class="memory-hit-list mem-timeline"
+                aria-live="polite"
+                data-empty-icon="facts"
+              ></ul>
+            </section>
+          </div>
+        </section>
+
+        <!-- ═══ Inbox: approval queue ════════════════════════════════════════ -->
+        <section class="memory-studio-pane mem-view" id="memory-studio-inbox" data-memory-view="inbox" role="tabpanel" hidden>
+          <header class="mem-view-head">
+            <h2 class="mem-view-title" data-i18n="memory.inbox_title">Inbox</h2>
+            <p class="mem-view-sub" data-i18n="memory.inbox_sub">Things Akana wants to remember from the conversation — not permanent until approved.</p>
+          </header>
+
+          <p class="memory-tab-intro" data-i18n-html="memory.inbox_intro">Candidates from things you said «remember …» in the chat appear here. <strong>Approve</strong> moves to facts, <strong>Reject</strong> drops from the queue.</p>
+          <div class="memory-toolbar">
+            <button type="button" id="memory-inbox-refresh" class="btn-ghost btn-sm" data-i18n="memory.inbox_refresh">Refresh</button>
+            <button type="button" id="memory-inbox-approve-all" class="btn-ghost btn-sm" data-i18n="memory.inbox_approve_all" hidden>Approve all</button>
+            <button type="button" id="memory-inbox-reject-all" class="btn-ghost btn-sm" data-i18n="memory.inbox_reject_all" hidden>Reject all</button>
+          </div>
+          <ul
+            id="memory-inbox-list"
+            class="memory-hit-list memory-facts-cards"
+            aria-live="polite"
+            data-empty-icon="inbox"
+            data-empty-action-href="/memory?view=settings"
+            data-empty-action-label="Memory settings"
+            data-i18n-empty-action-label="memory.inbox_empty_action"
+          ></ul>
+        </section>
+
+        <!-- ═══ Facts: permanent records ════════════════════════════════════ -->
+        <section class="memory-studio-pane mem-view" id="memory-studio-facts" data-memory-view="facts" role="tabpanel" hidden>
+          <header class="mem-view-head">
+            <h2 class="mem-view-title" data-i18n="memory.facts_title">Facts</h2>
+            <p class="mem-view-sub" data-i18n-html="memory.facts_sub">Approved permanent facts. <strong>Edit</strong> writes a new value (old record moves to history), <strong>Delete</strong> invalidates.</p>
+          </header>
+          <div class="memory-filter-row">
+            <label class="sr-only" for="memory-facts-q" data-i18n="memory.facts_search_label">Search facts</label>
+            <span class="memory-search-wrap">
+              <svg class="memory-search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path
+                  d="M10.8 4.4a6.2 6.2 0 1 0 0 12.4 6.2 6.2 0 0 0 0-12.4ZM15.4 15.4 20 20"
+                  stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+                />
+              </svg>
+              <input id="memory-facts-q" type="search" spellcheck="false" placeholder="Search facts…" data-i18n-placeholder="memory.facts_search_ph" autocomplete="off" />
+            </span>
+            <label class="memory-history-toggle" for="memory-facts-history" title="Also list replaced/deleted old records" data-i18n-title="memory.facts_history_title">
+              <input id="memory-facts-history" type="checkbox" />
+              <span data-i18n="memory.facts_history_label">Show history</span>
+            </label>
+          </div>
+          <ul id="memory-facts-list" class="memory-hit-list memory-facts-cards" aria-live="polite" data-empty-icon="facts"></ul>
+          <span class="memory-badge" id="memory-facts-count" hidden></span>
+          <nav class="memory-pager" id="memory-facts-pager" aria-label="Facts pages" hidden>
+            <button type="button" class="btn-ghost btn-sm memory-pager-btn" id="memory-facts-prev" data-i18n="memory.facts_prev">Previous</button>
+            <span class="memory-pager-status" id="memory-facts-page-status" aria-live="polite"></span>
+            <button type="button" class="btn-ghost btn-sm memory-pager-btn" id="memory-facts-next" data-i18n="memory.facts_next">Next</button>
+          </nav>
+
+          <details class="settings-advanced memory-panel">
+            <summary data-i18n="memory.facts_new_title">Add new fact</summary>
+            <div class="settings-block memory-form-block">
+              <label for="memory-fact-value" data-i18n="memory.facts_value_label">Value</label>
+              <textarea id="memory-fact-value" rows="3" spellcheck="false" maxlength="8000" placeholder="Fact to remember…" data-i18n-placeholder="memory.facts_value_ph"></textarea>
+              <p class="field-hint memory-form-hint">
+                <span data-i18n="memory.facts_value_hint">What Akana should remember, in your own words.</span>
+                <span class="memory-char-count" id="memory-fact-value-count" aria-hidden="true">0 / 8000</span>
+              </p>
+
+              <div class="settings-row-2">
+                <div>
+                  <label for="memory-fact-kind" data-i18n="memory.facts_kind_label">Type</label>
+                  <select id="memory-fact-kind">
+                    <option value="fact" data-i18n="memory.kind_fact">Fact</option>
+                    <option value="preference" data-i18n="memory.kind_preference">Preference</option>
+                    <option value="rule" data-i18n="memory.kind_rule">Rule</option>
+                    <option value="lesson" data-i18n="memory.kind_lesson">Lesson</option>
+                    <option value="playbook" data-i18n="memory.kind_playbook">Playbook</option>
+                    <option value="snippet" data-i18n="memory.kind_snippet">Snippet</option>
+                    <option value="concept" data-i18n="memory.kind_concept">Concept</option>
+                    <option value="technique" data-i18n="memory.kind_technique">Technique</option>
+                    <option value="finding" data-i18n="memory.kind_finding">Finding</option>
+                    <option value="hypothesis" data-i18n="memory.kind_hypothesis">Hypothesis</option>
+                    <option value="bookmark" data-i18n="memory.kind_bookmark">Bookmark</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="memory-fact-trust" data-i18n="memory.facts_trust_label">Trust</label>
+                  <select id="memory-fact-trust">
+                    <option value="user_statement" data-i18n="memory.trust_user_statement">You told me (highest)</option>
+                    <option value="inferred" data-i18n="memory.trust_inferred">Inferred</option>
+                    <option value="tool_output" data-i18n="memory.trust_tool_output">Tool output</option>
+                    <option value="synthesis" data-i18n="memory.trust_synthesis">Synthesis</option>
+                  </select>
+                </div>
+              </div>
+              <p class="field-hint" data-i18n="memory.facts_type_hint">Type groups the fact; trust sets how strongly recall weights it.</p>
+
+              <label for="memory-fact-key" data-i18n="memory.facts_key_label">Key (optional)</label>
+              <input id="memory-fact-key" type="text" spellcheck="false" maxlength="256" placeholder="e.g. favorite_color" data-i18n-placeholder="memory.facts_key_ph" autocomplete="off" />
+              <p class="field-hint" data-i18n="memory.facts_key_hint">Leave empty to auto-derive a key from the value and type.</p>
+
+              <label for="memory-fact-source" data-i18n="memory.facts_source_label">Source (optional)</label>
+              <input id="memory-fact-source" type="text" spellcheck="false" maxlength="512" placeholder="e.g. a URL, a tool, or a note" data-i18n-placeholder="memory.facts_source_ph" autocomplete="off" />
+
+              <div class="memory-form-actions">
+                <button type="button" id="memory-fact-save" class="btn-primary" data-i18n="memory.facts_save_btn">Save</button>
+                <button type="button" id="memory-fact-reset" class="btn-ghost btn-sm memory-fact-reset" data-i18n="memory.facts_reset_btn">Clear</button>
+              </div>
+              <p class="field-hint memory-status" id="memory-fact-status" role="status" aria-live="polite"></p>
+            </div>
+          </details>
+        </section>
+
+        <!-- ═══ Recall: memory test ══════════════════════════════════════════ -->
+        <section class="memory-studio-pane mem-view" id="memory-studio-recall" data-memory-view="recall" role="tabpanel" hidden>
+          <header class="mem-view-head">
+            <h2 class="mem-view-title" data-i18n="memory.recall_title">Recall</h2>
+            <p class="mem-view-sub" data-i18n-html="memory.recall_sub">Test what the assistant will <strong>recall</strong> from memory on a query — strategy and caveats appear as badges.</p>
+          </header>
+          <div class="memory-search-row">
+            <label class="sr-only" for="memory-recall-q" data-i18n="memory.recall_query_label">Recall query</label>
+            <input id="memory-recall-q" type="search" spellcheck="false" placeholder="e.g. what is my coffee preference?" data-i18n-placeholder="memory.recall_query_ph" autocomplete="off" />
+            <label class="sr-only" for="memory-recall-k" data-i18n="memory.recall_k_label">Result count</label>
+            <select id="memory-recall-k" aria-label="Result count" data-i18n-aria-label="memory.recall_k_aria">
+              <option value="5">5</option>
+              <option value="8" selected>8</option>
+              <option value="15">15</option>
+            </select>
+            <button type="button" id="memory-recall-btn" class="btn-primary" data-i18n="memory.recall_search_btn">Search</button>
+          </div>
+          <div class="memory-asof-row">
+            <label class="memory-asof-label" for="memory-recall-asof" title="Test what was valid at a given date — empty means now" data-i18n-title="memory.recall_asof_title">
+              <span class="memory-asof-ico" aria-hidden="true">⏱</span>
+              <span data-i18n="memory.recall_asof_label">Time travel (as_of)</span>
+            </label>
+            <input id="memory-recall-asof" type="date" autocomplete="off" aria-label="as_of date" data-i18n-aria-label="memory.recall_asof_aria" />
+            <button type="button" id="memory-recall-asof-clear" class="btn-ghost btn-sm" title="Clear date" data-i18n-title="memory.recall_asof_clear_title" data-i18n="memory.recall_asof_clear">Now</button>
+          </div>
+          <div class="memory-asof-row memory-observed-row">
+            <label class="memory-asof-label" for="memory-recall-observed-from" title="Only records observed (learned) in this range — empty means all" data-i18n-title="memory.recall_observed_title">
+              <span class="memory-asof-ico" aria-hidden="true">◔</span>
+              <span data-i18n="memory.recall_observed_label">Observation range (observed)</span>
+            </label>
+            <input id="memory-recall-observed-from" type="date" autocomplete="off" aria-label="observed_from date" data-i18n-aria-label="memory.recall_observed_from_aria" />
+            <span class="memory-observed-sep" aria-hidden="true">→</span>
+            <input id="memory-recall-observed-to" type="date" autocomplete="off" aria-label="observed_to date" data-i18n-aria-label="memory.recall_observed_to_aria" />
+            <button type="button" id="memory-recall-observed-clear" class="btn-ghost btn-sm" title="Clear range" data-i18n-title="memory.recall_observed_clear_title" data-i18n="memory.recall_observed_clear">All</button>
+          </div>
+          <div class="memory-recall-trace" id="memory-recall-trace" aria-live="polite"></div>
+          <ul id="memory-recall-list" class="memory-hit-list memory-facts-cards" aria-live="polite" data-empty-icon="recall"></ul>
+        </section>
+
+        <!-- ═══ Settings ════════════════════════════════════════════════════ -->
+        <section class="memory-studio-pane mem-view" id="memory-studio-settings" data-memory-view="settings" role="tabpanel" hidden>
+          <header class="mem-view-head">
+            <h2 class="mem-view-title" data-i18n="memory.settings_title">Settings</h2>
+            <p class="mem-view-sub" data-i18n="memory.settings_sub">Memory behavior, vector search and storage status.</p>
+          </header>
+          <div class="settings-block">
+            <h3 class="settings-block-title" data-i18n="memory.settings_behavior_title">Memory behavior</h3>
+            <label class="toggle" for="memory-allow-direct">
+              <input id="memory-allow-direct" type="checkbox" />
+              <span class="toggle-track" aria-hidden="true"></span>
+              <span class="toggle-label" data-i18n="memory.settings_direct_label">Save without approval</span>
+            </label>
+            <p class="field-hint" data-i18n="memory.settings_direct_hint">When on, Akana writes what you ask it to «remember» directly to permanent facts. When off, everything goes to Inbox first and waits for your approval.</p>
+            <label class="toggle" for="memory-session-summary">
+              <input id="memory-session-summary" type="checkbox" />
+              <span class="toggle-track" aria-hidden="true"></span>
+              <span class="toggle-label" data-i18n="memory.settings_summary_label">Automatic session summaries</span>
+            </label>
+            <p class="field-hint" data-i18n="memory.settings_summary_hint">When on, Akana summarizes your idle or long conversations into the Inbox for you to review and keep. When off, no session summaries are created automatically.</p>
+            <!-- «Automatic capture» (auto_capture) stays default-ON and is not UI-exposed
+                 (env kill-switch AKANA_MEMORY_LLM_CAPTURE for advanced/dev use). The «Session
+                 summarization» toggle above gates BOTH summary crons; AKANA_SESSION_CLOSER_ENABLED
+                 is the env master switch (both must be on for summaries to run). -->
+          </div>
+
+          <div class="settings-block">
+            <h3 class="settings-block-title" data-i18n="memory.settings_vector_title">Vector (semantic) search</h3>
+            <label for="memory-vector-mode" data-i18n="memory.settings_vector_mode_label">Vector mode</label>
+            <select id="memory-vector-mode">
+              <option value="auto" data-i18n="memory.settings_vector_auto">Auto (use embedding if available)</option>
+              <option value="on" data-i18n="memory.settings_vector_on">On</option>
+              <option value="off" data-i18n="memory.settings_vector_off">Off (keyword only)</option>
+            </select>
+            <label for="memory-embed-backend" data-i18n="memory.settings_embed_label">Embedding source</label>
+            <select id="memory-embed-backend">
+              <option value="local" data-i18n="memory.settings_embed_local">Local — fastembed (no Ollama needed, recommended)</option>
+              <option value="ollama" data-i18n="memory.settings_embed_ollama">Ollama (local daemon)</option>
+            </select>
+            <p class="field-hint" data-i18n="memory.settings_embed_hint">Local: multilingual model, downloads ~220MB on first use, runs in-process (no Ollama needed). The Ollama fields below are only used when «Ollama» is selected.</p>
+            <div id="memory-ollama-fields" hidden>
+              <label for="memory-ollama-url" data-i18n="memory.settings_ollama_url_label">Ollama address</label>
+              <input id="memory-ollama-url" type="text" spellcheck="false" placeholder="http://127.0.0.1:11434" autocomplete="off" />
+              <label for="memory-embed-model" data-i18n="memory.settings_embed_model_label">Embedding model</label>
+              <input id="memory-embed-model" type="text" spellcheck="false" placeholder="e.g. bge-m3" data-i18n-placeholder="memory.settings_embed_model_ph" autocomplete="off" />
+            </div>
+            <div class="memory-form-actions">
+              <button type="button" id="memory-settings-save" class="btn-primary" data-i18n="memory.settings_save_btn">Save settings</button>
+            </div>
+            <p class="field-hint memory-status" id="memory-settings-status" role="status" aria-live="polite"></p>
+          </div>
+
+          <div class="settings-block">
+            <h3 class="settings-block-title" data-i18n="memory.settings_storage_title">Storage status</h3>
+            <p class="field-hint" data-i18n="memory.settings_storage_hint">Live numbers are in Overview — the database (ledger) path is shown here.</p>
+            <p class="memory-ledger-path" id="memory-ledger-path">—</p>
+            <button type="button" id="memory-stats-refresh" class="btn-ghost btn-sm" data-i18n="memory.settings_stats_refresh">Refresh stats</button>
+          </div>
+        </section>
+
+      </div>
+    </div>
+  </main>
+
+  <div id="ui-toast-stack" class="ui-toast-stack" aria-live="polite" aria-atomic="true"></div>
+
+  <script src="/static/akana-core.js?v=auto" defer></script>
+  <script src="/static/akana-i18n-strings.js?v=auto" defer></script>
+  <script src="/static/akana-i18n-strings-chat.js?v=auto" defer></script>
+  <script src="/static/akana-i18n-strings-chat2.js?v=auto" defer></script>
+  <script src="/static/akana-i18n-strings-voice.js?v=auto" defer></script>
+  <script src="/static/akana-i18n-strings-settings.js?v=auto" defer></script>
+  <script src="/static/akana-i18n-strings-settings2.js?v=auto" defer></script>
+  <script src="/static/akana-i18n-strings-runtime.js?v=auto" defer></script>
+  <script src="/static/akana-i18n-strings-memory.js?v=auto" defer></script>
+  <script src="/static/akana-i18n-strings-misc.js?v=auto" defer></script>
+  <script src="/static/akana-i18n-strings-index.js?v=auto" defer></script>
+  <script src="/static/akana-i18n.js?v=auto" defer></script>
+  <script src="/static/akana-bus.js?v=auto" defer></script>
+  <script src="/static/akana-markdown.js?v=auto" defer></script>
+  <script src="/static/akana-chat-render.js?v=auto" defer></script>
+  <script src="/static/akana-chat-store.js?v=auto" defer></script>
+  <script src="/static/akana-chat-archive.js?v=auto" defer></script>
+  <script src="/static/akana-chat-threads.js?v=auto" defer></script>
+  <script src="/static/akana-chat-transport.js?v=auto" defer></script>
+  <script src="/static/akana-shell.js?v=auto" defer></script>
+  <script src="/static/akana-voice-fsm.js?v=auto" defer></script>
+  <script src="/static/akana-voice-capture.js?v=auto" defer></script>
+  <script src="/static/akana-voice-pipeline.js?v=auto" defer></script>
+  <script src="/static/akana-voice-settings.js?v=auto" defer></script>
+  <script src="/static/akana-voice.js?v=auto" defer></script>
+  <script src="/static/akana-chat.js?v=auto" defer></script>
+  <script src="/static/akana-settings.js?v=auto" defer></script>
+  <script src="/static/akana-memory-api.js?v=auto" defer></script>
+  <script src="/static/akana-memory-render.js?v=auto" defer></script>
+  <script src="/static/akana-memory-studio.js?v=auto" defer></script>
+  <script src="/static/app.js?v=auto" defer></script>
+  <script src="/static/aurora-ui.js?v=auto" defer></script>
+  <script>
+    // KPI stat cards — pure presentation layer (no behaviour, observes values
+    // written by studio.js): (1) count-up animation, (2) pending at 0
+    // stays CALM → above 0 adds .is-alert, (3) vector card .is-live pulse.
+    // Observer ignores text it wrote itself via "data-animating" flag (no recursion).
+    (() => {
+      const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const num = (s) => {
+        const n = Number(String(s ?? "").replace(/[^\d.-]/g, ""));
+        return Number.isFinite(n) ? n : null;
+      };
+      const cards = [
+        ["memory-stat-facts", null],
+        ["memory-stat-valid", null],
+        ["memory-stat-turns", null],
+        ["memory-stat-pending", "pending"],
+        ["memory-stat-vector", "vector"],
+      ];
+      const animateTo = (el, target) => {
+        const from = num(el.dataset.v) ?? 0;
+        if (reduce || from === target) {
+          el.dataset.v = String(target);
+          el.textContent = String(target);
+          return;
+        }
+        el.dataset.animating = "1";
+        const dur = 620;
+        const t0 = performance.now();
+        const tick = (now) => {
+          const p = Math.min(1, (now - t0) / dur);
+          const eased = 1 - Math.pow(1 - p, 3);
+          const val = Math.round(from + (target - from) * eased);
+          el.dataset.v = String(val);
+          el.textContent = String(val);
+          if (p < 1) {
+            requestAnimationFrame(tick);
+          } else {
+            el.dataset.v = String(target);
+            el.textContent = String(target);
+            delete el.dataset.animating;
+          }
+        };
+        requestAnimationFrame(tick);
+      };
+      for (const [id, kind] of cards) {
+        const el = document.getElementById(id);
+        if (!el) continue;
+        const card = el.closest(".stat-card");
+        const sync = () => {
+          if (el.dataset.animating === "1") return; // ignore its own writes
+          const target = num(el.textContent);
+          if (target === null) return; // "—" placeholder — don't touch
+          if (card) {
+            if (kind === "pending") card.classList.toggle("is-alert", target > 0);
+            if (kind === "vector") card.classList.toggle("is-live", target > 0);
+          }
+          if (num(el.dataset.v) === target) return;
+          animateTo(el, target);
+        };
+        new MutationObserver(sync).observe(el, { childList: true, characterData: true, subtree: true });
+        sync();
+      }
+    })();
+  </script>
+</body>
+</html>
