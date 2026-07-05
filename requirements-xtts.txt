@@ -13,7 +13,7 @@
 # so the RCE path is unreachable here. XTTS is optional and opt-in.
 #
 # Enable: pip install -r requirements-xtts.txt
-coqui-tts>=0.27
+coqui-tts>=0.27.5
 transformers>=4.57,<5
 torch>=2.1
 torchaudio>=2.1
