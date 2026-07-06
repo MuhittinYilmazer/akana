@@ -600,6 +600,10 @@ window.AkanaI18nStrings = Object.assign(window.AkanaI18nStrings || {}, {
     en: "Default Akana identity + language lock + behaviour rules. <strong>If a custom persona is set as default its text REPLACES this one</strong> — to prevent identity leaks (e.g. \"Claude Code\") fork the custom persona from akana via «Copy &amp; edit».",
     tr: "Varsayılan Akana kimliği + dil kilidi + davranış kuralları. <strong>Özel bir persona varsayılansa onun metni bunun YERİNE geçer</strong> — kimlik sızıntısını (ör. \"Claude Code\") önlemek için özel personayı akana'dan «Kopyala &amp; düzenle» ile çıkar.",
   },
+  "persona.base.override_lang_hint": {
+    en: "This edited prompt no longer follows the language picker — switching language will not translate it. Reset to default to have it follow the language again.",
+    tr: "Bu düzenlenmiş prompt artık dil seçimini takip etmiyor — dili değiştirmek onu çevirmez. Tekrar dili takip etmesi için varsayılana sıfırla.",
+  },
   "persona.base.save_btn":   { en: "Save core", tr: "Çekirdeği kaydet" },
   "persona.base.reset_btn":  { en: "Reset to default", tr: "Varsayılana sıfırla" },
   "persona.voice.title": { en: "Voice-mode directive", tr: "Sesli mod direktifi" },
@@ -608,6 +612,10 @@ window.AkanaI18nStrings = Object.assign(window.AkanaI18nStrings || {}, {
   "persona.voice.hint": {
     en: "Injected on top of the persona for voice turns (short, markdown-free spoken replies). Bilingual: the default follows your language — English in English, Turkish in Turkish. Edit to change how Akana talks in voice.",
     tr: "Sesli turlarda personanın üzerine eklenir (kısa, markdown'sız sesli yanıtlar). İki dilli: varsayılan diline uyar — İngilizce'de İngilizce, Türkçe'de Türkçe. Akana'nın seste nasıl konuştuğunu değiştirmek için düzenle.",
+  },
+  "persona.voice.override_lang_hint": {
+    en: "This edited directive no longer follows the language picker — switching language will not translate it. Reset to default to have it follow the language again.",
+    tr: "Bu düzenlenmiş direktif artık dil seçimini takip etmiyor — dili değiştirmek onu çevirmez. Tekrar dili takip etmesi için varsayılana sıfırla.",
   },
   "persona.voice.save_btn":   { en: "Save voice directive", tr: "Sesli direktifi kaydet" },
   "persona.voice.reset_btn":  { en: "Reset to default", tr: "Varsayılana sıfırla" },

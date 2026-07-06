@@ -186,7 +186,11 @@ class ConversationStore:
         return self._row_to_meta(row) if row else None
 
     def list(
-        self, *, limit: int = 50, include_archived: bool = False
+        self,
+        *,
+        limit: int = 50,
+        include_archived: bool = False,
+        archived_only: bool = False,
     ) -> list[ConversationMeta]:
         """Most recently updated first; archived rows hidden by default.
 
@@ -196,9 +200,20 @@ class ConversationStore:
         report: "my old conversations vanished" — 197 deleted rows pushed 13 live ones
         out of the 200 window). When the filtering happens in SQL, the LIMIT applies only
         to LIVE rows; even though the adapter also filters in Python, nothing is lost now.
+
+        ``archived_only`` emits ``archived = 1`` so the Archived view's filter runs BEFORE
+        the LIMIT — otherwise active rows fill the 200-row window and an archived
+        conversation older than the newest 200 active ones silently vanishes from the
+        Archived tab (and is unsearchable, so it can never be unarchived). Mirrors the
+        pinned_only pre-limit filtering in the service.
         """
         lim = max(1, min(limit, 200))
-        base = "1=1" if include_archived else "archived = 0"
+        if archived_only:
+            base = "archived = 1"
+        elif include_archived:
+            base = "1=1"
+        else:
+            base = "archived = 0"
         where = f"{base} AND COALESCE(json_extract(json_metadata, '$.deleted'), 0) = 0"
         # LOCK-FREE READ (WAL snapshot) — see get(): don't let streaming-time writes
         # queue the list fetch.

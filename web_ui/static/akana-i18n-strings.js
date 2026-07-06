@@ -51,6 +51,10 @@ window.AkanaI18nStrings = Object.assign(window.AkanaI18nStrings || {}, {
     en: "The interface, voice, and Akana's default persona use this language.",
     tr: "Arayüz, ses ve Akana'nın varsayılan personası bu dilde olur.",
   },
+  "settings.language.sync_failed": {
+    en: "Could not sync the language to the server; nothing was changed. Please try again.",
+    tr: "Dil sunucuya kaydedilemedi; hiçbir şey değişmedi. Lütfen tekrar deneyin.",
+  },
 
   // ── Settings: nav tabs (label + description) ──────────────────────────────
   "settings.nav.overview": { en: "General", tr: "Genel" },

@@ -6,11 +6,11 @@ main session), so tests mount it on a bare FastAPI app with real ``Settings``.
 
 from __future__ import annotations
 
-
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import akana_server.api.routes.credentials as credentials_module
 from akana_server.api.routes.credentials import router
 from akana_server.config import load_settings
 from akana_server.secret_store import load_secrets
@@ -230,6 +230,41 @@ def test_bearer_required_when_token_set(
         )
         ok = c.get(URL, headers={**proxied, "Authorization": "Bearer sekret-token"})
         assert ok.status_code == 200
+
+
+def test_put_offloads_set_secrets_off_the_event_loop(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """put_credentials must run the blocking, lock-holding set_secrets off the loop.
+
+    set_secrets takes the cross-process .vault.lock (up to ~30s on Windows under
+    contention) + does synchronous Fernet encrypt + atomic disk write; running it inline
+    on the single-threaded asyncio loop freezes all SSE/WS/HTTP. Every vault.py write is
+    wrapped in asyncio.to_thread; credentials.py must be too. We assert set_secrets runs
+    on a WORKER thread (asyncio.to_thread offloads there), not the loop thread.
+    """
+    import asyncio
+
+    real_set_secrets = credentials_module.set_secrets
+    seen: dict[str, object] = {}
+
+    def spy(data_dir, patch):
+        # asyncio.to_thread runs the func in a worker thread with NO running loop →
+        # get_running_loop() raises. An inline (un-offloaded) call runs in the loop's
+        # thread, where get_running_loop() returns the loop. This is robust under
+        # starlette's TestClient (which runs the loop on a portal thread, not main).
+        try:
+            asyncio.get_running_loop()
+            seen["on_loop"] = True
+        except RuntimeError:
+            seen["on_loop"] = False
+        return real_set_secrets(data_dir, patch)
+
+    monkeypatch.setattr(credentials_module, "set_secrets", spy)
+    r = client.put(URL, json={"cursor_api_key": RAW_KEY})
+    assert r.status_code == 200
+    assert seen, "set_secrets was never called"
+    assert seen["on_loop"] is False  # offloaded off the event loop
 
 
 # ── /system/credentials/{key}/reveal (audited owner reveal) ──────────────────

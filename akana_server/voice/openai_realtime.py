@@ -165,6 +165,14 @@ class OpenAIRealtimeBridge(RealtimeBridge):
         self._oai: Any = None  # active OpenAI Realtime WS
         self._fc_names: dict[str, str] = {}  # call_id → function name (from output_item.added)
         self._response_active = False  # whether an in-flight response exists (response.cancel gate)
+        # A Realtime tool call spans TWO responses: response 1 carries the spoken preamble
+        # + function_call (the bridge answers with function_call_output + response.create),
+        # response 2 carries the actual answer. Set when we issue that continuation
+        # response.create so the response.done ending response 1 does NOT persist a partial
+        # turn or emit turn_complete mid-tool — both are deferred until the follow-up
+        # response.done, and _out_buf accumulates across the two responses so the answer
+        # pairs with the original user question (not split into two records).
+        self._tool_continuation_pending = False
         # Assistant text of a response whose user transcript had NOT yet arrived at
         # response.done (input transcription runs async and can land AFTER the
         # response). Held here so the LATE input_audio_transcription.completed can
@@ -183,7 +191,15 @@ class OpenAIRealtimeBridge(RealtimeBridge):
         #   • _expect_straggler — a payload-agnostic fallback (e.g. the hermetic tests,
         #     which omit item_id): a placeholder flush arms a one-shot "the next unmatched
         #     completed belongs to the just-closed turn — drop it".
-        self._pending_item_id = ""  # item_id of the turn whose assistant is pending (best-effort)
+        self._pending_item_id = ""  # item_id of the turn currently being transcribed (best-effort)
+        # Snapshot of the DEFERRED turn's item_id, captured at deferral time in
+        # _handle_response_done. Distinct from _pending_item_id because the NEXT turn's
+        # speech_started (which precedes its response.created on the real wire) overwrites
+        # _pending_item_id before the deferred turn is flushed — so the flush would mark
+        # the WRONG (next) turn's item as flushed, dropping its real transcript and
+        # cross-pairing the closed turn's late transcript. This locked snapshot is what
+        # _flush_pending_assistant records as flushed while an assistant is pending.
+        self._deferred_item_id = ""
         self._flushed_item_ids: set[str] = set()
         self._expect_straggler = False  # a flush just closed a turn; the next unmatched completed is stale
 
@@ -308,6 +324,8 @@ class OpenAIRealtimeBridge(RealtimeBridge):
             if self._response_active:
                 await self._send_event({"type": "response.cancel"})
                 self._response_active = False
+            # A barge-in ends the current turn; any in-flight tool continuation is moot.
+            self._tool_continuation_pending = False
             await self._send_json({"type": "interrupt"})
             await self._persist_turn()
         elif etype == "response.done":
@@ -319,6 +337,13 @@ class OpenAIRealtimeBridge(RealtimeBridge):
             self._response_active = False
             status = str((event.get("response") or {}).get("status") or "")
             if status == "cancelled":
+                return
+            if self._tool_continuation_pending:
+                # This response.done ends the tool preamble (response 1); the answer is
+                # still coming in the continuation response. Do NOT persist or flip the
+                # browser to LISTENING now — keep _out_buf (the preamble) so the answer
+                # accumulates onto it and the whole turn persists as ONE record.
+                self._tool_continuation_pending = False
                 return
             await self._handle_response_done()
             await self._send_json({"type": "turn_complete"})
@@ -353,10 +378,16 @@ class OpenAIRealtimeBridge(RealtimeBridge):
         completed be matched back to its turn (straggler detection in
         _emit_user_completed). Absent in the hermetic tests; the epoch fallback covers
         that. Ignore stragglers of an already-flushed turn — they must not overwrite the
-        current turn's identity."""
+        current turn's identity. Also refuse to overwrite while a turn is DEFERRED
+        (assistant stashed): on the real wire the next turn's speech_started arrives
+        before the deferred turn is flushed, and clobbering the identity here would make
+        _flush_pending_assistant mark the wrong item as flushed."""
         iid = str(item_id or "")
-        if iid and iid not in self._flushed_item_ids:
-            self._pending_item_id = iid
+        if not iid or iid in self._flushed_item_ids:
+            return
+        if self._pending_assistant:
+            return
+        self._pending_item_id = iid
 
     def _is_straggler(self, item_id: str) -> bool:
         """True when this completed belongs to a turn already resolved (persisted).
@@ -408,9 +439,17 @@ class OpenAIRealtimeBridge(RealtimeBridge):
         # arrived, restore it and persist the turn so it is NOT merged into the next one
         # (input transcription is async in the Realtime API and can trail the response).
         # No-op in the common case where completed precedes response.done.
+        #
+        # Only pair when this completed actually belongs to the deferred turn: when both
+        # carry item_ids, they must match; if they differ this is the NEXT turn's transcript
+        # arriving early and pairing it with the deferred reply would cross-pair the turns.
+        # With no item_id (hermetic tests) fall back to the arrival-order assumption.
         if self._pending_assistant and not self._out_buf:
+            if iid and self._deferred_item_id and iid != self._deferred_item_id:
+                return
             self._out_buf = self._pending_assistant
             self._pending_assistant = ""
+            self._deferred_item_id = ""
             self._pending_item_id = ""
             await self._persist_turn()
 
@@ -431,6 +470,9 @@ class OpenAIRealtimeBridge(RealtimeBridge):
         if self._out_buf.strip() and not self._in_buf.strip():
             self._pending_assistant = self._out_buf
             self._out_buf = ""
+            # Lock the deferred turn's identity NOW: the next turn's speech_started will
+            # overwrite _pending_item_id before this turn is flushed (real wire order).
+            self._deferred_item_id = self._pending_item_id
             # Leave _turn_t0 untouched: the deferred _persist_turn (fired when the
             # late transcript arrives) measures latency from the real turn start.
             return
@@ -462,10 +504,14 @@ class OpenAIRealtimeBridge(RealtimeBridge):
         self._out_buf = self._pending_assistant
         self._pending_assistant = ""
         # This turn is now closed; its late user transcript (if it ever lands) is a
-        # straggler. Record identity BEFORE resetting so _emit_user_completed can drop it.
-        if self._pending_item_id:
-            self._flushed_item_ids.add(self._pending_item_id)
+        # straggler. Record the DEFERRED turn's identity (locked at deferral time, before
+        # the next turn's speech_started overwrote _pending_item_id) so _emit_user_completed
+        # drops the right straggler and never marks the next turn's item as flushed.
+        flushed_iid = self._deferred_item_id or self._pending_item_id
+        if flushed_iid:
+            self._flushed_item_ids.add(flushed_iid)
         self._expect_straggler = True
+        self._deferred_item_id = ""
         self._pending_item_id = ""
         await self._persist_turn()
 
@@ -503,6 +549,9 @@ class OpenAIRealtimeBridge(RealtimeBridge):
             }
         )
         await self._send_event({"type": "response.create"})
+        # The response ending now (response 1) is only the tool preamble; the real answer
+        # comes in the response we just requested. Defer persist + turn_complete until then.
+        self._tool_continuation_pending = True
 
     # --- OpenAI Realtime event send (in addition to the base safe browser I/O) ---
 

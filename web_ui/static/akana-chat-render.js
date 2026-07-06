@@ -3685,6 +3685,14 @@
             cost_usd: typeof m.usage.cost_usd === "number" ? m.usage.cost_usd : undefined,
           };
         }
+        // A QUESTION turn persisted server-side carries the structured AskUser
+        // payload → re-render the interactive card (not just the summary text) after
+        // a chat switch / reload. Pending (still awaiting an answer) is decided below
+        // once the whole thread is mapped: only the LAST message being this ask turn
+        // means it's unanswered (a following user message = it was answered).
+        if (m.ask_user && typeof m.ask_user === "object" && Array.isArray(m.ask_user.questions)) {
+          am.askUser = m.ask_user;
+        }
         out.push(am);
       } else if (m.role === "error") {
         // A FAILED turn persisted server-side (LLM unavailable / empty response).
@@ -3702,6 +3710,11 @@
         out.push({ kind: "error", text, userText, ts });
       }
     }
+    // Pending-ask detection: the interactive card is shown ONLY when the ask turn is
+    // the final entry — any following entry (a user answer, a later assistant turn)
+    // means the question was already answered, so it renders as summary text only.
+    const last = out.length ? out[out.length - 1] : null;
+    if (last && last.kind === "assistant" && last.askUser) last.askUserPending = true;
     return out;
   }
 
@@ -4043,17 +4056,48 @@
         warn.textContent = window.AkanaI18n.t("msg.dropped_turns", { n: m.droppedTurns });
         msgBody.appendChild(warn);
       }
+      // A PENDING question turn: re-render the interactive AskUser card (options/
+      // submit), not just the summary text. The card's answer routes through
+      // submitAnswerText → the next user message (--resume), same as the live turn.
+      let askCard = null;
+      if (m.askUser && m.askUserPending) {
+        askCard = renderAskUserCard({
+          question: m.askUser,
+          onSubmit: (answer) => {
+            try {
+              window.AkanaChat?.submitAnswerText?.(answer);
+            } catch (e) {
+              console.warn("askUser onSubmit", e);
+            }
+          },
+        });
+      }
       const bubble = document.createElement("div");
       bubble.className = "bubble-assistant bubble-bot";
-      setBubbleMarkdown(bubble, m.text || window.AkanaI18n.t("msg.empty_bubble"));
-      msgBody.appendChild(bubble);
+      // When the card is shown AND the turn body is exactly the question summary
+      // (joined question lines — the live turn leaves the bubble empty and draws the
+      // card), suppress the bubble text so the question is not printed twice. A
+      // preamble/tool-only body that differs from the summary is preserved.
+      const askSummary =
+        m.askUser && Array.isArray(m.askUser.questions)
+          ? m.askUser.questions
+              .map((q) => String((q && q.question) || "").trim())
+              .filter(Boolean)
+              .join("\n")
+          : "";
+      const suppressBubble = !!askCard && String(m.text || "").trim() === askSummary && askSummary !== "";
+      setBubbleMarkdown(bubble, suppressBubble ? "" : (m.text || window.AkanaI18n.t("msg.empty_bubble")));
+      if (!suppressBubble) msgBody.appendChild(bubble);
+      if (askCard) msgBody.appendChild(askCard);
       // Tool calls go ABOVE the bubble — consistent position + appearance with
       // the live turn (aurora process card). Cards must not slip below the message after F5.
       let toolCount = 0;
       if (Array.isArray(m.toolCalls) && m.toolCalls.length) {
         const card = renderToolProcessCard(m.toolCalls, m.turnId);
         if (card) {
-          msgBody.insertBefore(card, bubble);
+          // Bubble may be suppressed on a pending-ask turn (not in msgBody) → append.
+          if (bubble.parentNode === msgBody) msgBody.insertBefore(card, bubble);
+          else msgBody.appendChild(card);
           // Unique rendered card count (NOT raw array length — start+end events per
           // tool can inflate it 2×; same reasoning as renderToolProcessCard's own header).
           toolCount = card.querySelectorAll(".tool-call").length;

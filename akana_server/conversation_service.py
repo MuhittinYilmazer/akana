@@ -81,6 +81,9 @@ class _Message:
     file_ids: list[str] = field(default_factory=list)
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     usage: dict[str, Any] | None = None
+    #: On a question turn: the structured AskUser payload so the interactive card
+    #: re-renders on reload / chat switch; ``None`` otherwise.
+    ask_user: dict[str, Any] | None = None
 
 
 class ConversationService:
@@ -174,6 +177,7 @@ class ConversationService:
         limit: int = 50,
         include_archived: bool = False,
         pinned_only: bool = False,
+        archived_only: bool = False,
     ) -> list[_Meta]:
         # Rows with a 'deleted' stamp appear in neither the list nor the archive.
         # Since they are filtered AFTER the store LIMIT, we fetch from a ceiling (200),
@@ -181,7 +185,17 @@ class ConversationService:
         # BEFORE the limit slice — otherwise the newest ``limit`` rows fill the window
         # first and any pinned conversation older than that window silently vanishes
         # from the pinned view (b2h-#0).
-        rows = self._meta_store.list(limit=200, include_archived=include_archived)
+        #
+        # archived_only has the SAME hazard: the Archived tab must filter to archived
+        # rows in SQL (store archived_only) BEFORE the 200 ceiling, else an archived
+        # conversation older than the newest 200 active ones drops out of the mixed
+        # window and — since search hard-codes WHERE archived=0 — becomes invisible and
+        # un-unarchivable. So push it down to the store rather than filtering in Python.
+        rows = self._meta_store.list(
+            limit=200,
+            include_archived=include_archived,
+            archived_only=archived_only,
+        )
         rows = [r for r in rows if not (r.json_metadata or {}).get("deleted")]
         metas = [self._wrap(r) for r in rows]
         if pinned_only:
@@ -350,6 +364,7 @@ class ConversationService:
                 file_ids=list(t.file_ids),
                 tool_calls=list(t.tool_calls),
                 usage=dict(t.usage) if t.usage else None,
+                ask_user=dict(t.ask_user) if t.ask_user else None,
             )
             for t in turns
         ]

@@ -77,6 +77,10 @@ const _captureT = (k) => (typeof window !== "undefined" && window.AkanaI18n?.t ?
 
       function stopAudioGraph() {
         const keepWakeArmed = bridge.session.isWakeArmed();
+        // Supersede any in-flight ensureAudioInner: if getUserMedia is still awaiting the mic
+        // prompt, its post-await re-check will now see the bump and release the granted stream
+        // instead of assigning it to a graph we just tore down (mic-leak fix).
+        bridge.voice._audioStartToken = (bridge.voice._audioStartToken || 0) + 1;
         bridge.stopBrowserLiveTranscript();
         try {
           bridge.voice.processor?.disconnect();
@@ -340,6 +344,16 @@ const _captureT = (k) => (typeof window !== "undefined" && window.AkanaI18n?.t ?
       }
 
       async function ensureAudioInner() {
+        // SUPERSESSION TOKEN: stopAudioGraph() may close+null audioCtx WHILE getUserMedia is
+        // awaiting the mic-permission prompt (exitConversationMode / wake-off / mic-device change).
+        // Without a re-check, getUserMedia then assigns the live stream to voice.stream and the very
+        // next createMediaStreamSource(null) throws — the throw is swallowed by the caller and the
+        // hot MediaStream is never .stop()'d (OS mic indicator stays on; a later ensureAudio
+        // overwrites voice.stream and orphans it for the session). Snapshot the token here, bump it
+        // in stopAudioGraph, and after the await release the just-acquired stream if superseded
+        // (mirrors akana-voice-live.js _startToken and the bargeDetector fix).
+        const startToken = (bridge.voice._audioStartToken = (bridge.voice._audioStartToken || 0) + 1);
+        const superseded = () => startToken !== bridge.voice._audioStartToken;
         const AC = window.AudioContext || window.webkitAudioContext;
         if (!bridge.voice.audioCtx) {
           bridge.voice.audioCtx = new AC();
@@ -365,9 +379,17 @@ const _captureT = (k) => (typeof window !== "undefined" && window.AkanaI18n?.t ?
         // Skip the exact-deviceId constraint when recovering from a device loss: the preferred
         // mic is gone, so { exact } would throw OverconstrainedError — fall back to the default.
         if (preferredMic && !bridge.voice._micDeviceLost) audioConstraints.deviceId = { exact: preferredMic };
-        bridge.voice.stream = await navigator.mediaDevices.getUserMedia({
+        const acquiredStream = await navigator.mediaDevices.getUserMedia({
           audio: audioConstraints,
         });
+        // stopAudioGraph() ran during the mic-permission prompt (token bumped, or it nulled
+        // audioCtx) → the just-granted stream would otherwise stay live for the page session and
+        // createMediaStreamSource(null) would throw below. Stop the tracks and bail cleanly.
+        if (superseded() || !bridge.voice.audioCtx) {
+          try { acquiredStream.getTracks().forEach((t) => t.stop()); } catch { /* ignore */ }
+          return;
+        }
+        bridge.voice.stream = acquiredStream;
         // Device-loss recovery: a USB/Bluetooth mic unplug (or OS revoke) mid-session silently
         // ENDS the track — handleAudioChunk stops firing, but rawBuffer keeps its last ~4s so the
         // wake poll re-POSTs the SAME frozen window every 300ms forever, and a whisper turn hangs

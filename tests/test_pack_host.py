@@ -270,7 +270,11 @@ def test_rescan_adds_new_pack(tmp_path):
     assert delta["removed"] == []
     assert host.state("user/mini-pack") is PackState.ENABLED
     assert "mini" in {e.id for e in scan_akana_skills(akana_skills_dir(data))}
-    assert host.rescan() == {"added": [], "removed": []}, "second rescan finds nothing new"
+    assert host.rescan() == {
+        "added": [],
+        "removed": [],
+        "updated": [],
+    }, "second rescan finds nothing new"
 
 
 def test_rescan_hot_deletes_vanished_pack(tmp_path):
@@ -380,6 +384,290 @@ def test_register_all_auto_prunes_orphan_from_deleted_pack(tmp_path):
 
     assert "mini" not in {e.id for e in scan_akana_skills(akana_skills_dir(data))}
     assert "mini" not in host2.skills_adapter.provenance()
+
+
+def _add_skill_dir(pack_dir: Path, skill_id: str, title: str = "extra") -> None:
+    """Create an AUTO-DISCOVERED skill dir inside an existing pack's skills/."""
+    d = pack_dir / "skills" / skill_id
+    d.mkdir(parents=True)
+    (d / "manifest.yaml").write_text(
+        f"id: {skill_id}\nversion: 1\ntitle: {title}\n", encoding="utf-8"
+    )
+    (d / "SKILL.md").write_text(f"# {title}\n", encoding="utf-8")
+
+
+def test_rescan_picks_up_skill_added_to_existing_pack(tmp_path):
+    """U1: a skill added to an ALREADY-mounted pack is registered on rescan (no restart).
+
+    Fails on the old rescan() (existing packs were skipped, so the new skill was
+    never copied into data_dir/skills); passes with the content-refresh branch.
+    """
+    packs_root = tmp_path / "packs_root"
+    packs_root.mkdir()
+    data = tmp_path / "data"
+    host = AkanaPackHost(data_dir=data, discovery_roots=[packs_root])
+
+    pack_dir = _minimal_pack(packs_root)
+    host.rescan()
+    found = {e.id for e in scan_akana_skills(akana_skills_dir(data))}
+    assert "mini" in found and "extra" not in found
+
+    # A new skill lands in the already-mounted pack's source dir.
+    _add_skill_dir(pack_dir, "extra")
+    delta = host.rescan()
+
+    assert delta["updated"] == ["user/mini-pack"]
+    assert delta["added"] == [] and delta["removed"] == []
+    found = {e.id for e in scan_akana_skills(akana_skills_dir(data))}
+    assert "extra" in found, "the newly added skill must be discovered after rescan"
+    assert host.skills_adapter.provenance().get("extra") == "user/mini-pack"
+    assert "extra" in host.get("user/mini-pack").manifest.contains.skills
+
+    # Idempotent: a second rescan with no change reports nothing updated.
+    assert host.rescan()["updated"] == []
+
+
+def test_rescan_drops_skill_removed_from_existing_pack(tmp_path):
+    """U1 inverse: a skill deleted from a still-present pack is pruned on rescan."""
+    packs_root = tmp_path / "packs_root"
+    packs_root.mkdir()
+    data = tmp_path / "data"
+    host = AkanaPackHost(data_dir=data, discovery_roots=[packs_root])
+
+    pack_dir = _minimal_pack(packs_root)
+    _add_skill_dir(pack_dir, "extra")
+    host.rescan()
+    assert {"mini", "extra"} <= {e.id for e in scan_akana_skills(akana_skills_dir(data))}
+
+    shutil.rmtree(pack_dir / "skills" / "extra")
+    delta = host.rescan()
+
+    assert delta["updated"] == ["user/mini-pack"]
+    found = {e.id for e in scan_akana_skills(akana_skills_dir(data))}
+    assert "extra" not in found, "the removed skill copy must be pruned"
+    assert "mini" in found, "the still-shipped skill stays"
+    assert "extra" not in host.skills_adapter.provenance()
+
+
+def test_rescan_drop_last_skill_refreshes_registry(tmp_path):
+    """U1 follow-up (stale registry): dropping a pack's LAST skill must reload the
+    cached registry, not just prune the disk copy.
+
+    SkillsAdapter.register early-returns when the pack ships no skills, skipping
+    its own registry reload; without the host forcing a refresh, get_registry()
+    (feeding the catalog / turn-injection) still lists the dropped skill.
+    """
+    from akana_server.skills.registry import get_registry
+
+    packs_root = tmp_path / "packs_root"
+    packs_root.mkdir()
+    data = tmp_path / "data"
+    host = AkanaPackHost(data_dir=data, discovery_roots=[packs_root])
+
+    # A pack whose ONLY skill is 'mini'.
+    pack_dir = _minimal_pack(packs_root)
+    host.rescan()
+    assert "mini" in {e.id for e in get_registry(data).list()}
+
+    # Remove the pack's only skill → the pack now ships zero skills.
+    shutil.rmtree(pack_dir / "skills" / "mini")
+    delta = host.rescan()
+
+    assert delta["updated"] == ["user/mini-pack"]
+    # The cached registry (not just a fresh scan) must no longer list 'mini'.
+    assert "mini" not in {e.id for e in get_registry(data).list()}
+    assert "mini" not in {e.id for e in scan_akana_skills(akana_skills_dir(data))}
+    assert "mini" not in host.skills_adapter.provenance()
+
+
+def test_rescan_drop_skill_spares_colliding_user_authored(tmp_path):
+    """U1 follow-up (data loss): a pack skill id can collide with a user-authored
+    (skill_teach) skill; register() refuses to install over it (no provenance), so
+    when the pack later drops that id from its manifest, drop_skills must NOT
+    rmtree the user's skill.
+    """
+    packs_root = tmp_path / "packs_root"
+    packs_root.mkdir()
+    data = tmp_path / "data"
+    host = AkanaPackHost(data_dir=data, discovery_roots=[packs_root])
+
+    # User authors a skill 'extra' by hand (no provenance).
+    ua = akana_skills_dir(data) / "extra"
+    ua.mkdir(parents=True)
+    (ua / "manifest.yaml").write_text("id: extra\nversion: 1\ntitle: mine\n", encoding="utf-8")
+    (ua / "SKILL.md").write_text("# mine\n", encoding="utf-8")
+    sentinel = ua / "USER_FILE.txt"
+    sentinel.write_text("hand-authored", encoding="utf-8")
+
+    # A pack that ALSO ships a skill id 'extra' (in addition to 'mini').
+    pack_dir = _minimal_pack(packs_root)
+    _add_skill_dir(pack_dir, "extra", title="pack-extra")
+    host.rescan()
+    # register refused to clobber the user's 'extra' → no provenance recorded.
+    assert "extra" not in host.skills_adapter.provenance()
+    assert sentinel.is_file(), "register must not have overwritten the user's skill"
+
+    # The pack drops 'extra' from its manifest.
+    shutil.rmtree(pack_dir / "skills" / "extra")
+    host.rescan()
+
+    # The user's hand-authored 'extra' must survive the drop.
+    assert ua.is_dir(), "user-authored skill must not be deleted by a pack drop"
+    assert sentinel.is_file()
+    assert sentinel.read_text(encoding="utf-8") == "hand-authored"
+    assert "extra" in {e.id for e in scan_akana_skills(akana_skills_dir(data))}
+
+
+def test_rescan_does_not_register_content_for_disabled_pack(tmp_path):
+    """A disabled pack's added skill surfaces in listings but is NOT copied/registered."""
+    packs_root = tmp_path / "packs_root"
+    packs_root.mkdir()
+    data = tmp_path / "data"
+    host = AkanaPackHost(data_dir=data, discovery_roots=[packs_root])
+
+    pack_dir = _minimal_pack(packs_root)
+    host.rescan()
+    host.disable("user/mini-pack")
+    assert host.state("user/mini-pack") is PackState.DISABLED
+    assert "mini" not in {e.id for e in scan_akana_skills(akana_skills_dir(data))}
+
+    _add_skill_dir(pack_dir, "extra")
+    delta = host.rescan()
+
+    assert delta["updated"] == ["user/mini-pack"]
+    # Listing reflects the fresh contents...
+    assert "extra" in host.get("user/mini-pack").manifest.contains.skills
+    # ...but nothing is registered while disabled.
+    found = {e.id for e in scan_akana_skills(akana_skills_dir(data))}
+    assert "extra" not in found and "mini" not in found
+
+
+def test_rescan_content_refresh_preserves_runtime_state(tmp_path):
+    """Re-registering on a content change must not wipe a skill's runtime state
+    (contacts.json) — register() re-copies but preserves it; the dropped-only prune
+    never touches a still-shipped skill."""
+    packs_root = tmp_path / "packs_root"
+    packs_root.mkdir()
+    data = tmp_path / "data"
+    host = AkanaPackHost(data_dir=data, discovery_roots=[packs_root])
+
+    pack_dir = _minimal_pack(packs_root)
+    host.rescan()
+    # User builds up runtime state inside the copied skill.
+    contacts = akana_skills_dir(data) / "mini" / "contacts.json"
+    contacts.write_text('{"alice": "1"}', encoding="utf-8")
+
+    _add_skill_dir(pack_dir, "extra")
+    host.rescan()
+
+    assert contacts.is_file(), "runtime contacts.json must survive a content refresh"
+    assert contacts.read_text(encoding="utf-8") == '{"alice": "1"}'
+
+
+def test_enable_picks_up_skill_added_while_disabled(tmp_path):
+    """U1 secondary: a skill added while the pack was disabled is registered on enable."""
+    packs_root = tmp_path / "packs_root"
+    packs_root.mkdir()
+    data = tmp_path / "data"
+    host = AkanaPackHost(data_dir=data, discovery_roots=[packs_root])
+
+    pack_dir = _minimal_pack(packs_root)
+    host.rescan()
+    host.disable("user/mini-pack")
+
+    _add_skill_dir(pack_dir, "extra")
+    host.enable("user/mini-pack")
+
+    found = {e.id for e in scan_akana_skills(akana_skills_dir(data))}
+    assert {"mini", "extra"} <= found
+    assert "extra" in host.get("user/mini-pack").manifest.contains.skills
+
+
+def test_broken_manifest_preserves_skills_and_mount(tmp_path):
+    """A transient pack.yaml parse error must NOT hot-uninstall the pack.
+
+    Regression: discover() skips a pack whose pack.yaml fails to parse; the old
+    rescan removed-branch then read 'not present' as 'folder deleted' and ran a
+    full _unregister_pack (true MCP unmount + skill rmtree), destroying
+    user-populated runtime state (contacts.json) and the consented MCP entry.
+    Because the DIRECTORY still exists, rescan must keep the derived state.
+    """
+    import yaml
+
+    from akana_server.orchestrator.mcp_config import CONFIG_FILENAME
+
+    packs_root = tmp_path / "packs_root"
+    packs_root.mkdir()
+    data = tmp_path / "data"
+    data.mkdir()
+    host = AkanaPackHost(data_dir=data, discovery_roots=[packs_root])
+    pack_dir = _mcp_pack(packs_root)
+    host.rescan()
+    host.grant_consent("user/mcp-pack")
+
+    # User builds runtime state inside the copied skill.
+    contacts = akana_skills_dir(data) / "mini" / "contacts.json"
+    contacts.write_text('{"alice": "1"}', encoding="utf-8")
+    cfg = data / CONFIG_FILENAME
+    assert "srv" in yaml.safe_load(cfg.read_text(encoding="utf-8"))["servers"]
+
+    # Owner saves pack.yaml mid-edit with a YAML syntax error.
+    (pack_dir / "pack.yaml").write_text(
+        "pack:\n  id: user/mcp-pack\n  version: 0.1.0\n  title: [unclosed\n",
+        encoding="utf-8",
+    )
+    delta = host.rescan()
+
+    # The pack must NOT be reported removed, its skill copy + runtime state must
+    # survive, and the consented MCP entry must stay mounted.
+    assert "user/mcp-pack" not in delta["removed"]
+    assert contacts.is_file(), "runtime contacts.json must survive a broken-manifest rescan"
+    assert contacts.read_text(encoding="utf-8") == '{"alice": "1"}'
+    assert "mini" in {e.id for e in scan_akana_skills(akana_skills_dir(data))}
+    servers = yaml.safe_load(cfg.read_text(encoding="utf-8"))["servers"]
+    assert "srv" in servers, "consent must not be destroyed by a broken manifest"
+    assert servers["srv"].get("managed_by") == "pack:user/mcp-pack"
+
+
+def test_pack_folder_rename_updates_root(tmp_path):
+    """Renaming a pack folder (same id, same content ids) must update the LoadedPack
+    root on rescan so a later disable+enable does not silently strip the pack.
+
+    Regression: _refresh_pack_content only diffed skill/persona ID sets and never
+    compared roots, so after a rename the LoadedPack kept a stale/nonexistent root
+    and enable() found no source dirs, deleting all skills + dropping personas.
+    """
+    packs_root = tmp_path / "packs_root"
+    packs_root.mkdir()
+    data = tmp_path / "data"
+    host = AkanaPackHost(data_dir=data, discovery_roots=[packs_root])
+
+    pack_dir = _minimal_pack(packs_root)
+    (pack_dir / "personas").mkdir()
+    (pack_dir / "personas" / "mini_voice.yaml").write_text(
+        "persona:\n  id: mini_voice\n  title: Mini\n  system_prompt: hi\n",
+        encoding="utf-8",
+    )
+    host.rescan()
+    assert "mini" in {e.id for e in scan_akana_skills(akana_skills_dir(data))}
+    assert "mini_voice" in {p["id"] for p in host.personas_adapter.get_active_personas()}
+
+    # Rename the pack folder (id unchanged, contents unchanged).
+    new_dir = packs_root / "mini-pack-v2"
+    pack_dir.rename(new_dir)
+    host.rescan()
+
+    got = host.get("user/mini-pack")
+    assert got is not None
+    assert got.root.resolve() == new_dir.resolve(), "rescan must adopt the new root"
+    assert got.root.exists()
+
+    # A disable+enable cycle must keep the skill on disk and the persona active.
+    host.disable("user/mini-pack")
+    host.enable("user/mini-pack")
+    assert host.state("user/mini-pack") is PackState.ENABLED
+    assert "mini" in {e.id for e in scan_akana_skills(akana_skills_dir(data))}
+    assert "mini_voice" in {p["id"] for p in host.personas_adapter.get_active_personas()}
 
 
 def test_pack_view_shape(tmp_path):

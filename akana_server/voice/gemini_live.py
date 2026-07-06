@@ -231,6 +231,14 @@ class LiveBridge(RealtimeBridge):
             )
         if getattr(sc, "turn_complete", False):
             await self._persist_turn()
+            # turn_complete is the definitive turn boundary. When only one side was
+            # transcribed (VAD triggered by noise so input is empty, or the
+            # input-transcription stream dropped for this turn) _persist_turn is an
+            # orphan no-op that leaves the transcribed side buffered — it would then
+            # merge into the NEXT persisted turn's record. Drop the lingering one-sided
+            # buffers here so a one-sided turn never carries over.
+            self._in_buf = ""
+            self._out_buf = ""
             await self._send_json({"type": "turn_complete"})
 
     async def _handle_tool_call(self, session: Any, tool_call: Any) -> None:

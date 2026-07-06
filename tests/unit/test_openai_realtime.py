@@ -397,6 +397,99 @@ def test_late_straggler_dropped_by_item_id(tmp_path, monkeypatch) -> None:
     assert "A-transcript" not in user_texts
 
 
+def test_straggler_real_wire_order_speech_started_before_flush(tmp_path, monkeypatch) -> None:
+    """REGRESSION (VB-4 real order): on the actual server_vad wire, turn B's speech_started
+    (item_id=B) arrives BEFORE B's response.created flushes the deferred turn A. The straggler
+    guard must key on A's OWN item_id (locked at deferral), not on whatever _pending_item_id
+    the next turn's speech_started overwrote — otherwise the flush marks item B flushed, A's
+    late transcript poisons B's user record, and B's real transcript is dropped."""
+    calls: list = []
+    monkeypatch.setattr(
+        "akana_server.orchestrator.turn_writer.persist_user_turn",
+        lambda **kw: calls.append(("user", kw.get("user_text"))) or "uid",
+    )
+    monkeypatch.setattr(
+        "akana_server.orchestrator.turn_writer.persist_assistant_turn",
+        lambda **kw: calls.append(("assistant", kw.get("assistant_text"))) or "aid",
+    )
+    oai = _FakeOAIWS(
+        [
+            # Turn A opens and answers; response.done fires BEFORE A's transcript.
+            {"type": "input_audio_buffer.speech_started", "item_id": "itemA"},
+            {"type": "response.created"},
+            {"type": "response.audio_transcript.delta", "delta": "A-reply"},
+            {"type": "response.done"},
+            # Turn B's speech_started (its item_id) precedes B's response.created — the
+            # real wire order that overwrites _pending_item_id if unguarded.
+            {"type": "input_audio_buffer.speech_started", "item_id": "itemB"},
+            {"type": "response.created"},  # flush A → must record itemA (not itemB) flushed
+            # A's late transcript (itemA) → straggler, dropped.
+            {"type": "conversation.item.input_audio_transcription.completed",
+             "transcript": "A-transcript", "item_id": "itemA"},
+            # B's real transcript + reply.
+            {"type": "conversation.item.input_audio_transcription.completed",
+             "transcript": "B-transcript", "item_id": "itemB"},
+            {"type": "response.audio_transcript.delta", "delta": "B-reply"},
+            {"type": "response.done"},
+        ],
+        block_after=False,
+    )
+    _patch_common(monkeypatch, oai)
+    ws = _FakeWS([])
+    _run(tmp_path, ws, oai)
+    user_texts = [v for (role, v) in calls if role == "user"]
+    assistant_texts = [v for (role, v) in calls if role == "assistant"]
+    assert assistant_texts == ["A-reply", "B-reply"]
+    assert user_texts == ["[voice]", "B-transcript"]  # NOT ['[voice]', 'A-transcript']
+    assert "A-transcript" not in user_texts
+
+
+def test_tool_call_turn_persists_once_and_single_turn_complete(tmp_path, monkeypatch) -> None:
+    """REGRESSION: a Realtime tool call spans TWO responses (preamble+function_call, then the
+    answer). It must persist as ONE record pairing the user question with the full answer, and
+    emit turn_complete exactly ONCE — not split into (question, preamble) + ('[voice]', answer)
+    with turn_complete fired mid-tool (which flips the browser orb to LISTENING early)."""
+    monkeypatch.setattr(oar, "dispatch_llm_tool", lambda s, c, n, a: "TOOL-RESULT")
+    calls: list = []
+    monkeypatch.setattr(
+        "akana_server.orchestrator.turn_writer.persist_user_turn",
+        lambda **kw: calls.append(("user", kw.get("user_text"))) or "uid",
+    )
+    monkeypatch.setattr(
+        "akana_server.orchestrator.turn_writer.persist_assistant_turn",
+        lambda **kw: calls.append(("assistant", kw.get("assistant_text"))) or "aid",
+    )
+    oai = _FakeOAIWS(
+        [
+            # Response 1: user question, spoken preamble, then a function_call.
+            {"type": "response.created"},
+            {"type": "conversation.item.input_audio_transcription.completed",
+             "transcript": "what is on my calendar"},
+            {"type": "response.audio_transcript.delta", "delta": "Let me check."},
+            {"type": "response.output_item.added",
+             "item": {"type": "function_call", "call_id": "call_1", "name": "memory_search"}},
+            {"type": "response.function_call_arguments.done", "call_id": "call_1", "arguments": "{}"},
+            {"type": "response.done"},  # ends the preamble response — must NOT persist here
+            # Response 2: the real answer.
+            {"type": "response.created"},
+            {"type": "response.audio_transcript.delta", "delta": "You have a dentist appointment."},
+            {"type": "response.done"},
+        ],
+        block_after=False,
+    )
+    _patch_common(monkeypatch, oai)
+    ws = _FakeWS([])
+    _run(tmp_path, ws, oai)
+    user_texts = [v for (role, v) in calls if role == "user"]
+    assistant_texts = [v for (role, v) in calls if role == "assistant"]
+    # ONE record: the question paired with the full assistant turn (preamble + answer).
+    assert user_texts == ["what is on my calendar"]
+    assert assistant_texts == ["Let me check.You have a dentist appointment."]
+    assert "[voice]" not in user_texts
+    # turn_complete emitted exactly once (at the end of the whole tool turn, not mid-tool).
+    assert [m["type"] for m in ws.sent_json].count("turn_complete") == 1
+
+
 def test_pending_assistant_flushed_with_placeholder_at_session_end(tmp_path, monkeypatch) -> None:
     """If the late user transcript NEVER arrives (dropped / session ends first), the
     assistant turn is rescued against a placeholder user text rather than lost."""

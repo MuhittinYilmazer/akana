@@ -47,6 +47,17 @@ const HISTORY_FRAME = {
   tr: ["[Önceki konuşma — yalnızca bağlam; sürdürme/yeniden yanıtlama]", "[/Önceki konuşma]"],
 };
 
+/**
+ * Bilingual fallback labels for activity events that arrive with empty text
+ * (summary-started commonly starts empty; step-started may lack a label). These
+ * are DEFAULTS behind the active ``language`` — English-first per the project
+ * mandate; a hardcoded Turkish default leaked into an English-mode status line.
+ */
+const ACTIVITY_FALLBACK = {
+  summaryStart: { en: "Preparing summary…", tr: "Özet hazırlanıyor…" },
+  stepStart: { en: "Step started", tr: "Adım başladı" },
+};
+
 /** Model id from bridge payload (``thinking_mode`` is NOT a Cursor SDK knob). */
 export function modelSelectionFromInput(input) {
   return { id: String(input.model || "composer-2") };
@@ -82,6 +93,30 @@ export function buildUserMessage(prompt, history, system, language = "en") {
   }
   lines.push(prompt);
   return lines.join("\n\n");
+}
+
+/**
+ * A completed run whose ``status`` is ``error``/``cancelled`` → the wire error
+ * fields, else ``null``. The Cursor SDK's ``run.wait()`` does NOT reject on a
+ * server/SDK-side failure: it RESOLVES with ``{status:"error", error:{message,
+ * code}}`` (run.d.ts RunResult.error). Both bridges previously emitted that as a
+ * successful ``done`` — the real cause in ``result.error`` was dropped and the
+ * turn was reported as an empty/truncated success (breaker counted success too).
+ * Map it to the same ``{error, error_code?, retryable?}`` shape ``normalizeError``
+ * produces so the terminal event is a real ``error``.
+ */
+export function resultError(result) {
+  const status = typeof result?.status === "string" ? result.status : "";
+  if (status !== "error" && status !== "cancelled") return null;
+  const err = result?.error;
+  const message =
+    (err && typeof err === "object" && typeof err.message === "string" && err.message) ||
+    (typeof err === "string" && err) ||
+    `Cursor run ${status}`;
+  const out = { error: String(message), retryable: false };
+  const code = err && typeof err === "object" ? err.code ?? err.type : undefined;
+  if (code) out.error_code = String(code);
+  return out;
 }
 
 /** Map an exception to the wire error fields ({ error, retryable? }). */
@@ -403,7 +438,8 @@ const LIVE_USAGE_TOKEN_STEP = 8;
  * real usage arrives it is emitted verbatim (overriding the estimate) AND stored
  * via ``onUsage`` for the terminal ``done`` event.
  */
-export function makeOnDelta(emit, { onText, onUsage }) {
+export function makeOnDelta(emit, { onText, onUsage, language = "en" } = {}) {
+  const lang = language === "tr" ? "tr" : "en";
   let liveChars = 0; // accumulated output characters (for the live estimate)
   let lastLiveTokens = 0; // the last emitted estimated token count (throttle)
 
@@ -460,7 +496,7 @@ export function makeOnDelta(emit, { onText, onUsage }) {
     }
     if (t === "summary-started" || t === "summary_started") {
       const text = pickUpdateText(update);
-      emit({ ev: "activity", kind: "summary", phase: "start", text: text || "Özet hazırlanıyor…" });
+      emit({ ev: "activity", kind: "summary", phase: "start", text: text || ACTIVITY_FALLBACK.summaryStart[lang] });
       return;
     }
     if (t === "summary-completed" || t === "summary_completed" || t === "summary") {
@@ -474,7 +510,7 @@ export function makeOnDelta(emit, { onText, onUsage }) {
       return;
     }
     if (t === "step-started" || t === "step_started") {
-      const label = pickUpdateText(update) || extractToolName(update) || "Adım başladı";
+      const label = pickUpdateText(update) || extractToolName(update) || ACTIVITY_FALLBACK.stepStart[lang];
       emit({ ev: "activity", kind: "step", phase: "start", text: label });
       return;
     }

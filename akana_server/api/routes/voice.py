@@ -33,6 +33,7 @@ from akana_server.chat_context import (
     bind_conversation_llm,
     get_agent_id,
     make_bootstrap_retry_hooks,
+    persist_agent_id,
     record_context_assemble_metrics,
 )
 from akana_server.audit import write_event as audit_write
@@ -852,12 +853,19 @@ async def post_voice(
                 status_code=e.status_code,
                 detail={"error": {"code": e.code, "message": e.message}},
             ) from e
+        # #6: persist the bridge agent_id → the next voice turn reuses it (no cold-start).
+        # Done INSIDE the bind_conversation_llm block so persist_agent_id reads the per-turn
+        # provider snapshot to TAG the id — without the tag get_agent_id's leak-guard defaults
+        # it to 'cursor' and a claude voice session never resumes / a claude uuid leaks into a
+        # cursor resume. Off-load BOTH writes: they run a locked memory.db UPDATE txn
+        # (busy_timeout=10000) that would freeze every SSE/WS/HTTP endpoint on the loop — the
+        # blocking + streaming paths already offload this (routes.py / chat_producer.py).
+        if outcome.agent_id:
+            await _off_loop(persist_agent_id, request, conv_id, outcome.agent_id)
+            await _off_loop(_mirror_cursor_agent_meta, request, conv_id, outcome.agent_id)
     text = outcome.text
     usage = outcome.usage
     tool_calls_resp = outcome.tool_calls
-    # #6: persist the bridge agent_id → the next voice turn reuses it (no cold-start).
-    if outcome.agent_id:
-        _mirror_cursor_agent_meta(request, conv_id, outcome.agent_id)
 
     llm_latency_ms = int((time.perf_counter() - t0) * 1000)
     # Persist AFTER the LLM SUCCEEDS: the user + assistant turns are written

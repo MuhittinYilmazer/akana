@@ -168,3 +168,37 @@ def test_commit_failure_leaves_no_orphan_file(tmp_path: Path) -> None:
     # The write happened, but the failed commit's cleanup must have removed it.
     files = _uploaded_files(store)
     assert files == [], f"orphan file(s) left on disk: {[p.name for p in files]}"
+
+
+def test_dedup_recreates_missing_backing_file(tmp_path: Path) -> None:
+    """Dedup onto a row whose backing file was lost must recreate the file.
+
+    If the uploads/<ulid>.<ext> file is removed (manual cleanup, a restore that
+    copied the db but not uploads/, a crash) the row survives but the bytes do
+    not. Dedup is keyed on content sha alone, so pre-fix a re-upload of the same
+    bytes kept deduping onto the broken row and never recreated the file — the
+    content was permanently unusable (400 FILE_MISSING / 410). save() now
+    recreates the file when it is missing on a dedup hit.
+    """
+    store = UploadStore(tmp_path)
+    data = _png()
+
+    rec, dedup = store.save(data, original_name="a.png")
+    assert dedup is False
+    path = store.file_path(rec)
+    assert path.exists()
+
+    # Simulate the lost-file scenario: the row stays, the bytes disappear.
+    path.unlink()
+    assert not path.exists()
+
+    rec2, dedup2 = store.save(data, original_name="a-again.png")
+
+    assert dedup2 is True  # still the same row (content identity)
+    assert rec2.id == rec.id
+    assert store.file_path(rec2).exists()  # file was recreated
+    assert store.file_path(rec2).read_bytes() == data
+
+    # An event records the recreation (observability).
+    actions = [e["action"] for e in store.events(rec.id)]
+    assert "file_recreated" in actions

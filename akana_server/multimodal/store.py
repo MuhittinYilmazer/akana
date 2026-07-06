@@ -425,6 +425,23 @@ class UploadStore:
                 ).fetchone()
                 if row is not None:
                     record = _row_to_record(row)
+                    # Dedup is keyed on content sha alone, so if the backing
+                    # uploads/<ulid>.<ext> file was lost (manual cleanup, a
+                    # restore that copied the db but not uploads/, an OS crash
+                    # before the un-fsynced bytes flushed) the row survives but
+                    # the bytes do not — and re-uploading identical bytes would
+                    # keep deduping onto the broken row forever (400 FILE_MISSING /
+                    # 410 with no recovery path). We hold the same clean bytes
+                    # here, so recreate the file when it is missing.
+                    dest = self._uploads_dir / record.file_name
+                    if not dest.exists():
+                        self._atomic_write(dest, clean)
+                        self._append_event(
+                            conn,
+                            record.id,
+                            "file_recreated",
+                            {"original_name": original_name},
+                        )
                     self._append_event(
                         conn,
                         record.id,

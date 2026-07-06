@@ -275,6 +275,18 @@
     return localStorage.getItem(LS_SPEECH_LANG) || _langLocale();
   }
 
+  /** SINGLE SOURCE OF TRUTH for the TTS synthesis language ("en"/"tr"). Resolve "auto"
+   *  (Whisper auto-detect) BEFORE the en/tr decision: `startsWith("en") ? "en" : "tr"` maps
+   *  "auto" to "tr", so an English user who merely picks "Auto-detect" STT would get a Turkish
+   *  voice reading English replies (violates the English-default mandate). When the speech
+   *  language is "auto" or empty, derive the TTS language from the UI language instead. Shared
+   *  with the wake path (pipeline tts_lang) and settings (ttsPreferredLang) via the bridge. */
+  function ttsLangFromSpeech() {
+    const sl = (speechLang() || "").trim().toLowerCase();
+    if (!sl || sl === "auto") return _langLocale().startsWith("en") ? "en" : "tr";
+    return sl.startsWith("en") ? "en" : "tr";
+  }
+
   /** SINGLE SOURCE OF TRUTH for the conversation voice-exit phrase test. Both the browser-SR
    *  path (finalizeConversationFromSR) and the Whisper submit path (postConversationBlob in
    *  akana-voice-pipeline.js, via the bridge) call this so "dur"/"stop"/"goodbye"/"exit" close
@@ -404,6 +416,13 @@
    *  Swallows "already started" / transient errors (onend will re-schedule). */
   function startBrowserRecNow() {
     if (!browserRec) return;
+    // A RESTART (onend → scheduleBrowserRecRestart) reuses the SAME recognizer instance, so its
+    // event.results list restarts EMPTY — the committed-final length tracker must reset to 0 too.
+    // Otherwise it keeps the prior session's larger length and the restarted session's first final
+    // segment computes committedGrew=false, losing the post-final grace extension (the trailing
+    // word gets truncated in Chrome's post-final quiet window — the exact bug the grace fixes).
+    // The build path resets this at construction; the restart path (no rebuild) needs it here.
+    voice._srPrevFinalLen = 0;
     try {
       browserRec.start();
       _lastRecStartAt = Date.now();
@@ -495,7 +514,12 @@
     // Fresh SR session → event.results restarts empty, so the committed-final length tracker
     // (post-final grace, see onresult) must reset or a stale length would suppress the grace.
     voice._srPrevFinalLen = 0;
-    browserRec.lang = speechLang();
+    // Resolve "auto" before assigning SR.lang: "auto" is a Whisper directive, NOT a valid
+    // BCP-47 tag — strict engines reject it (error "language-not-supported") and the onend/
+    // back-off loop then silently rebuilds a failing recognizer forever. Mirror the wake path
+    // (startSpeechWakeFallback), which resolves "auto" from the UI language for exactly this reason.
+    const _srLang = speechLang();
+    browserRec.lang = _srLang && _srLang !== "auto" ? _srLang : _langLocale();
     browserRec.continuous = true;
     browserRec.interimResults = true;
     browserRec.maxAlternatives = 1;
@@ -868,6 +892,7 @@
       get ttsToggle() { return ttsToggle; },
       LS_MIC_DEVICE: LS_MIC_DEVICE,
       speechLang,
+      ttsLangFromSpeech,
       startBrowserLiveTranscript,
       stopBrowserLiveTranscript,
       syncVoiceUi,
@@ -1343,12 +1368,30 @@
       } catch { /* ignore */ }
       const wasPaused = this._pausedForHidden;
       this._pausedForHidden = false;
-      if (wasPaused && this.audio) {
+      // Do NOT resume+return on a FINISHED element: if a chunk's `ended` fired while hidden,
+      // playNext hit the hidden gate and returned with playing=true and this.audio still pointing
+      // at that finished chunk (whose handlers are the already-consumed onDone no-op and whose blob
+      // URL is revoked). play()+return here would replay a dead element and never reach the queue
+      // kick, wedging playing=true with queued chunks forever (convWatchdog treats playing=true as
+      // busy → no rescue). Only resume a genuinely paused, unfinished chunk; otherwise fall through
+      // to advance the queue.
+      if (wasPaused && this.audio && !this.audio.ended) {
         try { void this.audio.play().catch(() => {}); } catch { /* ignore */ }
         return;
       }
-      // Chunks arrived while hidden and playNext held them (playing never flipped) → start now.
-      if (!this.playing && this.queue.length) this.playNext();
+      // The held/finished chunk is done → advance. If playNext left playing=true on a finished
+      // element (its `ended` fired under the hidden gate), drop it so playNext isn't short-circuited
+      // by the stale playing=true and runs its drain-or-play decision: play the next queued chunk,
+      // or (empty queue) finish the turn (finishConversationTurnIfTtsDone) — instead of hanging on
+      // "Responding" forever with convWatchdog treating playing=true as busy.
+      const stuckFinished = this.audio && this.audio.ended;
+      if (stuckFinished) {
+        this.playing = false;
+        this.audio = null;
+      }
+      // Chunks arrived while hidden and playNext held them (playing never flipped), OR we just
+      // cleared a wedged finished chunk → advance the queue / drain the turn.
+      if (!this.playing && (this.queue.length || stuckFinished)) this.playNext();
     },
   };
 
@@ -1756,7 +1799,7 @@
     // In conversation mode TTS is always on (hands-free voice response); otherwise
     // follows the user's stream-TTS preference.
     if (!ttsEnabled && !voice.conversationMode) return "";
-    return `?tts=${encodeURIComponent(speechLang().startsWith("en") ? "en" : "tr")}`;
+    return `?tts=${encodeURIComponent(ttsLangFromSpeech())}`;
   }
 
   if (ttsToggle) {
@@ -2254,14 +2297,27 @@
         if (!voice.conversationMode || !voiceEpochMatches(captureEpoch)) return; // moved on already
         clearTimeout(voice.convCaptureWatchdog);
         voice.convCaptureWatchdog = null;
-        try {
-          hooks.appendRow(
-            `<div class="meta">${_voiceT("voice.meta_voice")}</div>` +
-              `<div class="bubble-bot">${_voiceT("voice.err_mic_denied")}</div>`,
-          );
-        } catch { /* ignore */ }
-        // Non-fatal: leave the capture phase (so maybeReArm isn't blocked by isCapturing) and
-        // reopen listening on the next turn rather than freezing this one.
+        // LATCH THE FAILURE ONCE (mirror the browser-SR onerror path's convPermErrShown +
+        // exitConversationMode). A denied / absent mic rejects getUserMedia PROMPTLY and on
+        // microtasks only — recoverConvCaptureAndReArm → maybeReArm → startConversationCapture →
+        // ensureAudio again with no macrotask in the cycle, so without a latch this spins the
+        // microtask queue forever (tab freeze, thousands of mic-denied bubbles + earcons). The
+        // first failure surfaces the bubble and exits conversation mode; a re-entry (fresh gesture)
+        // resets convPermErrShown and lets the user try again once the mic is fixed.
+        if (!voice.convPermErrShown) {
+          voice.convPermErrShown = true;
+          try {
+            hooks.appendRow(
+              `<div class="meta">${_voiceT("voice.meta_voice")}</div>` +
+                `<div class="bubble-bot">${_voiceT("voice.err_mic_denied")}</div>`,
+            );
+          } catch { /* ignore */ }
+          try { hooks.setOrb("err"); } catch { /* ignore */ }
+          try { exitConversationMode("whisper-mic-perm"); } catch { /* ignore */ }
+          return;
+        }
+        // Already latched (should not recur in the same session) — leave the capture phase so a
+        // stale timer can't re-enter the loop, but do NOT re-arm (exit already fired above).
         recoverConvCaptureAndReArm("whisperMicFailed");
       });
       // Capture-phase safety timeout: force-recover so the FSM cannot stick on "Listening" when
@@ -2506,6 +2562,23 @@
   function onConversationBargeIn() {
     if (!voice.conversationMode) return;
     if (session.isCapturing()) return;
+    // WHISPER-TRANSCRIBE WINDOW: during the ~0.5–2 s /voice/transcribe fetch the FSM phase is
+    // PROCESSING (isCapturing()=false, so we reach here), the turn has NOT been submitted yet, and
+    // TTS/chat aren't running. Aurora Stop / a spoken barge must CANCEL that pending utterance:
+    // abort the in-flight transcribe AND bump the epoch so postConversationBlob's voiceEpochMatches
+    // check drops the submit — otherwise the stopped utterance still fires a full LLM+TTS turn.
+    if (voice.utterFinishing || voice.voiceFetchAbort) {
+      voice.cancelled = true;
+      if (voice.voiceFetchAbort) {
+        try { voice.voiceFetchAbort.abort(); } catch { /* ignore */ }
+        voice.voiceFetchAbort = null;
+      }
+      try { session.bumpEpoch(); } catch { /* ignore */ }
+      // finalizeUtterance's finally only clears utterFinishing when the epoch still matches (it no
+      // longer does after the bump), so clear it here or the re-arm below (and every later re-arm)
+      // stays blocked on utterFinishing and the scene goes deaf after a stopped transcribe.
+      voice.utterFinishing = false;
+    }
     try {
       ttsPlayer.reset();
     } catch {
@@ -2714,7 +2787,12 @@
     // scene again so a failed entry doesn't leave an empty orb.
     emitBus("voice:scene:open");
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) {
+    // In WHISPER STT mode the turn loop is SR-free by design: the worklet RMS-VAD ends the
+    // turn and /voice/transcribe produces the transcript; SR (if present) only powers the
+    // OPTIONAL live-transcript preview and degrades gracefully when absent. So only block
+    // entry on a missing SR for the browser-SR default — Whisper works on SR-free engines
+    // (e.g. Firefox) once the pipeline is installed and selected.
+    if (!SR && !convUsesWhisperStt()) {
       emitBus("voice:scene:close"); // failed entry → close the empty scene
       hooks.appendRow(
         `<div class="meta">${_voiceT("voice.meta_voice")}</div><div class="bubble-bot">${_voiceT("voice.err_no_sr")}</div>`,
@@ -2999,12 +3077,27 @@
     speechWakeRestartTimer = null;
     _speechWakeBackoff = MIN_SPEECH_WAKE_RESTART_MS; // intentional teardown → fresh budget on next arm
     if (!speechWakeRec) return;
+    // DETACH the handlers BEFORE stop(): Chrome fires onend of a stopped session ASYNCHRONOUSLY.
+    // In a stop-then-start cycle (wake-source change, device-loss re-arm) a NEW recognizer is built
+    // before the old session's onend lands; that onend closes over the MODULE variable and runs
+    // `speechWakeRec = null; scheduleSpeechWakeRestart()`, nulling the reference to the running NEW
+    // recognizer (orphaning it — this fn early-returns on !speechWakeRec so it can never be stopped
+    // again) and spawning a duplicate. Nulling onend/onerror/onresult on the captured instance first
+    // makes the stale onend inert (mirrors stopBrowserLiveTranscript's handler-detach).
+    const rec = speechWakeRec;
+    speechWakeRec = null;
     try {
-      speechWakeRec.stop();
+      rec.onend = null;
+      rec.onerror = null;
+      rec.onresult = null;
     } catch {
       /* ignore */
     }
-    speechWakeRec = null;
+    try {
+      rec.stop();
+    } catch {
+      /* ignore */
+    }
   }
 
   /** True when the browser SpeechRecognition phrase-match is the ACTIVE wake source:

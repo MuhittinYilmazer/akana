@@ -884,6 +884,18 @@ async def _stream_chat_response(
                 context_mode = CONTEXT_MODE_BOOTSTRAP_RETRY
                 await _off_loop(clear_agent_id, request, conv_id)
                 history_msgs, _ = await async_llm_history_and_dropped(request, conv_id)
+                # The streaming path persists the user turn BEFORE the LLM (_persist_user_once),
+                # so this reload includes the CURRENT user turn as the last history entry. The
+                # retry re-dispatches it as the live prompt below — without stripping it the
+                # question is sent TWICE (last history message + live prompt) and one genuine
+                # older turn is pushed out of the chat_max_turns window. The stored user turn
+                # body is body.text (user_for_llm may carry a voice suffix), so match on that.
+                if (
+                    history_msgs
+                    and history_msgs[-1].get("role") == "user"
+                    and history_msgs[-1].get("content") == body.text
+                ):
+                    history_msgs = history_msgs[:-1]
                 log.warning(
                     "agent resume failed — retrying with a history bootstrap "
                     "(conv=%s turn=%s history_turns=%s)",
@@ -1031,6 +1043,10 @@ async def _stream_chat_response(
                 tool_calls=tool_calls,
                 stage_captures=False,
                 usage=_done_tokens_block(usage) if usage else None,
+                # Persist the structured question so the interactive card survives a chat
+                # switch / reload; the turn body stays the _ask_user_summary text (feeds LLM
+                # history bootstrap + previews). NULL on a normal / plan turn.
+                ask_user=last_ask_user if isinstance(last_ask_user, dict) else None,
             )
             assistant_persisted = True
             # Memory capture (the 2nd LLM call) must NOT BLOCK ``done`` → run it in the
@@ -1189,6 +1205,16 @@ async def _stream_chat_response(
             tail = "".join(parts).strip()
             if tail:
                 try:
+                    # Persist the mid-stream-captured agent_id too — the normal-completion
+                    # path (persist_agent_id + _mirror) is skipped on a STOP/shutdown cancel,
+                    # so without this a turn that minted a FRESH bridge session orphans it:
+                    # the next message cold-starts a new agent instead of resuming this
+                    # (already paid-for) partial exchange. Tombstone-gated like the normal path.
+                    if agent_id and _conversation_chat_usable(request.app, conv_id):
+                        await _off_loop(persist_agent_id, request, conv_id, agent_id)
+                        await _off_loop(
+                            _mirror_cursor_agent_meta, request, conv_id, agent_id
+                        )
                     await _persist_user_once()  # user first (there's partial content)
                     await _persist_assistant_turn_end(
                         request,

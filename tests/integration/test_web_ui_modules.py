@@ -245,6 +245,15 @@ def test_memory_studio_contract_harness() -> None:
     _run_node_harness(REPO_ROOT / "tests/web/memory_studio_contract.harness.mjs")
 
 
+def test_memory_facts_editor_guard_harness() -> None:
+    """Node-vm + fake-DOM regression: loadFacts() must NOT wipe an OPEN fact editor with
+    unsaved textarea content on a background/automatic reload (debounced search, bg
+    approve/reject, paging). Drives the real render setListState wipe + real studio
+    loadFacts/openFactEditor/hasDirtyFactEditor via the _test seam; a forced reload
+    (explicit save/refresh) still replaces the list."""
+    _run_node_harness(REPO_ROOT / "tests/web/memory_facts_editor_guard.harness.mjs")
+
+
 def test_voice_live_contract_harness() -> None:
     """Node-vm contract (Phase 2): Gemini Live frame codec (0x01 + LE PCM16),
     float→PCM16 clamp/scale, orb/barge-in state machine (pure helpers)."""
@@ -277,6 +286,13 @@ def test_settings_ws_contract_harness() -> None:
 def test_runtime_settings_contract_harness() -> None:
     """Node-vm contract: runtime setting REST paths + pure schema→form model."""
     _run_node_harness(REPO_ROOT / "tests/web/runtime_settings_contract.harness.mjs")
+
+
+def test_i18n_language_writethrough_harness() -> None:
+    """Node-vm contract (U5): the UI language picker writes through to the server
+    `language` runtime setting, follows the backend on boot, and a failed write rejects
+    (no silent UI/backend divergence)."""
+    _run_node_harness(REPO_ROOT / "tests/web/i18n_language_writethrough.harness.mjs")
 
 
 def test_chat_stream_resilience_harness() -> None:
@@ -384,12 +400,40 @@ def test_onboard_connect_state_harness() -> None:
     _run_node_harness(REPO_ROOT / "tests/web/onboard_connect_state.harness.mjs")
 
 
+def test_bridge_daemon_abort_harness() -> None:
+    """Node harness: the REAL cursor_bridge/bridge_daemon.mjs over stdio with a fake
+    @cursor/sdk. BUG 3 — a STOP that lands while turn A's Agent.create is still in
+    flight must cancel A's run (honored mid-setup intent) and an immediately-resent
+    turn B must reuse A's cached agent (no second, leaked agent) instead of skipping
+    serialization and deleting A's intent. BUG 8 — stdin EOF exits the daemon (a hard,
+    non-aclose parent death must not orphan the daemon)."""
+    _run_node_harness(REPO_ROOT / "tests/cursor_bridge/bridge_daemon_abort.harness.mjs")
+
+
+def test_bridge_lib_activity_lang_harness() -> None:
+    """Node harness: makeOnDelta activity fallbacks follow the active language.
+    BUG 4 — summary-started (empty text) and step-started (no label) used hardcoded
+    Turkish defaults regardless of the setting; defaults must be English (mandate),
+    Turkish only when language:'tr' is explicitly set."""
+    _run_node_harness(REPO_ROOT / "tests/cursor_bridge/lib_activity_lang.harness.mjs")
+
+
 def test_voice_mute_earcon_harness() -> None:
     """Node-vm contract (voice mode): voice:mic:mute subscriber + micMuted re-arm
     gating + enter/exit reset; earcon volume is read from akana.voiceEarconVol and
     scales the gain (higher than the default 0.05); recognizer start is deferred with
     mic-settle (not synchronous in the drain callstack) + teardown latch."""
     _run_node_harness(REPO_ROOT / "tests/web/voice_mute_earcon.harness.mjs")
+
+
+def test_voice_frontend_bugfixes_harness() -> None:
+    """Node-vm contract: ten voice front-end fixes — whisper mic-deny latch (no microtask
+    freeze loop), ensureAudio supersession token (mic-leak), enter-during-wake-POST re-arm,
+    whisper SR-free entry, Aurora Stop aborting an in-flight /voice/transcribe, post-final
+    grace surviving an SR restart, wake-fallback onend detach, TTS/SR 'auto' language
+    resolution (English default not Turkish), and resumeAfterVisible not wedging on a finished
+    TTS chunk."""
+    _run_node_harness(REPO_ROOT / "tests/web/voice_frontend_bugfixes.harness.mjs")
 
 
 @pytest.mark.parametrize("page", list(EXPECTED_BY_PAGE))

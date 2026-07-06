@@ -222,6 +222,52 @@
       return key;
     }
 
+    // Mid-turn Inbox badge signal: when the agent runs a memory-write tool during
+    // the turn (memory_remember / save_memory, executed by the MCP memory server),
+    // the row is committed to the staging inbox the moment the tool ends — but the
+    // done-payload memory_writes are episodic-only in the streaming path, so the
+    // yellow #memory-nav-badge would not refresh until the /stats reconcile fires
+    // AFTER the turn. Detect the tool END here and emit the same "memory:staged"
+    // the done-branch uses (optimistic bump + 700ms authoritative reconcile). Only
+    // on END (phase or terminal status) and never on error; deduped once per call.
+    function maybeSignalMemoryWriteTool(streamCtx, call) {
+      if (!call) return;
+      const name = String(
+        call.name ||
+          (call.function && call.function.name) ||
+          call.tool ||
+          call.toolName ||
+          "",
+      ).toLowerCase();
+      // Mirror the backend matcher (chat_state._turn_wrote_memory): substring,
+      // lowercased — covers mcp__akana_memory__memory_remember, akana_memory/
+      // memory_remember, and the gemini/openai native save_memory decl.
+      const isMemWrite =
+        name.includes("memory_remember") ||
+        name.includes("save_memory") ||
+        (name.includes("memory") && name.includes("remember"));
+      if (!isMemWrite) return;
+      const phase = String(call.phase || "").toLowerCase();
+      const status = String(call.status || "").toLowerCase();
+      // Cursor-bridge `start` frames are nameless (name arrives at `end`), so a
+      // matched name already implies this is not a pre-commit start; still gate on
+      // an explicit end/terminal status and skip errors (the write did not land).
+      const ended = phase === "end" || /^(completed|done|finished|complete)$/.test(status);
+      if (!ended || status === "error") return;
+      const scratch = ensureToolScratch(streamCtx);
+      if (!scratch.memWriteSignaled) scratch.memWriteSignaled = new Set();
+      const key = call.id || call.call_id;
+      if (key != null) {
+        if (scratch.memWriteSignaled.has(String(key))) return;
+        scratch.memWriteSignaled.add(String(key));
+      }
+      try {
+        window.AkanaBus?.emit?.("memory:staged", { count: 1 });
+      } catch {
+        /* cosmetic — ignore */
+      }
+    }
+
     function scheduleStreamMarkdownUpdate(streamCtx, bubble, scroller, text, immediate = false) {
       const s = ensureMdScratch(streamCtx);
       s.mdPending = { bubble, scroller, text };
@@ -1731,6 +1777,9 @@
     } else if (f.event === "tool_call") {
       queueToolCall(streamCtx, payload.call || {}, scroller);
       syncTurnStatusTool(payload.call || {}, streamCtx);
+      // Mid-turn Inbox badge: bump the yellow nav badge the moment an agent
+      // memory-write tool ends (the row is already committed to the staging inbox).
+      maybeSignalMemoryWriteTool(streamCtx, payload.call || {});
       // Aurora voice scene: reflect the tool card too (fullscreen overlay hides the
       // chat log → tool cards must appear in the scene). Send the raw call;
       // the overlay derives the same action sentence via AkanaChatRender helpers.
@@ -3347,6 +3396,7 @@
         adoptStreamConversationId,
         finalizeStreamUi,
         handleChatStreamEvent,
+        maybeSignalMemoryWriteTool,
         // ── Per-conv stream record seams (concurrent N-stream contract) ─────────
         registerStream,
         unregisterStream,

@@ -76,17 +76,21 @@
     return current;
   }
 
+  // Returns true on a confirmed backend write, false on any failure (network or
+  // non-2xx). The fire-and-forget caller (setLanguage opts.backend) ignores the
+  // result — the boot reconcile converges it — but setLanguagePersisted uses it so
+  // the picker can surface a failed sync instead of a mute UI/backend mismatch.
   async function persistBackend(lang) {
     try {
       const base = window.AkanaCore?.baseUrl?.() || "";
-      await fetch(`${base}/api/v1/settings/runtime`, {
+      const r = await fetch(`${base}/api/v1/settings/runtime`, {
         method: "PUT",
         headers: window.AkanaCore.authHeaders(true),
         body: JSON.stringify({ language: lang }),
       });
+      return !!r && r.ok;
     } catch (_) {
-      // Non-fatal: the UI already swapped and localStorage persisted; the next
-      // explicit save (or boot reconcile) will converge the backend.
+      return false;
     }
   }
 
@@ -110,7 +114,7 @@
         new CustomEvent("akana:languagechange", { detail: { lang: next } }),
       );
     }
-    if (opts.backend) void persistBackend(next);
+    if (opts.backend) void persistBackend(next); // fire-and-forget: reconcile converges it
     return next;
   }
 
@@ -122,13 +126,19 @@
    */
   async function setLanguagePersisted(lang) {
     const next = normalize(lang);
+    const ok = await persistBackend(next);
+    if (!ok) {
+      // U5: do NOT flip localStorage/UI when the backend write failed — otherwise the UI
+      // switches but voice/persona stay in the old language with zero feedback (silent
+      // divergence). Reject so the picker can revert and toast the failure.
+      throw new Error("language sync failed");
+    }
     current = next;
     try {
       localStorage.setItem(LS_LANG, next);
     } catch (_) {
       /* private mode / quota */
     }
-    await persistBackend(next);
     return next;
   }
 

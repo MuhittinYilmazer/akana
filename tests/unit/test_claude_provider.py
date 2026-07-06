@@ -2391,3 +2391,107 @@ def test_text_ask_block_still_surfaces_sibling_tool_use(
         assert "ask_user" in done
 
     asyncio.run(run())
+
+
+# -- BUG 7: cancellation at the Windows cmd-path stdin drain must not leak ----------
+
+
+def test_cancel_at_stdin_drain_cleans_up_proc_pid_and_spill(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """On the Windows ``cmd /c`` claude path the flattened bootstrap prompt can exceed
+    the ~64KB pipe buffer, so ``await proc.stdin.drain()`` SUSPENDS until the CLI reads.
+    That await sat OUTSIDE the guarded try/finally: a turn cancelled there (STOP /
+    client disconnect at turn start) leaked a forever-blocked claude.cmd process, its
+    pid was not registered yet (so no reaper could find it), and the temp spill dir
+    (system prompt / MCP config, possibly the vault key) was never removed.
+
+    The fix registers the pid BEFORE the drain and guards the drain region so a
+    CancelledError kills the process group, releases the pid, and cleans the spill."""
+    import tempfile as _tempfile
+
+    from akana_server.orchestrator import claude_provider as _cp
+    from akana_server.orchestrator.llm_process import llm_pid_dir
+
+    settings = _make_settings(monkeypatch, tmp_path)
+
+    # Force the Windows cmd-wrapper path (prompt over stdin, spill temp dir created).
+    monkeypatch.setattr(_cp, "needs_cmd_wrapper", lambda _bin: True)
+
+    # Spill dir lands under tmp_path so we can assert it is removed on cancel.
+    spill_dirs: list[str] = []
+    _real_mkdtemp = _tempfile.mkdtemp
+
+    def _fake_mkdtemp(*a: Any, **kw: Any) -> str:
+        kw["dir"] = str(tmp_path)
+        d = _real_mkdtemp(*a, **kw)
+        spill_dirs.append(d)
+        return d
+
+    monkeypatch.setattr(_cp.tempfile, "mkdtemp", _fake_mkdtemp)
+
+    terminate_calls: list[int] = []
+
+    async def _fake_terminate(pid: int) -> None:
+        terminate_calls.append(pid)
+
+    monkeypatch.setattr(_cp, "terminate_process_group", _fake_terminate)
+
+    class _BlockingStdin:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def write(self, _data: bytes) -> None:
+            return None
+
+        async def drain(self) -> None:
+            # Never completes — mirrors a full pipe buffer with the CLI not yet reading.
+            # The turn is cancelled while awaiting here.
+            await asyncio.Event().wait()
+
+        def close(self) -> None:
+            self.closed = True
+
+    class _DrainBlockProc(_FakeProc):
+        pid = 8484
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.stdin = _BlockingStdin()
+            self.returncode = None  # still "alive" so the guard kills it
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+    async def run() -> None:
+        proc = _DrainBlockProc()
+        _patch_spawn(monkeypatch, proc)
+
+        agen = _cp.stream_user_chat(settings, "selam")
+        # __anext__ runs the setup up to (and blocking on) the stdin drain — it never
+        # reaches the first yield because the drain suspends before the read loop.
+        task = asyncio.ensure_future(agen.__anext__())
+        # Let the coroutine advance to the drain await.
+        for _ in range(20):
+            await asyncio.sleep(0)
+            if terminate_calls or spill_dirs:
+                # spill dir now exists; give a couple more ticks to reach the drain.
+                break
+        # The pid MUST already be registered (reapable) before the drain.
+        assert len(list(llm_pid_dir(tmp_path).glob("*.json"))) == 1, (
+            "pid file must be registered BEFORE the stdin drain (reapable on cancel)"
+        )
+        # Cancel the turn exactly at the pending drain.
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        # The blocked claude process was killed (process group terminated).
+        assert 8484 in terminate_calls, "cancelled turn left the claude process alive"
+        # The pid file was released (not leaked → next-boot reaper won't hit a stale pid).
+        assert list(llm_pid_dir(tmp_path).glob("*.json")) == []
+        # The spill temp dir (system prompt / MCP config) was removed.
+        assert spill_dirs, "expected a spill dir on the cmd-wrapper path"
+        assert not os.path.exists(spill_dirs[0]), "spill temp dir leaked on cancel"
+
+    asyncio.run(run())

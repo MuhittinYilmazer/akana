@@ -264,6 +264,123 @@ def test_append_turn_tool_calls_roundtrip(tmp_path) -> None:
     assert svc2.list_messages(cid)[0].tool_calls == calls
 
 
+def test_append_turn_ask_user_roundtrip(tmp_path) -> None:
+    """Service level (U3): append_turn(ask_user=...) → list_messages returns the payload.
+
+    A question turn must persist its STRUCTURED AskUser payload so the interactive
+    card can be re-rendered after a chat switch / reload — not just the summary text.
+    """
+    svc = ConversationService.for_data_dir(tmp_path)
+    cid = svc.create().id
+    ask = {
+        "id": "ask-1",
+        "questions": [
+            {
+                "question": "Çay mı kahve mi?",
+                "header": "İçecek",
+                "multiSelect": False,
+                "options": [{"label": "Çay"}, {"label": "Kahve"}],
+            }
+        ],
+    }
+    svc._episodic.append_turn(
+        turn_id="01ASST00000000000000000010",
+        conversation_id=cid,
+        role="assistant",
+        text="Çay mı kahve mi?",
+        ask_user=ask,
+    )
+    messages = svc.list_messages(cid)
+    assert len(messages) == 1
+    assert messages[0].ask_user == ask
+    # A fresh service instance (fresh connection) reads the same durable payload.
+    svc2 = ConversationService.for_data_dir(tmp_path)
+    assert svc2.list_messages(cid)[0].ask_user == ask
+    # A normal (non-question) turn stays None.
+    svc._episodic.append_turn(
+        turn_id="01ASST00000000000000000011",
+        conversation_id=cid,
+        role="assistant",
+        text="merhaba",
+    )
+    assert svc.list_messages(cid)[1].ask_user is None
+
+
+def test_messages_route_includes_ask_user(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Route level (U3): GET /messages emits the ask_user dict on a question turn only."""
+    monkeypatch.setenv("AKANA_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AKANA_TOKEN", "")
+    monkeypatch.setenv("AKANA_PORT", "8766")
+    monkeypatch.setenv("CURSOR_API_KEY", "")
+    app = create_app()
+    with TestClient(app) as client:
+        cid = client.post("/api/v1/conversations", json={"title": "Soru"}).json()["id"]
+        svc = ConversationService.for_data_dir(tmp_path)
+        ask = {"id": "ask-2", "questions": [{"question": "Hangisi?", "options": [{"label": "A"}]}]}
+        svc._episodic.append_turn(
+            turn_id="01ASST00000000000000000020",
+            conversation_id=cid,
+            role="assistant",
+            text="Hangisi?",
+            ask_user=ask,
+        )
+        svc._episodic.append_turn(
+            turn_id="01ASST00000000000000000021",
+            conversation_id=cid,
+            role="assistant",
+            text="normal cevap",
+        )
+        msgs = client.get(f"/api/v1/conversations/{cid}/messages").json()["messages"]
+        by_text = {m["content"]: m for m in msgs}
+        assert by_text["Hangisi?"]["ask_user"] == ask
+        # A normal turn omits the field entirely (no null noise on non-question turns).
+        assert "ask_user" not in by_text["normal cevap"]
+
+
+def test_ask_user_migrates_on_old_schema_db(tmp_path) -> None:
+    """U3: an old memory.db without the ask_user column migrates via idempotent ALTER.
+
+    Mirrors the additive-JSON-column pattern (tool_calls/usage): opening the store on a
+    legacy DB adds the column; old rows read None and new rows round-trip.
+    """
+    import sqlite3
+
+    db_dir = tmp_path / "db"
+    db_dir.mkdir(parents=True)
+    db_path = db_dir / "memory.db"
+    # Hand-craft a legacy turns table WITHOUT ask_user (has tool_calls/file_ids/usage).
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE turns (
+            id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, ts TEXT NOT NULL,
+            role TEXT NOT NULL, text TEXT NOT NULL, lang TEXT, importance REAL,
+            tool_call_id TEXT, duration_ms INTEGER, tool_calls TEXT, file_ids TEXT, usage TEXT
+        );
+        INSERT INTO turns (id, conversation_id, ts, role, text)
+        VALUES ('old1', 'c-old', '2020-01-01T00:00:00.000Z', 'assistant', 'eski cevap');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    svc = ConversationService.for_data_dir(tmp_path)  # opening runs the migration
+    # Old row reads ask_user=None (no crash).
+    old = svc.list_messages("c-old")
+    assert len(old) == 1
+    assert old[0].ask_user is None
+    # A new question turn on the migrated DB round-trips the payload.
+    ask = {"id": "ask-3", "questions": [{"question": "Q?", "options": [{"label": "X"}]}]}
+    svc._episodic.append_turn(
+        turn_id="01ASST00000000000000000030",
+        conversation_id="c-old",
+        role="assistant",
+        text="Q?",
+        ask_user=ask,
+    )
+    assert svc.list_messages("c-old")[-1].ask_user == ask
+
+
 def test_blocking_llm_error_does_not_persist_orphan_turn(
     client: TestClient, tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -167,3 +167,153 @@ def test_skills_api_endpoint(client: TestClient, tmp_path: Path, monkeypatch: py
     r2 = client.get("/api/v1/skills?reload=true")
     assert r2.status_code == 200
     assert r2.json()["count"] == 2
+
+
+# -- duplicate-id skills (same frontmatter name in two dirs) -----------------------
+
+
+def _write_akana_fm_skill(
+    root: Path, dir_name: str, name: str, *, triggers: list[str], body: str
+) -> Path:
+    """Frontmatter-only akana skill whose ``name:`` may differ from the dir name."""
+    d = root / dir_name
+    d.mkdir(parents=True)
+    trig = "".join(f"  - {t}\n" for t in triggers)
+    (d / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: demo\ntriggers:\n{trig}---\n\n{body}\n",
+        encoding="utf-8",
+    )
+    return d
+
+
+def test_duplicate_id_dedup_no_crash_on_tie(tmp_path: Path) -> None:
+    """Two dirs with the same frontmatter name + equal-length triggers must not
+    crash suggest_for_text (BUG-0: exact.sort() TypeError) and must appear once
+    (BUG-1: _entries/_index disagreement)."""
+    root = akana_skills_dir(tmp_path)
+    _write_akana_fm_skill(
+        root, "myskill", "myskill", triggers=["deploy site"], body="BODY-A steps"
+    )
+    _write_akana_fm_skill(
+        root, "myskill_backup", "myskill", triggers=["deploy site"], body="BODY-B steps"
+    )
+    from akana_server.skills.registry import get_registry
+
+    reg = get_registry(tmp_path)
+    reg.reload()
+    ids = [e.id for e in reg.list()]
+    assert ids.count("myskill") == 1  # deduped, not listed twice
+    # Must not raise TypeError on the tie.
+    out = reg.suggest_for_text("please deploy site now")
+    assert any(s["id"] == "myskill" for s in out)
+
+
+def test_duplicate_id_trigger_match_loads_matched_body(tmp_path: Path) -> None:
+    """BUG-1: before the fix, _entries kept BOTH dirs (so deploy_b's trigger
+    'release now' matched in suggest_for_text) while load_body resolved via the
+    deduped _index winner (deploy_a) → a match on deploy_b injected BODY-A.
+
+    After the fix _entries == _index (single winner), so the only trigger that can
+    match is the winner's own, and load_body always returns that winner's body —
+    the matched entry and the loaded body can never diverge."""
+    root = akana_skills_dir(tmp_path)
+    _write_akana_fm_skill(
+        root, "deploy_a", "deploy", triggers=["deploy site"], body="BODY-A steps"
+    )
+    _write_akana_fm_skill(
+        root, "deploy_b", "deploy", triggers=["release now"], body="BODY-B steps"
+    )
+    from akana_server.skills.registry import get_registry
+
+    reg = get_registry(tmp_path)
+    reg.reload()
+    listed = [e for e in reg.list() if e.id == "deploy"]
+    assert len(listed) == 1  # deduped: the loser dir is gone
+    winner = listed[0]
+    # load_body resolves the SAME single winner the list surfaces (no cross-wire).
+    body = reg.load_body("deploy").strip()
+    on_disk = (Path(winner.path) / "SKILL.md").read_text(encoding="utf-8")
+    assert body in on_disk
+    # deploy_a wins by (source, id)/sorted-scan order, so it is deploy_a's trigger
+    # that suggests it — and deploy_a's body that loads. The loser's trigger
+    # ('release now') no longer resolves to a phantom entry that injects BODY-A.
+    won_a = winner.path.replace("\\", "/").endswith("/deploy_a")
+    match_text = "deploy site" if won_a else "release now"
+    expected_body = "BODY-A steps" if won_a else "BODY-B steps"
+    out = reg.suggest_for_text(f"please {match_text} the build")
+    assert any(s["id"] == "deploy" for s in out)
+    assert reg.load_body("deploy").strip() == expected_body
+
+
+def test_cursor_frontmatter_skill_title_not_delimiter(tmp_path: Path) -> None:
+    """A Claude-format cursor skill (frontmatter + ``##`` sections, no H1) must not
+    get the literal ``---`` as its title (BUG-3)."""
+    root = tmp_path / "cursor_fm"
+    d = root / "pdf-tools"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(
+        "---\n"
+        "name: PDF Tools\n"
+        "description: Merge and split PDFs\n"
+        "---\n"
+        "\n"
+        "## Instructions\n"
+        "Do the thing.\n",
+        encoding="utf-8",
+    )
+    entries = scan_cursor_skills([root])
+    e = next(x for x in entries if x.id == "pdf-tools")
+    assert e.title != "---"
+    assert e.title == "PDF Tools"
+    assert e.description == "Merge and split PDFs"
+
+
+def test_cursor_frontmatter_yaml_comment_not_title(tmp_path: Path) -> None:
+    """A YAML comment line inside the frontmatter must not become the title (BUG-3)."""
+    root = tmp_path / "cursor_fm2"
+    d = root / "notes"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(
+        "---\n"
+        "# When to use\n"
+        "name: notes\n"
+        "description: take notes\n"
+        "---\n"
+        "\n"
+        "## Steps\n",
+        encoding="utf-8",
+    )
+    entries = scan_cursor_skills([root])
+    e = next(x for x in entries if x.id == "notes")
+    assert e.title == "notes"
+    assert e.title != "When to use"
+
+
+def test_allowed_filter_applied_before_topk_cap(tmp_path: Path) -> None:
+    """BUG-2: with allowed passed in, excluded skills with LONGER triggers must not
+    fill the top_k slots ahead of the selected (shorter-trigger) skill."""
+    root = akana_skills_dir(tmp_path)
+    # Selected skill: short trigger that occurs in the text.
+    _write_akana_fm_skill(
+        root, "whatsapp_send", "whatsapp_send", triggers=["send"], body="wa body"
+    )
+    # Three EXCLUDED skills with LONGER overlapping triggers, all in the text.
+    _write_akana_fm_skill(
+        root, "excl_a", "excl_a", triggers=["send a message"], body="a"
+    )
+    _write_akana_fm_skill(
+        root, "excl_b", "excl_b", triggers=["send a report"], body="b"
+    )
+    _write_akana_fm_skill(
+        root, "excl_c", "excl_c", triggers=["send a picture"], body="c"
+    )
+    from akana_server.skills.registry import get_registry
+
+    reg = get_registry(tmp_path)
+    reg.reload()
+    text = "please send a message a report a picture now"
+    # Without the fix, top_k=1 would be filled by the longest excluded triggers and
+    # whatsapp_send would be dropped before the filter. With the fix, the allowed
+    # filter runs before the cap so the selected skill survives.
+    out = reg.suggest_for_text(text, 1, allowed={"whatsapp_send"})
+    assert [s["id"] for s in out] == ["whatsapp_send"]

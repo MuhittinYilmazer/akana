@@ -116,13 +116,35 @@ function findAll(root, sel) {
 }
 
 // ── load the render module ─────────────────────────────────────────────────────
+class FakeMutationObserver {
+  observe() {}
+  disconnect() {}
+}
 const ctx = {
-  window: { AkanaCore: { escapeHtml: (s) => s }, AkanaMarkdown: {}, AkanaI18n: makeI18nStub(), CSS: { escape: (s) => s } },
-  document: { createElement: (t) => makeEl(t), createElementNS: (_n, t) => makeEl(t) },
+  window: {
+    AkanaCore: { escapeHtml: (s) => s },
+    AkanaMarkdown: { setBubbleMarkdown: (b, t) => { if (b) b._md = String(t); } },
+    AkanaI18n: makeI18nStub(),
+    CSS: { escape: (s) => s },
+    // AkanaChat.submitAnswerText — observed by the persisted-card render test below.
+    AkanaChat: { submitAnswerText: null },
+    setInterval: () => 0,
+  },
+  document: {
+    createElement: (t) => makeEl(t),
+    createElementNS: (_n, t) => makeEl(t),
+    // enhanceChatLog looks up #log; returning null → it falls back to hooks.log.
+    getElementById: () => null,
+  },
   console,
   setTimeout,
   clearTimeout,
+  requestAnimationFrame: () => 0,
+  cancelAnimationFrame: () => {},
+  MutationObserver: FakeMutationObserver,
+  Element: makeEl().constructor, // plain-object els; `instanceof Element` is just falsy (fine)
 };
+ctx.window.setInterval = () => 0;
 vm.runInNewContext(renderSrc, ctx);
 const Render = ctx.window.AkanaChatRender;
 assert.ok(Render, "AkanaChatRender failed to load");
@@ -249,6 +271,79 @@ assert.ok(
   transportSrc.includes("!streamCtx.askUserShown && !payload.ask_user"),
   "transport empty-response error not exempt on the question turn",
 );
+
+// ── 9. Persistence (U3): mapServerMessagesToThread carries the structured ask_user ──
+// A question turn stored server-side returns an `ask_user` payload on /messages. The
+// interactive card must re-render on a chat switch / reload — not just the summary text.
+{
+  const askPayload = {
+    id: "srv-ask",
+    questions: [
+      { question: "Çay mı kahve mi?", header: "İçecek", multiSelect: false,
+        options: [{ label: "Çay" }, { label: "Kahve" }] },
+    ],
+  };
+  // (a) the ask turn is the LAST message → mapped askUser + pending true.
+  {
+    const thread = Render.mapServerMessagesToThread([
+      { role: "user", content: "sor bana bir şey", created_at: "t0" },
+      { role: "assistant", id: "a1", content: "Çay mı kahve mi?", created_at: "t1", ask_user: askPayload },
+    ]);
+    const last = thread[thread.length - 1];
+    assert.equal(last.kind, "assistant", "last mapped message is the assistant ask turn");
+    assert.ok(last.askUser && Array.isArray(last.askUser.questions), "ask_user mapped to askUser");
+    assert.equal(last.askUserPending, true, "trailing ask turn is pending");
+  }
+  // (b) an answer (a following user message) → NOT pending → summary text only.
+  {
+    const thread = Render.mapServerMessagesToThread([
+      { role: "assistant", id: "a1", content: "Çay mı kahve mi?", created_at: "t1", ask_user: askPayload },
+      { role: "user", content: "Kahve", created_at: "t2" },
+    ]);
+    const ask = thread.find((m) => m.kind === "assistant");
+    assert.ok(ask.askUser, "answered ask turn still carries askUser data");
+    assert.ok(!ask.askUserPending, "answered ask turn is NOT pending (no card, summary only)");
+  }
+  // (c) a turn WITHOUT ask_user → no askUser field (regression guard).
+  {
+    const thread = Render.mapServerMessagesToThread([
+      { role: "assistant", id: "a1", content: "merhaba", created_at: "t1" },
+    ]);
+    assert.ok(!thread[0].askUser, "a normal assistant turn has no askUser");
+  }
+
+  // (d) createRenderer + chatRenderMessage on a PENDING ask message → the interactive
+  //     .aur-ask card is rendered into the appended row, and its submit routes to
+  //     window.AkanaChat.submitAnswerText (identical wiring to the persisted error card).
+  {
+    let sentAnswer = null;
+    ctx.window.AkanaChat.submitAnswerText = (a) => { sentAnswer = a; };
+    const log = makeEl("div");
+    const renderer = Render.createRenderer({
+      log,
+      appendUserMessage: () => makeEl("div"),
+      appendSystemNotice: () => {},
+    });
+    renderer.chatRenderMessage({
+      kind: "assistant",
+      turnId: "a1",
+      text: "Çay mı kahve mi?", // == the ask summary → the bubble is suppressed
+      askUser: askPayload,
+      askUserPending: true,
+    });
+    assert.equal(log.children.length, 1, "one assistant row appended");
+    const card = findOne(log.children[0], ".aur-ask");
+    assert.ok(card, "an interactive .aur-ask card is rendered from the persisted ask turn");
+    assert.equal(card.dataset.askId, "srv-ask", "the card carries the persisted ask id");
+    // The summary bubble is suppressed (question not printed twice).
+    assert.equal(findOne(log.children[0], ".bubble-assistant"), null, "summary bubble suppressed under the card");
+    // Submit → window.AkanaChat.submitAnswerText.
+    const opt = findAll(card, ".aur-ask-opt")[1]; // Kahve
+    opt.click();
+    findOne(card, ".aur-ask-submit").click();
+    assert.equal(sentAnswer, "Kahve", "card submit routes to AkanaChat.submitAnswerText");
+  }
+}
 
 console.log("ask_user_card.harness: OK");
 process.exit(0);

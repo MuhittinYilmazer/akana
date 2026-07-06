@@ -182,3 +182,60 @@ def test_valid_png_unchanged() -> None:
     r = strip_location_metadata(data, "png")
     assert r.data == data
     assert r.stripped is False
+
+
+# -- PNG: XMP location metadata (GPS in an iTXt chunk) ---------------------------------
+
+
+def _png_itxt_xmp(xmp_text: bytes) -> bytes:
+    # iTXt: keyword\0 + compression_flag + compression_method + language_tag\0
+    #       + translated_keyword\0 + text
+    chunk_data = (
+        b"XML:com.adobe.xmp\x00"
+        + b"\x00\x00"  # not compressed
+        + b"\x00"  # empty language tag
+        + b"\x00"  # empty translated keyword
+        + xmp_text
+    )
+    return struct.pack(">I", len(chunk_data)) + b"iTXt" + chunk_data + b"\x00\x00\x00\x00"
+
+
+def test_png_itxt_xmp_gps_stripped() -> None:
+    """Lightroom/Photoshop store XMP GPS in a PNG iTXt 'XML:com.adobe.xmp' chunk;
+    it must be dropped like JPEG APP1 and WebP 'XMP ' — not kept as free text."""
+    sig = b"\x89PNG\r\n\x1a\n"
+    ihdr = struct.pack(">I", 13) + b"IHDR" + b"\x00" * 13 + b"\x00\x00\x00\x00"
+    xmp = (
+        b'<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF>'
+        b"<exif:GPSLatitude>40,42.768N</exif:GPSLatitude>"
+        b"<exif:GPSLongitude>74,0.360W</exif:GPSLongitude>"
+        b"</rdf:RDF></x:xmpmeta>"
+    )
+    iend = struct.pack(">I", 0) + b"IEND" + b"\xae\x42\x60\x82"
+    data = sig + ihdr + _png_itxt_xmp(xmp) + iend
+    assert sniff_format(data) == "png"
+
+    r = strip_location_metadata(data, "png")
+
+    assert b"GPSLatitude" not in r.data
+    assert b"40,42.768N" not in r.data
+    assert b"XML:com.adobe.xmp" not in r.data
+    assert r.stripped is True
+    assert b"IHDR" in r.data  # image structure preserved
+    assert b"IEND" in r.data
+
+
+def test_png_non_xmp_itxt_kept() -> None:
+    """A non-XMP iTXt (ordinary free-text metadata) must NOT be dropped —
+    only the XMP location packet is targeted."""
+    sig = b"\x89PNG\r\n\x1a\n"
+    ihdr = struct.pack(">I", 13) + b"IHDR" + b"\x00" * 13 + b"\x00\x00\x00\x00"
+    kw = b"Comment\x00" + b"\x00\x00" + b"\x00" + b"\x00" + b"hello world"
+    itxt = struct.pack(">I", len(kw)) + b"iTXt" + kw + b"\x00\x00\x00\x00"
+    iend = struct.pack(">I", 0) + b"IEND" + b"\xae\x42\x60\x82"
+    data = sig + ihdr + itxt + iend
+
+    r = strip_location_metadata(data, "png")
+
+    assert b"hello world" in r.data
+    assert r.stripped is False

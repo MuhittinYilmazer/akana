@@ -46,6 +46,17 @@ _SERVER_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 #: secure_vault namespace validation idiom.
 _SKILL_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 
+#: Mount-time marker a pack may put in an MCP ``command``/``args`` entry to point at
+#: a launcher FILE under the repo (e.g. ``<AKANA_REPO>/scripts/mcp_computer.py``).
+#: The manifest can't know the absolute repo path, so ``ToolsAdapter.consent``
+#: rewrites this token to the repo root when it writes the entry to
+#: ``mcp_servers.yaml``. A launcher FILE (cwd-immune — it bootstraps sys.path from
+#: its own ``__file__``) is required for packs whose child imports ``akana_server``,
+#: which is NOT pip-installed and so only resolves via ``-m`` from the repo-root cwd.
+_REPO_ROOT_MARKER = "<AKANA_REPO>"
+#: Repo root: this file is ``<repo>/akana_server/packs/adapters.py``.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 
 # --------------------------------------------------------------------------- #
 # 1. SkillsAdapter — the one that must work end-to-end.                        #
@@ -85,7 +96,18 @@ class SkillsAdapter:
         # may be safely overwritten (re-enable/reinstall). An id absent here whose
         # dir nonetheless exists is user-authored (skill_teach) — never clobber it.
         prov = self.provenance()
+        # Bind _installed to the SAME list we append to inside the loop, before the
+        # loop runs. A mid-loop copytree/rmtree failure (Windows file lock, disk
+        # full) then still leaves _installed reflecting every skill actually copied
+        # so far — so a later unregister removes exactly those dirs and
+        # _forget_provenance only forgets what was torn down. Assigning _installed
+        # once AFTER the loop (the previous behaviour) meant a raised exception
+        # escaped register() with NO _installed entry, wedging the already-copied
+        # skills: their dirs stayed on disk with provenance but disable removed 0
+        # dirs while _forget_provenance stripped their provenance, permanently
+        # orphaning them (register's user-authored guard then refuses to reinstall).
         installed: list[str] = []
+        self._installed[pack.manifest.id] = installed
         for sid in skill_ids:
             # Path-traversal guard (untrusted pack content): the skill id must be a
             # plain name — an id containing separators or ".." would cause
@@ -159,7 +181,8 @@ class SkillsAdapter:
             # reconcile never prunes no-provenance dirs).
             self._record_provenance(pack.manifest.id, [sid])
             installed.append(sid)
-        self._installed[pack.manifest.id] = installed
+        # ``installed`` IS self._installed[pack_id] (bound before the loop), so the
+        # incremental appends above already committed each successful copy.
         pack.registered.setdefault("skills", []).extend(installed)
         self._refresh()
 
@@ -178,6 +201,47 @@ class SkillsAdapter:
                 shutil.rmtree(dest, ignore_errors=True)
         self._forget_provenance(pack_id)
         self._refresh()
+
+    def drop_skills(self, pack_id: str, skill_ids: list[str]) -> list[str]:
+        """Withdraw ONLY the named skill copies of a pack (targeted, precise).
+
+        Used by a content-change rescan when skills were removed from a
+        still-present pack: the skills the pack still ships are re-copied by
+        ``register`` (which preserves runtime state like contacts.json), so only
+        the ones the pack *dropped* need pruning. Returns the removed ids.
+        ``_refresh`` is left to the caller so a batched drop+register triggers a
+        single registry reload.
+
+        Unlike ``unregister`` (which iterates ``_installed`` — dirs this pack
+        actually copied), this iterates the MANIFEST diff, so the ownership guard
+        must be strict: delete ONLY a copy whose provenance names THIS pack. A
+        no-provenance dir is user-authored (a pack skill id can collide with a
+        skill_teach one; ``register`` refuses to install over it, so it never gets
+        provenance) — deleting it here would destroy the user's skill. An id owned
+        by another pack must likewise be left alone.
+        """
+        if not skill_ids:
+            return []
+        dest_root = akana_skills_dir(self._data_dir)
+        prov = self.provenance()
+        removed: list[str] = []
+        installed = self._installed.get(pack_id, [])
+        for sid in skill_ids:
+            if prov.get(sid) != pack_id:
+                continue  # user-authored (no provenance) or another pack's — never touch it
+            if not _SKILL_ID_RE.match(str(sid)):  # path-traversal guard
+                continue
+            dest = dest_root / sid
+            if dest.is_dir():
+                shutil.rmtree(dest, ignore_errors=True)
+            if sid in installed:
+                installed.remove(sid)
+            removed.append(sid)
+        if pack_id in self._installed:
+            self._installed[pack_id] = installed
+        if removed:
+            self._forget_provenance_ids(removed)
+        return removed
 
     # -- provenance (skill_id -> pack_id), persisted across restarts ---------- #
 
@@ -224,6 +288,15 @@ class SkillsAdapter:
             del prov[sid]
         self._save_provenance(prov)
 
+    def _forget_provenance_ids(self, skill_ids: list[str]) -> None:
+        prov = self.provenance()
+        drop = [sid for sid in skill_ids if sid in prov]
+        if not drop:
+            return
+        for sid in drop:
+            del prov[sid]
+        self._save_provenance(prov)
+
     def reconcile(self, present_pack_ids: set[str]) -> list[str]:
         """Prune skill copies whose owning pack id is not in ``present_pack_ids``.
 
@@ -251,6 +324,14 @@ class SkillsAdapter:
             self._save_provenance(new_prov)
             self._refresh()
         return removed
+
+    def refresh(self) -> None:
+        """Force a registry reload (public entry point for the host).
+
+        ``drop_skills`` defers the reload to the caller so a batched drop+register
+        does ONE reload via ``register``'s own ``_refresh``; when ``register`` will
+        NOT run one (the pack now ships no skills), the host calls this directly."""
+        self._refresh()
 
     def _refresh(self) -> None:
         # Drop the module-level data_dir cache, then force a fresh scan for this
@@ -382,6 +463,28 @@ class ToolsAdapter:
     @staticmethod
     def _marker(pack_id: str) -> str:
         return f"pack:{pack_id}"
+
+    @staticmethod
+    def _resolve_repo_marker(entry: dict[str, Any]) -> dict[str, Any]:
+        """Rewrite ``<AKANA_REPO>`` in an entry's ``command``/``args`` to the repo root.
+
+        Lets a pack ship a launcher-FILE spawn (cwd-immune) without knowing the
+        absolute repo path at author time. Only the ``command`` string and ``args``
+        list are rewritten (the two places a launcher path can appear); other fields
+        are left untouched. Applied at mount time so the resolved absolute path is
+        what lands in ``mcp_servers.yaml``.
+        """
+        repo = str(_REPO_ROOT)
+        cmd = entry.get("command")
+        if isinstance(cmd, str) and _REPO_ROOT_MARKER in cmd:
+            entry["command"] = cmd.replace(_REPO_ROOT_MARKER, repo)
+        args = entry.get("args")
+        if isinstance(args, list):
+            entry["args"] = [
+                a.replace(_REPO_ROOT_MARKER, repo) if isinstance(a, str) else a
+                for a in args
+            ]
+        return entry
 
     def _config_path(self) -> Path:
         if self._data_dir is None:
@@ -516,7 +619,7 @@ class ToolsAdapter:
             if not approved:
                 pending.append(name)
                 continue
-            entry = dict(cfg)
+            entry = self._resolve_repo_marker(dict(cfg))
             entry["managed_by"] = marker
             if existing != entry:
                 servers[name] = entry
@@ -605,6 +708,23 @@ class PersonasAdapter:
             if data is None:
                 log.warning("pack %s: persona file missing/unreadable: %s", pack.manifest.id, pid)
                 continue
+            # Cross-pack collision guard (mirrors SkillsAdapter): persona ids are
+            # short common words, so two loaded packs shipping the same id is
+            # plausible (e.g. a copied pack). Do NOT let a later-registered pack
+            # overwrite an ACTIVE persona owned by a different pack — that would
+            # silently shadow the incumbent's persona, and a later unregister would
+            # then pop it even though the incumbent pack is still enabled. Keep the
+            # incumbent; skip this copy.
+            existing = self._active.get(pid)
+            if existing is not None and existing.get("_pack_id") not in (None, pack.manifest.id):
+                log.warning(
+                    "pack %s: persona id %r is already provided by pack %s — "
+                    "keeping the existing pack's persona, not installing this copy",
+                    pack.manifest.id,
+                    pid,
+                    existing.get("_pack_id"),
+                )
+                continue
             data["_pack_id"] = pack.manifest.id
             self._active[pid] = data
             ids.append(pid)
@@ -613,6 +733,12 @@ class PersonasAdapter:
 
     def unregister(self, pack_id: str) -> None:
         for pid in self._by_pack.pop(pack_id, []):
+            # Only withdraw a persona this pack still OWNS: a colliding id could
+            # belong to another, still-enabled pack (the incumbent that shadowed
+            # this pack's copy), and popping it would drop that pack's live persona.
+            active = self._active.get(pid)
+            if active is not None and active.get("_pack_id") not in (None, pack_id):
+                continue
             self._active.pop(pid, None)
 
     @staticmethod

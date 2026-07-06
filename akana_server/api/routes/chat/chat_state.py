@@ -49,14 +49,23 @@ def _turn_wrote_memory(tool_calls: list[dict[str, Any]]) -> bool:
     ``mcp__akana_memory__memory_remember``) and ``save_memory`` (the gemini/openai native
     function-call decl in gemini_tools/llm_tools). Match any of them (substring, lowercased) —
     matching only ``memory_remember`` missed gemini/openai's ``save_memory`` → double capture.
+
+    A FAILED call stored nothing: the tool-call dict carries a ``status`` populated at
+    phase='end' (``status='error'`` for an errored MCP call). Only a NON-errored write counts
+    as "explicitly stored a memory" — otherwise a failed ``memory_remember`` (MCP subprocess
+    down) would suppress the healthy background ``llm_capture`` fallback and the fact is lost
+    from BOTH durable memory and the inbox.
     """
     for call in tool_calls:
-        name = str((call or {}).get("name") or "").lower()
+        call = call or {}
+        name = str(call.get("name") or "").lower()
         if (
             "memory_remember" in name
             or "save_memory" in name
             or ("memory" in name and "remember" in name)  # defensive: memory.remember / prefixed
         ):
+            if str(call.get("status") or "").lower() == "error":
+                continue  # the write failed → don't suppress the fallback capture
             return True
     return False
 

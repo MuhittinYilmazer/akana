@@ -232,6 +232,35 @@ def test_model_change_clears_and_reindexes(tmp_path, monkeypatch):
     assert store.count() == 1
 
 
+def test_boot_prunes_orphans_and_unmasks_backfill(tmp_path, monkeypatch):
+    """U6: on boot, _wire_vector prunes orphan embeddings (deleted/invalidated facts) BEFORE
+    counting, so an orphan can no longer inflate store.count() and make `indexed >= expected`
+    skip the resume-backfill of a genuinely missing embedding."""
+    from akana.memory.vector import VectorStore
+
+    _forbid_probe(monkeypatch)
+    pre = Memory.for_data_dir(tmp_path)
+    _closed, valid = pre.assert_fact_direct(key="dil", value="Python", trust="user_statement")
+
+    # Seed exactly one ORPHAN embedding for a fact that does not exist, and leave the ONE
+    # valid fact WITHOUT an embedding. Old behavior: count()==1 >= expected==1 → backfill
+    # skipped, so the orphan survives forever AND the valid fact is never embedded.
+    store = VectorStore.for_data_dir(tmp_path)
+    store.index_fact("ghost-fact-id", "ghost: text", HashingEmbedder())
+    assert store.count() == 1
+
+    _, orchestrator, indexer = build_orchestrator(tmp_path, embedder=HashingEmbedder())
+    assert indexer is not None
+
+    # Orphan is gone; the valid fact's embedding was backfilled (count-masking regression).
+    assert store.distinct_models() == ["hashing:3gram-256"]
+    hits = store.search(HashingEmbedder().embed(["dil"])[0], limit=5, model="hashing:3gram-256")
+    hit_ids = {h[0] for h in hits}
+    assert valid.id in hit_ids
+    assert "ghost-fact-id" not in hit_ids
+    assert store.count() == 1  # only the valid fact remains
+
+
 # -- is_available ----------------------------------------------------------------------
 
 

@@ -214,6 +214,45 @@ class InboundRouter:
         # Intake stopped → no new workers will be born; bring down remaining workers.
         await self._shutdown_workers()
 
+    async def drain(self, timeout: float = 30.0) -> bool:
+        """Stop taking NEW intake, then let in-flight + already-queued messages finish.
+
+        A hard :meth:`stop` cancels the intake task and every conversation worker,
+        silently discarding messages that are sitting in the shared inbound queue and
+        in per-conversation worker queues — and those messages were already
+        offset-confirmed to Telegram (never redelivered), so they are lost, and any
+        in-flight LLM turn is aborted with no reply. Before a live reload we instead
+        drain gracefully: cancel only the intake pump, hand any messages still buffered
+        in the shared inbound queue to their workers, then await every worker's queue to
+        empty (bounded by ``timeout``). Returns ``True`` if everything drained, ``False``
+        if the timeout was hit (caller then falls back to a hard stop).
+        """
+        # 1) Stop pulling NEW work off the shared queue, but drain what is already there
+        #    into the per-conversation workers so it is not dropped with the intake task.
+        task, self._task = self._task, None
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        try:
+            while True:
+                msg = self._registry.inbound.get_nowait()
+                await self._dispatch(msg)
+        except asyncio.QueueEmpty:
+            pass
+        except Exception as e:  # dispatch error must not abort the drain
+            capture_failure(e, where="connectors.InboundRouter.drain")
+        # 2) Wait for every worker to finish its queued + in-flight messages. Workers
+        #    retire themselves when their queue drains, removing themselves from _workers.
+        deadline = time.monotonic() + max(0.0, timeout)
+        while self._workers:
+            if time.monotonic() >= deadline:
+                return False
+            await asyncio.sleep(0.02)
+        return True
+
     @property
     def running(self) -> bool:
         return self._task is not None and not self._task.done()
@@ -718,13 +757,24 @@ class InboundRouter:
         if self._conversations is None or self._bindings is None:
             return "Conversation archive is off in this setup; there is nothing to connect to."
         try:
-            convs = await asyncio.to_thread(self._conversations.list_conversations, limit=1)
+            # This chat's OWN bound conversation must be excluded from the target set:
+            # every persisted Telegram turn bumps that conversation's updated_at, so with
+            # a bare list_conversations(limit=1) the "most recent" is almost always the
+            # chat's own thread and /baglan would re-bind the chat to itself (no-op). Read
+            # the current binding and skip it, so we pick the most-recent OTHER conversation
+            # (the web thread the user was chatting in). Fetch a small window, not limit=1.
+            own_cid = await asyncio.to_thread(
+                self._bindings.get, msg.connector_id, msg.chat_id
+            )
+            convs = await asyncio.to_thread(
+                self._conversations.list_conversations, limit=20
+            )
         except Exception as e:
             capture_failure(e, where="connectors.InboundRouter._cmd_bind.list")
             return LLM_ERROR_REPLY
-        if not convs:
+        target = next((c for c in convs if c.id != own_cid), None)
+        if target is None:
             return "No conversation found yet to connect to. Start one in the web UI first."
-        target = convs[0]
         try:
             await asyncio.to_thread(
                 self._bindings.bind, msg.connector_id, msg.chat_id, target.id

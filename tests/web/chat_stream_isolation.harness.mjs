@@ -818,4 +818,126 @@ check("concurrent-(d5): a NEW-chat send (foreground has no stream) must NOT abor
   });
 }
 
+// ── MID-TURN MEMORY-CAPTURE BADGE SIGNAL (U4) ────────────────────────────────
+// Bug: the yellow Inbox badge (#memory-nav-badge) did not refresh WHILE a turn
+// streamed; an agent memory-write tool (memory_remember / save_memory) commits its
+// row to the staging inbox the moment the tool ENDS, but the frontend had no
+// mid-turn signal — the badge only reconciled AFTER the turn (via /stats). Fix:
+// on the live tool_call `end` frame for a memory-write tool, emit "memory:staged"
+// (the same optimistic-bump event the done-branch uses). This test drives the new
+// __test.maybeSignalMemoryWriteTool through a recording bus stub and asserts the
+// mid-turn contract: emit on END of a memory-write tool, never on start/error, and
+// exactly once per call.
+{
+  const busEvents = [];
+  const memCtx = {
+    console,
+    document: { createElement: (t) => makeEl(t) },
+    performance: { now: () => 0 },
+    requestAnimationFrame: (cb) => { rafCbs.push(cb); return rafCbs.length; },
+    cancelAnimationFrame: () => {},
+    CSS: { escape: (s) => s },
+  };
+  memCtx.window = memCtx;
+  memCtx.window.CSS = memCtx.CSS;
+  memCtx.window.AkanaChatRender = ctx.window.AkanaChatRender;
+  memCtx.window.AkanaCore = ctx.window.AkanaCore;
+  memCtx.window.AkanaMarkdown = ctx.window.AkanaMarkdown;
+  memCtx.window.AkanaTurnStatus = ctx.window.AkanaTurnStatus;
+  // Recording bus stub — capture every emit so we can assert count + payload.
+  memCtx.window.AkanaBus = { on() {}, emit: (n, p) => busEvents.push([n, p]) };
+
+  vm.runInNewContext(read("akana-chat-transport.js"), memCtx);
+  const TM = memCtx.window.AkanaChatTransport
+    .create({ hooks: { stickToBottomIfFollowing() {} } }).__test;
+  assert.ok(TM && TM.maybeSignalMemoryWriteTool, "maybeSignalMemoryWriteTool seam must exist");
+
+  const staged = () => busEvents.filter(([n]) => n === "memory:staged");
+
+  check("mem-badge: memory-write tool START does NOT signal (write not committed)", () => {
+    busEvents.length = 0;
+    const S = {};
+    TM.maybeSignalMemoryWriteTool(S, {
+      id: "t1",
+      name: "mcp__akana_memory__memory_remember",
+      phase: "start",
+    });
+    assert.equal(staged().length, 0, "start frame must not emit memory:staged");
+  });
+
+  check("mem-badge: memory-write tool END emits exactly one memory:staged {count:1}", () => {
+    busEvents.length = 0;
+    const S = {};
+    TM.maybeSignalMemoryWriteTool(S, {
+      id: "t1",
+      name: "mcp__akana_memory__memory_remember",
+      phase: "end",
+      status: "completed",
+    });
+    const ev = staged();
+    assert.equal(ev.length, 1, "one memory:staged on end");
+    // Cross-realm object → compare the field, not object identity/prototype.
+    assert.equal(ev[0][1] && ev[0][1].count, 1, "payload is {count:1}");
+  });
+
+  check("mem-badge: replaying the same end frame stays deduped (one signal per call id)", () => {
+    busEvents.length = 0;
+    const S = {};
+    const frame = { id: "t1", name: "memory_remember", phase: "end", status: "completed" };
+    TM.maybeSignalMemoryWriteTool(S, frame);
+    TM.maybeSignalMemoryWriteTool(S, frame);
+    assert.equal(staged().length, 1, "same call id → still exactly one emit");
+  });
+
+  check("mem-badge: gemini/openai save_memory END also emits (native decl name)", () => {
+    busEvents.length = 0;
+    const S = {};
+    TM.maybeSignalMemoryWriteTool(S, { id: "t2", name: "save_memory", phase: "end" });
+    assert.equal(staged().length, 1, "save_memory end must emit");
+  });
+
+  check("mem-badge: errored memory-write END does NOT signal (write did not land)", () => {
+    busEvents.length = 0;
+    const S = {};
+    TM.maybeSignalMemoryWriteTool(S, {
+      id: "t3",
+      name: "memory_remember",
+      phase: "end",
+      status: "error",
+    });
+    assert.equal(staged().length, 0, "errored write must not emit");
+  });
+
+  check("mem-badge: a non-memory tool END does NOT signal (name gate)", () => {
+    busEvents.length = 0;
+    const S = {};
+    TM.maybeSignalMemoryWriteTool(S, {
+      id: "t4",
+      name: "web_search",
+      phase: "end",
+      status: "completed",
+    });
+    assert.equal(staged().length, 0, "non-memory tool must not emit");
+  });
+
+  check("mem-badge: full stream contract — signal fires MID-turn (before done)", () => {
+    // Drive the real handleChatStreamEvent tool_call branch: a memory-write tool
+    // END must emit memory:staged BEFORE any done frame arrives.
+    busEvents.length = 0;
+    const S = makeStreamCtx("mem");
+    S.msgBody = makeEl("div");
+    S.bubble = makeEl("div");
+    S.meta = makeEl("div");
+    S.turnId = "turn-mem";
+    S.acc = "";
+    S.convId = "conv-mem";
+    const evt = (name, data) =>
+      TM.handleChatStreamEvent({ event: name, data: JSON.stringify(data) }, S);
+    evt("tool_call", { call: { id: "m1", name: "mcp__akana_memory__memory_remember", phase: "start" } });
+    assert.equal(staged().length, 0, "no signal on the start frame");
+    evt("tool_call", { call: { id: "m1", name: "mcp__akana_memory__memory_remember", phase: "end", status: "completed" } });
+    assert.equal(staged().length, 1, "signal fires on the tool END — mid-turn, before done");
+  });
+}
+
 console.log(`chat_stream_isolation.harness: ${passed} isolation contracts PASSED ✓`);

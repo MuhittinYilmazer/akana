@@ -41,6 +41,12 @@ _reload_lock = asyncio.Lock()
 _GUARD_MAX_WAIT_S = 90.0
 _GUARD_POLL_S = 0.1
 
+#: Max time a live reload waits for already-accepted connector messages (queued +
+#: in-flight LLM turn) to finish before it force-stops the router. An LLM turn can take
+#: 30-60s; the drain window covers a normal turn but is bounded so a stuck turn cannot
+#: block the dashboard Save indefinitely.
+_RELOAD_DRAIN_TIMEOUT_S = 60.0
+
 
 def _make_turn_guard(app: FastAPI):
     """Per-conversation turn gate: MUTUAL EXCLUSION between the connector turn
@@ -184,5 +190,18 @@ async def reload_connectors(app: FastAPI) -> None:
     # PUTs): without this both could pass stop then both run start, orphaning a
     # live Telegram poller that no later stop/reload can ever reach.
     async with _reload_lock:
+        # Graceful drain BEFORE teardown: a hard stop_connectors cancels the intake
+        # task and every conversation worker, dropping messages sitting in the shared
+        # inbound queue and per-worker queues — messages already offset-confirmed to
+        # Telegram (never redelivered) — and aborting any in-flight LLM turn with no
+        # reply. Draining lets those already-accepted messages finish first, then the
+        # normal stop/start swaps the registry. If the drain times out (a genuinely
+        # stuck turn) we fall through to the hard stop rather than blocking the reload.
+        router = getattr(app.state, _ROUTER_ATTR, None)
+        if router is not None:
+            try:
+                await router.drain(timeout=_RELOAD_DRAIN_TIMEOUT_S)
+            except Exception as e:  # a drain failure must not block the reload
+                log.warning("connector reload: drain failed, forcing stop: %s", e)
         await stop_connectors(app)
         await start_connectors(app)

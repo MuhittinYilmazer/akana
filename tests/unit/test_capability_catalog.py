@@ -105,7 +105,18 @@ def test_triggers_deduped_and_capped() -> None:
     line = next(ln for ln in out.splitlines() if ln.startswith("- Many"))
     shown = line.split("triggers:")[1]
     assert shown.lower().count("a-trig") == 1  # case-insensitive dedup
-    assert shown.count(",") + 1 <= catalog_mod._MAX_TRIGGERS
+    # An overflowing trigger list ends with a visible ellipsis marker (not silent).
+    assert shown.rstrip().endswith("…")
+    # At most _MAX_TRIGGERS real triggers are shown (the "…" token is not a trigger).
+    real = [t for t in shown.split(",") if t.strip() and t.strip() != "…"]
+    assert len(real) <= catalog_mod._MAX_TRIGGERS
+
+
+def test_triggers_under_cap_have_no_ellipsis() -> None:
+    """A skill with <= _MAX_TRIGGERS triggers renders no crop marker."""
+    out = build_capability_catalog(_StubRegistry([_entry("few", "Few", ["a", "b", "c"])]))
+    line = next(ln for ln in out.splitlines() if ln.startswith("- Few"))
+    assert "…" not in line
 
 
 def test_overflow_summarized_with_note_and_bounded() -> None:
@@ -229,3 +240,46 @@ def test_resolve_catalog_empty_install_is_neutral(tmp_path, monkeypatch) -> None
     monkeypatch.setenv("AKANA_DATA_DIR", str(tmp_path))
     monkeypatch.delenv("AKANA_SKILL_CATALOG", raising=False)
     assert resolve_catalog(load_settings()) == ""
+
+
+def test_resolve_catalog_entry_ceiling_is_runtime_configurable(tmp_path, monkeypatch) -> None:
+    """U2: the catalog entry ceiling is a live runtime setting. A small value crops
+    (visibly, with '(+N more)'); a large value lists everything with no note."""
+    from akana_server.runtime_settings import get_store
+
+    monkeypatch.setenv("AKANA_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("AKANA_SKILL_CATALOG", raising=False)
+    monkeypatch.delenv("AKANA_SKILL_CATALOG_MAX_ENTRIES", raising=False)
+    for i in range(40):
+        _write_akana_skill(tmp_path, f"skill{i}", f"Skill {i}", ["t"])
+
+    # A tight ceiling (the schema minimum) crops — but visibly.
+    get_store(tmp_path).set("skill_catalog_max_entries", 16)
+    reload_skills()
+    out_small = resolve_catalog(load_settings())
+    assert "more capabilities)" in out_small
+
+    # A generous ceiling lists all 40 with no crop note.
+    get_store(tmp_path).set("skill_catalog_max_entries", 500)
+    reload_skills()
+    out_big = resolve_catalog(load_settings())
+    assert "more capabilities)" not in out_big
+    assert out_big.count("Skill ") >= 40
+
+
+def test_resolve_catalog_char_ceiling_is_runtime_configurable(tmp_path, monkeypatch) -> None:
+    """U2: the character ceiling is a live runtime setting; a tiny value crops visibly."""
+    from akana_server.runtime_settings import get_store
+
+    monkeypatch.setenv("AKANA_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("AKANA_SKILL_CATALOG", raising=False)
+    monkeypatch.delenv("AKANA_SKILL_CATALOG_MAX_CHARS", raising=False)
+    # Enough skills that their combined lines exceed the tightest char ceiling.
+    for i in range(120):
+        _write_akana_skill(tmp_path, f"skill{i}", f"Skill Number {i}", ["trigger-alpha", "trigger-beta"])
+
+    get_store(tmp_path).set("skill_catalog_max_chars", 2000)  # min bound, forces a crop
+    reload_skills()
+    out = resolve_catalog(load_settings())
+    assert "more capabilities)" in out
+    assert len(out) <= 2000 + len(catalog_mod._HEADER_EN) + 256

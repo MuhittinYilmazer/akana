@@ -180,6 +180,38 @@ def test_supersede_missing_returns_none(store: SemanticStore) -> None:
     assert store.supersede_fact("nope", new_value="x") is None
 
 
+def test_supersede_dedup_onto_other_fact_keeps_its_earlier_valid_from(
+    store: SemanticStore,
+) -> None:
+    """Report #5: a supersede whose replacement dedups onto a DIFFERENT
+    pre-existing valid fact must NOT rewrite that fact's valid_from forward — that
+    erases the temporal coverage the row already had (facts_as_of returns nothing
+    for the period it was genuinely valid). min(existing_vf, supersede_instant)
+    tiles equally without moving valid_from forward.
+    """
+    # Fact A: city = Istanbul, genuinely valid since T0 (an early explicit window).
+    t0 = "2026-01-01T00:00:00.000Z"
+    store.upsert_fact(
+        fact_id="A", key="city", value="Istanbul", valid_from=t0
+    )
+    # Fact B lives under a different key; superseding it into (city, Istanbul)
+    # dedups onto A (cross-key path reachable via memory.remember / Studio edit).
+    store.upsert_fact(fact_id="B", key="country", value="Turkey")
+
+    result = store.supersede_fact("B", new_value="Istanbul", new_key="city")
+    assert result is not None
+
+    a = store.get_fact("A")
+    assert a is not None and a.is_valid
+    # A's valid_from must NOT have jumped forward to the supersede instant.
+    assert a.valid_from == t0
+
+    # A time-travel query for the period A was genuinely valid still returns A.
+    mid = "2026-03-01T00:00:00.000Z"
+    as_of = store.facts_as_of("Istanbul", as_of=mid)
+    assert any(f.id == "A" and f.value == "Istanbul" for f in as_of)
+
+
 def test_correct_fact_in_place(store: SemanticStore) -> None:
     store.upsert_fact(fact_id="f1", key="isim", value="Muhittn")  # typo
     fixed = store.correct_fact("f1", new_value="Alice")

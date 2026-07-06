@@ -45,6 +45,7 @@ def _persist_turn(
     tool_calls: list[dict[str, object]] | None = None,
     file_ids: list[str] | None = None,
     usage: dict[str, object] | None = None,
+    ask_user: dict[str, object] | None = None,
 ) -> None:
     """Write the turn to ``memory.db`` (PRIMARY — sole writer since A5).
 
@@ -105,6 +106,7 @@ def _persist_turn(
                 tool_calls=tool_calls,
                 file_ids=file_ids,
                 usage=usage,
+                ask_user=ask_user,
             )
             if is_new:
                 if role == "user":
@@ -175,6 +177,7 @@ def persist_assistant_turn(
     tool_calls: list[dict[str, object]] | None = None,
     data_dir: Path | None = None,
     usage: dict[str, object] | None = None,
+    ask_user: dict[str, object] | None = None,
 ) -> str:
     """Write the assistant turn + metadata; returns the turn id (empty string if text is blank — no write).
 
@@ -196,6 +199,7 @@ def persist_assistant_turn(
         duration_ms=latency_ms,
         tool_calls=tool_calls,
         usage=usage,
+        ask_user=ask_user,
     )
     return asst_id
 

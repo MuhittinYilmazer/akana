@@ -189,6 +189,54 @@ def test_list_dir_symlink_dizine_inmez(
     assert link_entry["type"] == "symlink"
 
 
+def _make_junction(link: Path, target: Path) -> bool:
+    """Create a Windows directory junction link→target (no admin needed).
+
+    Returns False when not on Windows or mklink is unavailable so the test skips
+    rather than fails.
+    """
+    if sys.platform != "win32":
+        return False
+    import subprocess
+
+    try:
+        res = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        return False
+    return res.returncode == 0 and link.exists()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="directory junctions are Windows-only")
+def test_list_dir_junction_dizine_inmez(
+    service: FileService, root: Path, tmp_path: Path
+) -> None:
+    """A Windows directory junction (is_symlink()==False, is_dir()==True) inside
+    a root must NOT be descended: pre-fix _entry_type classified it 'dir' and
+    _walk recursed with no per-child allowlist re-check, leaking the names/sizes
+    of files that physically live OUTSIDE the allowlist over list_dir."""
+    disari = tmp_path / "disari_junction"
+    disari.mkdir()
+    (disari / "secret.txt").write_text("classified", encoding="utf-8")
+    jump = root / "jump"
+    if not _make_junction(jump, disari):
+        pytest.skip("mklink /J unavailable in this environment")
+
+    entries = service.list_dir(str(root), depth=3)
+    names = {e["name"] for e in entries}
+
+    # The junction itself is visible (reported as a symlink) but NOT descended.
+    assert "jump" in names
+    assert "secret.txt" not in names
+    jump_entry = next(e for e in entries if e["name"] == "jump")
+    assert jump_entry["type"] == "symlink"
+    # And no entry path leaks a child under the junction.
+    assert not any("secret.txt" in e["path"] for e in entries)
+
+
 def test_list_dir_max_entries_kelepcesi(
     service: FileService, root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

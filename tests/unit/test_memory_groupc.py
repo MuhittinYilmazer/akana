@@ -169,3 +169,76 @@ def test_capture_rejected_readd_respects_user_text(tmp_path: Path) -> None:
         user_text="favori rengim mavi olsun",
     )
     assert len(out) == 1 and out[0]["kind"] == "staging"
+
+
+# ── C30 (streaming/background path): the rejected-re-add rescue must fire there too ──
+def test_capture_background_respects_user_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The STREAMING (default web-UI) background capture threads user_text into staging.
+
+    Old bug: _capture_memory_background called _stage_candidates WITHOUT user_text, so
+    user_fold folded to "" and the C30 rescue never fired on the primary path — a value
+    the user just restated but that was previously rejected was silently dropped for ~30
+    days, while the same sentence on the voice/blocking path staged."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from akana.memory import FactCandidate
+    from akana_server.api.routes.chat.persist import _capture_memory_background
+    from akana_server.config import load_settings
+    from akana_server.memory_core import get_memory_core
+
+    monkeypatch.setenv("AKANA_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AKANA_TOKEN", "")
+    monkeypatch.setenv("CURSOR_API_KEY", "")
+    settings = load_settings()  # real Settings — the capture path isinstance-checks it
+
+    # Stage into the SAME store the background capture reads (get_memory_core(settings.data_dir)).
+    memory = get_memory_core(settings.data_dir)
+    rejected = memory.staging.stage(
+        FactCandidate(key="renk", value="mavi", extractor="llm_capture")
+    )
+    memory.staging.mark_rejected(rejected.id)  # value is now in the recently-rejected set
+
+    async def _fake_propose(*_args, **_kwargs):
+        return [SimpleNamespace(key="renk", value="mavi", reason="capture")]
+
+    monkeypatch.setattr(
+        "akana_server.api.routes.chat.propose_memory_captures", _fake_propose, raising=False
+    )
+
+    app = SimpleNamespace(state=SimpleNamespace(settings=settings, event_hub=None))
+
+    async def _run() -> None:
+        await _capture_memory_background(
+            app,
+            conversation_id="c1",
+            user_text="favori rengim mavi olsun",  # user restated the value THIS turn
+            assistant_text="tamam",
+            model=None,
+        )
+
+    asyncio.run(_run())
+    # The user-directed re-add was staged (NOT suppressed by the recently-rejected set).
+    pending = memory.staging.list_pending(limit=10)
+    assert any(p.key == "renk" and p.value == "mavi" for p in pending), (
+        "background capture dropped a user-directed re-add (user_text not threaded to staging)"
+    )
+
+
+# ── D1: a FAILED memory_remember must not suppress the fallback auto-capture ──
+def test_turn_wrote_memory_ignores_failed_call() -> None:
+    from akana_server.api.routes.chat.chat_state import _turn_wrote_memory
+
+    # A successful write counts (suppress the redundant fallback capture).
+    assert _turn_wrote_memory([{"name": "memory_remember", "status": "ok"}]) is True
+    assert _turn_wrote_memory([{"name": "save_memory"}]) is True  # no status = not errored
+    # A FAILED write stored nothing → must NOT count, so the fallback capture still runs.
+    assert _turn_wrote_memory([{"name": "memory_remember", "status": "error"}]) is False
+    assert (
+        _turn_wrote_memory(
+            [{"name": "mcp__akana_memory__memory_remember", "status": "error"}]
+        )
+        is False
+    )

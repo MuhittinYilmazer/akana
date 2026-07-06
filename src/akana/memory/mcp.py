@@ -346,6 +346,16 @@ def _wire_vector(
     # remain and, not matching the new 384d query, semantic recall died SILENTLY
     # (count>0 → the old backfill was SKIPPED). If there is a stale model, rebuild fully.
     stale = [m for m in store.distinct_models() if m and m != embedder.name]
+    # U6: prune embeddings whose fact is gone/invalidated BEFORE counting. Orphans leaked
+    # historically (deletes with no subscriber wired) and also inflate store.count() so the
+    # `indexed >= expected` check below would wrongly conclude the index is complete —
+    # keeping the orphans forever AND masking the resume-backfill of genuinely missing rows.
+    try:
+        pruned = store.prune_orphans()
+        if pruned:
+            log.info("pruned %d orphan embedding(s) for deleted/invalidated facts", pruned)
+    except Exception:  # never block boot on cleanup
+        log.debug("orphan embedding prune failed; continuing", exc_info=True)
     # count() > 0 with the same model does NOT prove the index is complete: reindex
     # commits per batch and stops on the first embed failure / process exit, leaving a
     # PARTIAL index under the current model. Compare against the valid-fact count so an
@@ -369,7 +379,19 @@ def _wire_vector(
             expected,
         )
     else:
-        return indexer  # the index is full with the same model → no reindex needed
+        # count-complete under the same model does NOT prove the TEXT is current:
+        # a correct_fact/supersede during a no-indexer window rewrites a fact's
+        # value under the same id, leaving a stale-text vector that still counts
+        # as indexed (indexed>=expected). Repair only the drifted rows —
+        # detected via the embedded-text-hash sidecar — so semantic recall stops
+        # matching the retired value and starts matching the corrected one.
+        try:
+            repaired = indexer.reindex_stale(memory)
+            if repaired:
+                log.info("vector stale-text repair: re-embedded %d fact(s)", repaired)
+        except Exception:  # not fatal: live indexing + keyword recall continue
+            log.exception("vector stale-text repair failed; live indexing continues")
+        return indexer  # the index is full with the same model → no full reindex needed
     try:
         n = indexer.reindex(memory)
         log.info("vector (re)index complete: %d facts", n)

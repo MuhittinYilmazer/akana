@@ -56,16 +56,23 @@ def test_supersede_onto_preexisting_row_tiles_gaplessly(store: SemanticStore) ->
     # Two distinct valid values under one key (only possible via raw upsert — assert_fact
     # would collapse them): ankara + izmir.
     store.upsert_fact(fact_id="r-ank", key="sehir", value="ankara")
-    store.upsert_fact(fact_id="r-izm", key="sehir", value="izmir")
+    izm = store.upsert_fact(fact_id="r-izm", key="sehir", value="izmir")
+    izm_vf = izm.valid_from  # izmir was genuinely valid from HERE (earlier than the supersede)
     # Supersede ankara INTO izmir; the replacement dedups onto the pre-existing izmir row.
     result = store.supersede_fact("r-ank", new_value="izmir")
     assert result is not None
     old, new = result
     assert old.id == "r-ank" and old.invalidated_at is not None
-    # The surviving izmir row must carry the supersede instant (not its stale original
-    # valid_from) so [old.valid_from, old.invalidated_at) tiles with [new.valid_from, ...).
+    # The surviving izmir row keeps its EARLIER original valid_from (min), so no GAP opens
+    # AND its genuine earlier validity is not erased. Moving it forward to the supersede
+    # instant would delete the [izm_vf, supersede) window it truly had (report #5).
     assert new.value == "izmir"
-    assert new.valid_from == old.invalidated_at
+    assert new.valid_from == izm_vf
+    assert new.valid_from <= old.invalidated_at  # still tiles: izmir valid at the supersede instant
+    # izmir was already valid at its original valid_from — that history survives.
+    # (Pre-fix, forward-moving izmir's valid_from to the supersede instant made this []).
+    as_of = store.facts_as_of("izmir", as_of=izm_vf)
+    assert any(f.value == "izmir" and f.id == "r-izm" for f in as_of)
     # Exactly one valid value remains under the key.
     assert [f.value for f in store.facts_for_key("sehir")] == ["izmir"]
 

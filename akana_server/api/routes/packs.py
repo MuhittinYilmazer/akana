@@ -99,6 +99,7 @@ async def rescan_packs(services: AppServices = Depends(get_services)) -> dict[st
     return {
         "added": delta["added"],
         "removed": delta["removed"],
+        "updated": delta.get("updated", []),
         "count": len(items),
         "packs": items,
     }

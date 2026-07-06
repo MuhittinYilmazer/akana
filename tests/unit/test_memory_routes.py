@@ -372,6 +372,51 @@ def test_stats_shape(client: TestClient, tmp_path) -> None:
     assert v["embeddings"] == 0
 
 
+def test_stats_offloads_vector_health_probe_off_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """GET /memory/stats must run _vector_health (the blocking httpx probe) off the loop.
+
+    With embed_backend=ollama + vector!=off, _vector_health calls embed.is_available — a
+    synchronous httpx.get (1.5s timeout). Run inline on the single-threaded asyncio loop it
+    freezes all SSE/WS/HTTP for up to 1.5s whenever Ollama is down, on a route the UI polls
+    per turn. asyncio.to_thread must dispatch the probe to a WORKER thread, not the loop's
+    main thread.
+    """
+    monkeypatch.setenv("AKANA_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AKANA_TOKEN", "")
+    monkeypatch.setenv("CURSOR_API_KEY", "")
+    monkeypatch.setenv("AKANA_MEMORY_VECTOR", "on")
+    monkeypatch.setenv("AKANA_MEMORY_EMBED_BACKEND", "ollama")
+
+    import asyncio
+
+    import akana.memory.embed as embed_module
+
+    seen: dict[str, object] = {}
+
+    def spy_is_available(url: str) -> bool:
+        # Offloaded via asyncio.to_thread → worker thread with no running loop, so
+        # get_running_loop() raises. Inline on the loop → it returns the loop. Robust
+        # under starlette's TestClient (loop runs on a portal thread, not main).
+        try:
+            asyncio.get_running_loop()
+            seen["on_loop"] = True
+        except RuntimeError:
+            seen["on_loop"] = False
+        return False  # daemon "down" — but no real network call
+
+    monkeypatch.setattr(embed_module, "is_available", spy_is_available)
+
+    with TestClient(create_app()) as c:
+        body = c.get(f"{BASE}/stats").json()
+
+    assert seen, "is_available (vector-health probe) was never called"
+    assert seen["on_loop"] is False  # offloaded off the event loop
+    assert body["vector"]["backend"] == "ollama"
+    assert body["vector"]["available"] is False
+
+
 # -- timeline ---------------------------------------------------------------------------
 
 

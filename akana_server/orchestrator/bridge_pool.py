@@ -125,7 +125,7 @@ class BridgePool:
         # POSIX); requests reach the daemon as stdin NDJSON, so no ``cmd /c`` wrap.
         return executable_argv(["node", str(script)])
 
-    async def _ensure_proc(self) -> asyncio.subprocess.Process:
+    async def _ensure_proc(self, *, own_claim: bool = False) -> asyncio.subprocess.Process:
         # Daemon env is frozen at spawn; a runtime key change (dashboard
         # credentials PUT) must rotate the process or it keeps the stale key.
         # HEALTH NOTE: a dead/exited daemon must not be handed back out — the
@@ -150,10 +150,30 @@ class BridgePool:
                 # ``_stream_run_once``'s ``_register_queue`` under ``_write_lock``) → those
                 # streams finish on the old key; the next idle _ensure_proc (key still
                 # differs, no active runs/claims) performs the kill+respawn.
-                if self._claims_pending > 0 or any(rid.isdigit() for rid in self._queues):
+                #
+                # ``own_claim``: the CALLING turn (``_stream_run_once``) increments
+                # ``_claims_pending`` BEFORE calling us, so its own claim is already
+                # counted here. Rotation is safe to do FOR the caller (it gets the
+                # fresh daemon and writes to it), so exclude the caller's own claim
+                # from the defer test — otherwise the guard always sees >=1 and the
+                # kill+respawn is NEVER reached on the production stream path (a saved
+                # new key stays dead until a full server restart). Only OTHER pending
+                # claims / active numeric-rid runs must defer the rotation.
+                other_claims = self._claims_pending - (1 if own_claim else 0)
+                if other_claims > 0 or any(rid.isdigit() for rid in self._queues):
                     return self._proc
                 log.info("bridge daemon restarting: cursor api key changed")
                 await self._kill_proc_unlocked()
+            # Self-exit path: the previous daemon died on its own (returncode set —
+            # idle crash, or the stdin-write BrokenPipe path that raises without
+            # cleanup) so ``_kill_proc_unlocked`` (which releases the token) was NOT
+            # run. Release the OLD token's pid file before ``_proc_token`` is
+            # overwritten below — otherwise a stale ``run/llm/<token>.json`` leaks
+            # for the server session and the next boot's reaper can force-kill an
+            # unrelated process on a recycled pid.
+            if self._proc_token is not None:
+                release_llm_process(self._settings.data_dir, self._proc_token)
+                self._proc_token = None
             try:
                 self._proc = await asyncio.create_subprocess_exec(
                     *self._daemon_args(),
@@ -474,7 +494,7 @@ class BridgePool:
         # holds a stdin handle to the old process.
         self._claims_pending += 1
         try:
-            proc = await self._ensure_proc()
+            proc = await self._ensure_proc(own_claim=True)
             assert proc.stdin and proc.stdout
             async with self._write_lock:
                 self._req_counter += 1

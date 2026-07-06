@@ -194,6 +194,26 @@ window.AkanaI18nStrings = Object.assign(window.AkanaI18nStrings || {}, {
     tr: "Bir sohbet turunda prompt'a enjekte edilecek skill üst sınırı.",
   },
 
+  // ── skill_catalog_max_entries ─────────────────────────────────────────────
+  "runtime.skill_catalog_max_entries.label": {
+    en: "Catalog entry ceiling",
+    tr: "Katalog girdi tavanı",
+  },
+  "runtime.skill_catalog_max_entries.desc": {
+    en: "Maximum installed capabilities listed in the system-prompt catalog. The default (256) covers a large install; overflow is shown as a visible «(+N more)» note, never dropped silently.",
+    tr: "System prompt kataloğunda listelenen en fazla kurulu yetenek sayısı. Varsayılan (256) büyük kurulumu kapsar; taşan kısım sessizce atılmaz, görünür «(+N daha)» notuyla belirtilir.",
+  },
+
+  // ── skill_catalog_max_chars ───────────────────────────────────────────────
+  "runtime.skill_catalog_max_chars.label": {
+    en: "Catalog character ceiling",
+    tr: "Katalog karakter tavanı",
+  },
+  "runtime.skill_catalog_max_chars.desc": {
+    en: "Maximum size (characters) of the installed-capabilities block in the system prompt. Overflow is summarized with a visible «(+N more)» note; raise it toward the context budget for very large installs.",
+    tr: "System prompt'taki kurulu-yetenekler bloğunun en fazla boyutu (karakter). Taşan kısım görünür «(+N daha)» notuyla özetlenir; çok büyük kurulumlarda bağlam bütçesine doğru yükseltin.",
+  },
+
   // ── skill_suggest_timeout_s ───────────────────────────────────────────────
   "runtime.skill_suggest_timeout_s.label": {
     en: "Suggestion search time budget (seconds)",

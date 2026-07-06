@@ -544,7 +544,22 @@ class CursorStreamDecoder:
                 "parent_id": ev.get("parent_id"),
             }
             if phase == "start":
-                self.tool_calls.append(call)
+                # Dedup by call id: the Cursor SDK streams ``partial-tool-call``
+                # updates (growing args) plus ``tool-call-started`` for one call —
+                # all map to phase "start" with the SAME call_id. Appending each
+                # blindly left the aggregated (voice/blocking) done.tool_calls with
+                # N-1 duplicate rows frozen at "start" (inflated tool count,
+                # duplicate cards on reload, phantom entries for name-based checks).
+                # Merge into the existing id (non-None fields only) like the end
+                # phase already does; append only when the id is new.
+                for existing in self.tool_calls:
+                    if existing.get("id") == call["id"]:
+                        for key, value in call.items():
+                            if value is not None:
+                                existing[key] = value
+                        break
+                else:
+                    self.tool_calls.append(call)
                 out.append({"tool_call": call})
             elif phase == "end":
                 # The end phase MUST UPDATE the existing entry — otherwise the
@@ -618,7 +633,28 @@ class CursorStreamDecoder:
                 self.agent_id = str(ev.get("agent_id"))
             if isinstance(ev.get("usage"), dict):
                 self.usage = ev.get("usage")
-            self.terminal = "done"
+            # A ``done`` whose status is ``error``/``cancelled`` is a FAILED run,
+            # not a success — the Cursor SDK's ``run.wait()`` resolves (does not
+            # reject) on a server/SDK-side failure. The bridge now emits ``error``
+            # directly for these, but stay defensive so a stale daemon can't slip a
+            # failure through as an empty/truncated success (which would also make
+            # the breaker record success). Route it to the error terminal so the
+            # real cause surfaces and the breaker records failure.
+            if self.final_status in ("error", "cancelled"):
+                cause = (
+                    str(ev.get("error") or "").strip()
+                    or (self.final_text or "").strip()
+                    or f"Cursor run {self.final_status}"
+                )
+                self.bridge_error = {
+                    "error": cause,
+                    "status": self.final_status,
+                }
+                if ev.get("error_code"):
+                    self.bridge_error["error_code"] = str(ev.get("error_code"))
+                self.terminal = "error"
+            else:
+                self.terminal = "done"
         elif kind == "error":
             self.bridge_error = ev
             self.terminal = "error"

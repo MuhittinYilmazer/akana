@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS turns (
     tool_call_id TEXT,
     duration_ms INTEGER,
     tool_calls TEXT,
-    file_ids TEXT
+    file_ids TEXT,
+    ask_user TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_turns_conv_ts ON turns(conversation_id, ts);
 CREATE INDEX IF NOT EXISTS idx_turns_ts ON turns(ts);
@@ -69,7 +70,11 @@ CREATE INDEX IF NOT EXISTS idx_turns_ts ON turns(ts);
 #: On old memory.db files that lack them, they are added via an idempotent ALTER
 #: (ADD COLUMN is cheap, rows become NULL). "usage" is stored on assistant turns with
 #: the {prompt, completion, cost_usd?} contract; on user turns it stays NULL.
-_TURN_JSON_COLUMNS = ("tool_calls", "file_ids", "usage")
+#: "ask_user" is stored on a QUESTION turn (the structured AskUser payload
+#: {id, questions:[...]}) so the interactive question card can be re-rendered after a
+#: chat switch / page reload — otherwise only the plain-text summary survives and the
+#: card (options/submit) is lost. NULL on every non-question turn.
+_TURN_JSON_COLUMNS = ("tool_calls", "file_ids", "usage", "ask_user")
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +100,9 @@ class EpisodicTurn:
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     file_ids: list[str] = field(default_factory=list)
     usage: dict[str, Any] | None = None
+    #: On a question turn: the structured AskUser payload {id, questions:[...]} so the
+    #: interactive card can be re-rendered on a chat switch / reload; ``None`` otherwise.
+    ask_user: dict[str, Any] | None = None
 
 
 class EpisodicStore:
@@ -264,6 +272,7 @@ class EpisodicStore:
             tool_calls=cls._json_list(r["tool_calls"]) if "tool_calls" in keys else [],
             file_ids=cls._json_list(r["file_ids"]) if "file_ids" in keys else [],
             usage=cls._json_dict(r["usage"]) if "usage" in keys else None,
+            ask_user=cls._json_dict(r["ask_user"]) if "ask_user" in keys else None,
         )
 
     @staticmethod
@@ -307,6 +316,7 @@ class EpisodicStore:
         tool_calls: list[dict[str, Any]] | None = None,
         file_ids: list[str] | None = None,
         usage: dict[str, Any] | None = None,
+        ask_user: dict[str, Any] | None = None,
         ts: str | None = None,
     ) -> EpisodicTurn:
         tc_json = json.dumps(tool_calls, ensure_ascii=False) if tool_calls else None
@@ -314,6 +324,8 @@ class EpisodicStore:
         # usage is meaningful only on assistant turns ({prompt, completion, cost_usd?});
         # an empty dict or None → store NULL (no needless JSON carrying).
         us_json = json.dumps(usage, ensure_ascii=False) if usage else None
+        # ask_user is meaningful only on a question turn; None → NULL.
+        au_json = json.dumps(ask_user, ensure_ascii=False) if ask_user else None
         with self._lock:
             if ts:
                 ts_val = ts  # caller-supplied ts is respected verbatim
@@ -333,8 +345,8 @@ class EpisodicStore:
                     """
                     INSERT INTO turns
                     (id, conversation_id, ts, role, text, lang, importance,
-                     tool_call_id, duration_ms, tool_calls, file_ids, usage)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     tool_call_id, duration_ms, tool_calls, file_ids, usage, ask_user)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         conversation_id = excluded.conversation_id,
                         ts = excluded.ts,
@@ -346,7 +358,8 @@ class EpisodicStore:
                         duration_ms = excluded.duration_ms,
                         tool_calls = excluded.tool_calls,
                         file_ids = excluded.file_ids,
-                        usage = excluded.usage
+                        usage = excluded.usage,
+                        ask_user = excluded.ask_user
                     """,
                     (
                         turn_id,
@@ -361,6 +374,7 @@ class EpisodicStore:
                         tc_json,
                         fi_json,
                         us_json,
+                        au_json,
                     ),
                 )
                 conn.commit()
@@ -377,6 +391,7 @@ class EpisodicStore:
             tool_calls=list(tool_calls or []),
             file_ids=list(file_ids or []),
             usage=dict(usage) if usage else None,
+            ask_user=dict(ask_user) if ask_user else None,
         )
 
     def get_turn(self, turn_id: str) -> EpisodicTurn | None:
@@ -387,7 +402,7 @@ class EpisodicStore:
                 row = conn.execute(
                     """
                     SELECT id, conversation_id, ts, role, text, lang, importance,
-                           tool_calls, file_ids, usage
+                           tool_calls, file_ids, usage, ask_user
                     FROM turns WHERE id = ?
                     """,
                     (turn_id,),
@@ -447,7 +462,7 @@ class EpisodicStore:
             rows = conn.execute(
                 f"""
                 SELECT id, conversation_id, ts, role, text, lang, importance,
-                       tool_calls, file_ids, usage
+                       tool_calls, file_ids, usage, ask_user
                 FROM turns
                 {where}
                 ORDER BY ts DESC, id DESC
@@ -481,7 +496,7 @@ class EpisodicStore:
             row = conn.execute(
                 """
                 SELECT id, conversation_id, ts, role, text, lang, importance,
-                       tool_calls, file_ids, usage
+                       tool_calls, file_ids, usage, ask_user
                 FROM turns
                 WHERE conversation_id = ?
                 ORDER BY ts DESC, id DESC

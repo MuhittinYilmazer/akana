@@ -80,17 +80,25 @@ def _entry_line(entry: SkillEntry, language: str = "en") -> str:
     label = (entry.title or entry.id or "").strip() or entry.id
     trigs: list[str] = []
     seen: set[str] = set()
+    capped = False
     for t in entry.triggers:
         t = (t or "").strip()
         key = t.lower()
         if t and key not in seen:
             seen.add(key)
+            if len(trigs) >= _MAX_TRIGGERS:
+                # More unique triggers exist than the cap allows — mark the crop
+                # so the model knows the list is truncated, not exhaustive (the
+                # only otherwise-silent crop in the catalog).
+                capped = True
+                break
             trigs.append(t)
-        if len(trigs) >= _MAX_TRIGGERS:
-            break
     if trigs:
         label_word = _TRIGGERS_LABEL.get(language, _TRIGGERS_LABEL["en"])
-        return f"- {label} — {label_word}: {', '.join(trigs)}"
+        shown = ", ".join(trigs)
+        if capped:
+            shown += ", …"
+        return f"- {label} — {label_word}: {shown}"
     return f"- {label}"
 
 
@@ -273,11 +281,18 @@ def resolve_catalog(settings: Any) -> str:
         # User selection (skill ids included in the catalog): None = all (auto),
         # [] = none → "". The checked ids pass into include_ids.
         include = catalog_include_ids(settings)
-        from akana_server.runtime_settings import resolve_language
+        from akana_server.runtime_settings import get_runtime, resolve_language
 
         language = resolve_language(settings)
+        # Runtime-tunable ceilings (panel > env > schema default). A power user with
+        # a very large install can raise them so nothing is cropped; the defaults are
+        # already generous and any crop stays VISIBLE via the "(+N more)" note.
+        max_entries = int(get_runtime("skill_catalog_max_entries", settings))
+        max_chars = int(get_runtime("skill_catalog_max_chars", settings))
         return build_capability_catalog(
             get_registry(Path(data_dir)),
+            max_entries=max_entries,
+            max_chars=max_chars,
             include_ids=include,
             language=language,
             pack_of=_pack_of(data_dir),

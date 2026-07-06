@@ -13,6 +13,7 @@ prefix, so the routes are live at ``/api/v1/system/credentials`` (GET/PUT) and
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -127,7 +128,12 @@ async def put_credentials(
         from akana_server.orchestrator.claude_catalog import invalidate_claude_catalog_cache
 
         invalidate_claude_catalog_cache()
-    return _masked_payload(set_secrets(settings.data_dir, patch), settings)
+    # BUG (loop-freeze): set_secrets acquires the cross-process .vault.lock (up to ~30s
+    # under contention on Windows) then does synchronous Fernet encrypt + atomic disk
+    # write — offload it off the event loop, mirroring every vault.py write route, so the
+    # single-threaded asyncio server keeps serving SSE/WS/HTTP while it blocks.
+    state = await asyncio.to_thread(set_secrets, settings.data_dir, patch)
+    return _masked_payload(state, settings)
 
 
 @router.get(

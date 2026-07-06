@@ -108,6 +108,76 @@ def test_voice_persists_user_and_assistant_to_episodic(
     assert messages[1]["content"] == "Ses ile cevap."
 
 
+def test_voice_persists_agent_id_with_provider_tag(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """A claude voice turn must persist the returned agent_id WITH its provider tag.
+
+    Old bug: voice persisted the id only via _mirror_cursor_agent_meta (agent_id, no
+    agent_provider). get_agent_id then defaults a tagless id to 'cursor' → a claude voice
+    session never resumes (get_agent_id returns None every turn), and a claude uuid could
+    leak into a later cursor resume. The fix persists via persist_agent_id (tagged) too."""
+    from akana_server import chat_context
+
+    monkeypatch.setenv("AKANA_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AKANA_TOKEN", "")
+    monkeypatch.setenv("AKANA_PORT", "8766")
+    monkeypatch.setenv("CURSOR_API_KEY", "")
+    monkeypatch.setenv("LLM_PROVIDER", "claude")
+
+    monkeypatch.setattr(
+        "akana_server.api.routes.voice.transcribe_wav_bytes", _mock_transcribe
+    )
+
+    async def _complete_with_agent(*_a, **_k):
+        return "Ses ile cevap.", {
+            "prompt_tokens": 2,
+            "completion_tokens": 4,
+            "tool_calls": [],
+            "agent_id": "sess-claude-voice-1",
+        }
+
+    monkeypatch.setattr(
+        "akana_server.api.routes.chat.complete_chat_with_usage", _complete_with_agent
+    )
+
+    app = create_app()
+    with TestClient(app) as client:
+        cid = client.post(
+            "/api/v1/conversations", json={"title": "Voice agent tag"}
+        ).json()["id"]
+        fake_wav = b"RIFF" + b"\x00" * 200
+        r = client.post(
+            "/api/v1/voice",
+            files={"audio": ("t.wav", fake_wav, "audio/wav")},
+            data={"conversation_id": cid},
+        )
+        assert r.status_code == 200, r.text
+
+        svc = app.state.conversation_service
+        meta = svc.get_json_metadata(cid)
+        assert meta.get("agent_id") == "sess-claude-voice-1"
+        # The provider tag is written (was MISSING before the fix → defaulted to 'cursor').
+        assert meta.get("agent_provider") == "claude"
+
+        # get_agent_id (leak-guard: stored provider must equal the active provider) returns
+        # the id → the next voice turn resumes instead of cold-starting.
+        from fastapi import Request
+
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/api/v1/voice",
+                "headers": [],
+                "query_string": b"",
+                "app": app,
+                "client": None,
+            }
+        )
+        assert chat_context.get_agent_id(request, cid) == "sess-claude-voice-1"
+
+
 def test_voice_response_lang_reflects_stt_lang_not_tts(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

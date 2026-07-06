@@ -93,8 +93,11 @@
 
   // Backstop: after a turn ends, an item may have been staged via a path that
   // fired no instant signal (the STOP/cancel tail carries no `done`, no WS
-  // broadcast). Reconcile from /stats twice — soon (in-turn tool staging is
-  // committed BEFORE `done`) and again a few seconds later (background
+  // broadcast). In-turn agent memory-write tools now emit "memory:staged" the
+  // moment the tool ends (see maybeSignalMemoryWriteTool in the transport), so the
+  // badge already refreshes MID-turn; this backstop still reconciles from /stats
+  // twice — soon (in-turn tool staging is committed BEFORE `done`, and self-
+  // corrects the optimistic mid-turn bump) and again a few seconds later (background
   // auto-capture finishes after `done`). Timers coalesce across back-to-back
   // turns; skipped while hidden (the focus handler covers the return).
   function scheduleTurnReconcile() {
@@ -344,9 +347,15 @@
     if (next) next.disabled = to >= total;
   }
 
-  async function loadFacts() {
+  async function loadFacts({ force = false } = {}) {
     const list = $("memory-facts-list");
     if (!list || !api()) return;
+    // A background/automatic reload (debounced search keystroke, or an approve/reject
+    // elsewhere in the Studio) must NOT wipe an open editor with unsaved changes —
+    // setListState("loading") + innerHTML="" below would destroy the textarea content
+    // silently. Explicit user actions that intend to replace the list (save, delete,
+    // manual refresh, paging, submit) pass force:true. Skip the automatic refresh instead.
+    if (!force && hasDirtyFactEditor()) return;
     const seq = ++factsRequestSeq;
     ui().setListState(list, "loading", t("memory.state_loading"));
     try {
@@ -364,7 +373,7 @@
         // An out-of-range page (e.g. facts deleted) — step back to the last page.
         if (!isSearch && factsOffset > 0 && total > 0) {
           factsOffset = Math.max(0, Math.floor((total - 1) / FACTS_PAGE_SIZE) * FACTS_PAGE_SIZE);
-          await loadFacts();
+          await loadFacts({ force });
           return;
         }
         const { q, includeInvalidated } = filters;
@@ -418,7 +427,7 @@
         try {
           await api().updateFact(f.id, newValue, mode);
           showToast(mode === "correct" ? t("memory.toast_correct_done") : t("memory.toast_supersede_done"), "success");
-          await loadFacts();
+          await loadFacts({ force: true });
           void loadStats();
         } catch (e) {
           saveBtn.disabled = false;
@@ -427,7 +436,21 @@
       },
     });
     li.appendChild(editor);
+    // Stamp the original value so loadFacts() can tell a dirty (in-progress) edit from a
+    // pristine one and avoid wiping unsaved work on a background/debounced reload.
+    const ta = editor.querySelector("textarea");
+    if (ta) ta.dataset.originalValue = f.value || "";
     focus();
+  }
+
+  /** True when an open fact editor holds unsaved changes (textarea differs from original). */
+  function hasDirtyFactEditor() {
+    const list = $("memory-facts-list");
+    if (!list) return false;
+    for (const ta of list.querySelectorAll(".memory-fact-editor textarea")) {
+      if (ta.value !== (ta.dataset.originalValue || "")) return true;
+    }
+    return false;
   }
 
   async function deleteFact(f) {
@@ -607,7 +630,7 @@
       loadStats(),
       loadTimeline(),
       loadInbox(),
-      loadFacts(),
+      loadFacts({ force: true }),
       loadSettings(),
     ]);
   }
@@ -796,5 +819,8 @@
     openMemoryStudio,
     applyMemoryStudioRouteFromUrl,
     captureChatMessageToMemory,
+    // Test-only seam: the facts reload path + its unsaved-editor guard, driven directly
+    // by tests/web/memory_facts_editor_guard.harness.mjs without wiring the whole Studio.
+    _test: { loadFacts, openFactEditor, hasDirtyFactEditor },
   };
 })();
