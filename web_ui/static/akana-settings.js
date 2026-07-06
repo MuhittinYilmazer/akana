@@ -3085,16 +3085,22 @@
       langSelect.value = window.AkanaI18n.getLanguage();
       langSelect.addEventListener("change", async () => {
         const lang = langSelect.value;
-        if (lang === window.AkanaI18n.getLanguage()) return;
+        const prev = window.AkanaI18n.getLanguage();
+        if (lang === prev) return;
         langSelect.disabled = true;
-        // Persist (localStorage + backend) BEFORE reloading so every JS-rendered
-        // string re-emits via t() in the new language and the boot reconcile agrees.
+        // Persist to the backend FIRST so voice + persona follow the same picker, THEN
+        // reload so every JS-rendered string re-emits via t() in the new language and the
+        // boot reconcile agrees. U5: if the write fails, do NOT reload (the UI would show
+        // the new language while voice/persona stay in the old one) — revert the select
+        // and toast the failure instead of diverging silently.
         try {
           await window.AkanaI18n.setLanguagePersisted(lang);
+          window.location.reload();
         } catch (_) {
-          /* persisted to localStorage regardless; reload still applies it */
+          langSelect.value = prev;
+          langSelect.disabled = false;
+          hooks.showToast(t("settings.language.sync_failed"), "error");
         }
-        window.location.reload();
       });
     }
 

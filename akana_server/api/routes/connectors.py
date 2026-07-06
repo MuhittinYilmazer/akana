@@ -24,6 +24,7 @@ A secret is never returned as a value; only ``token_set`` + a ``…last4`` hint.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -167,6 +168,22 @@ async def update_telegram(request: Request) -> dict[str, Any]:
         raise http_error(422, "INVALID_BODY", "Nothing to update.")
 
     store = get_store(settings.data_dir)
+    # Secrets FIRST (mirrors vault.py's 'keyfile FIRST' ordering): set_secrets can
+    # raise beyond OSError — assert_writable rejects a corrupt/unreadable vault before
+    # the merge, and the atomic write itself can fail. If the runtime store were written
+    # first, a set_secrets failure would leave telegram_enabled durably persisted while
+    # the request 500s implying nothing changed and no reload runs — the bridge then
+    # comes up enabled with no/stale token on the next restart. Writing (and validating)
+    # the vault before any durable runtime-store change makes the failure abort cleanly.
+    if secret_patch:
+        try:
+            set_secrets(settings.data_dir, secret_patch)
+        except Exception as e:
+            raise http_error(
+                500,
+                "PERSIST_FAILED",
+                "Settings could not be saved due to a storage error; no changes were applied.",
+            ) from e
     if validated:
         try:
             # Atomic multi-key write: a per-key loop could persist telegram_enabled
@@ -181,8 +198,6 @@ async def update_telegram(request: Request) -> dict[str, Any]:
                 "PERSIST_FAILED",
                 "Settings could not be saved due to a storage error; no changes were applied.",
             ) from e
-    if secret_patch:
-        set_secrets(settings.data_dir, secret_patch)
 
     # Rebuild the live settings snapshot from the fresh store, then bounce the
     # connector registry so the change is live (build_registry only registers an
@@ -321,8 +336,16 @@ async def bind_telegram(request: Request) -> dict[str, Any]:
     if meta is None:
         raise http_error(404, "CONVERSATION_NOT_FOUND", "No such conversation.")
 
-    bindings = ChannelBindingStore(Path(settings.data_dir))
-    bindings.bind("telegram", chat_id, conversation_id)
+    # Reuse the inbound router's OWN ChannelBindingStore when it is live. Constructing
+    # a fresh store here is now safe for lost-update races (the file lock is keyed on the
+    # path, cross-instance), but reusing the router's instance avoids a second store
+    # object entirely. Run bind() off the event loop so its file I/O + lock wait do not
+    # block the loop, mirroring the router's own to_thread writes.
+    router = getattr(request.app.state, "connector_router", None)
+    bindings = getattr(router, "_bindings", None)
+    if bindings is None:
+        bindings = ChannelBindingStore(Path(settings.data_dir))
+    await asyncio.to_thread(bindings.bind, "telegram", chat_id, conversation_id)
 
     notified = True
     registry = getattr(request.app.state, "connector_registry", None)

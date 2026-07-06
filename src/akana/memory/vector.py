@@ -140,6 +140,34 @@ class VectorStore:
             finally:
                 conn.close()
 
+    def prune_orphans(self) -> int:
+        """Delete embeddings whose fact is gone or invalidated (U6). Returns rows removed.
+
+        Heals embeddings that leaked before the indexer-independent cascade shipped, and
+        any orphaned by a crash between the fact commit and the cascade. The contract
+        matches the live indexer: the table tracks only currently-VALID facts, so rows
+        for hard-deleted AND soft-invalidated facts are pruned. Guarded by a check that
+        the ``facts`` table exists — a standalone VectorStore (unit tests, a fresh
+        memory.db with no SemanticStore yet) has an ``embeddings`` table but no ``facts``
+        table; there we cannot tell orphans apart, so we prune nothing rather than wipe.
+        """
+        with self._lock:
+            conn = self._connect()
+            try:
+                has_facts = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='facts'"
+                ).fetchone()
+                if has_facts is None:
+                    return 0
+                cur = conn.execute(
+                    "DELETE FROM embeddings WHERE fact_id NOT IN "
+                    "(SELECT id FROM facts WHERE invalidated_at IS NULL)"
+                )
+                conn.commit()
+                return int(cur.rowcount)
+            finally:
+                conn.close()
+
     def clear(self) -> int:
         """Delete all embeddings (before a rebuild when the embedder model changes).
         Returns the number of rows deleted."""

@@ -133,6 +133,27 @@ def test_high_entropy_gate_does_not_mask_ordinary_text(innocuous: str) -> None:
     assert "credential.high_entropy" not in res.matched
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        # A GitHub commit URL: the slash-joined host+path is > 40 chars.
+        "https://github.com/MuhittinYilmazer/akana/commit/9a58188f1ebffc3014d0a5e614d9",
+        # A Google Docs URL whose document id alone is a long mixed-case token.
+        "https://docs.google.com/document/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit",
+        # A long POSIX file path.
+        "/home/user/projects/akana/some/very/long/path/to/a/file/name.txt",
+    ],
+)
+def test_high_entropy_gate_does_not_mask_urls_or_paths(url: str) -> None:
+    """Regression: the base64 alternation used to include ``/``, so ``\\b`` started the
+    match at a URL host and the whole slash-joined path was redacted — corrupting the
+    sent message AND (via the router's persisted archive) the web-UI record. Ordinary
+    links/paths must survive filter_outbound untouched."""
+    res = filter_outbound(f"see {url} thanks")
+    assert url in res.text
+    assert "credential.high_entropy" not in res.matched
+
+
 # --------------------------------------------------------------------------- #
 # Assignment / label rules — case-insensitive, end-of-line, next-line value.   #
 # --------------------------------------------------------------------------- #

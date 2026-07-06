@@ -1100,3 +1100,200 @@ def test_aclose_kills_daemon_process_group(
         assert list(llm_pid_dir(tmp_path).glob("*.json")) == []
 
     asyncio.run(run())
+
+
+# -- BUG 1: a done with status:"error" is a FAILED run, not an empty success -----------
+
+
+def test_done_status_error_raises_and_records_breaker_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """The Cursor SDK's ``run.wait()`` resolves (does not reject) on a server/SDK
+    failure with status:"error". The bridge now emits ``error`` for these, but even a
+    ``done`` carrying status:"error" (defensive: a stale daemon) must surface the real
+    cause as an ``LLMCallError`` — NOT a fake empty ``done`` (ok:true) — and the circuit
+    breaker must record a FAILURE, not a success."""
+    from akana_server.network.guard import global_registry, reset_global_registry
+
+    reset_global_registry()
+    settings = _make_settings(monkeypatch, tmp_path)
+
+    async def run() -> None:
+        pool, proc, _ = _fake_pool(monkeypatch, settings)
+        proc.feed(
+            _PONG,
+            {
+                "id": "1",
+                "ev": "done",
+                "ok": True,  # the daemon's OLD (buggy) success flag — must be ignored
+                "text": "",
+                "status": "error",
+                "error": "Rate limit exceeded mid-run",
+            },
+        )
+        with pytest.raises(LLMCallError) as exc:
+            async for _ in pool.stream_run({"prompt": "p", "session_key": "conv-e"}):
+                pass
+        # The real cause reaches the user (not the opaque generic empty-response line).
+        assert "rate limit" in exc.value.message.lower()
+
+        # The breaker recorded a failure on this path (repeated failures now trip it).
+        breaker = global_registry().get("bridge_daemon")
+        assert breaker.snapshot()["failures"] >= 1
+
+    asyncio.run(run())
+
+
+def test_decoder_done_status_error_is_terminal_error() -> None:
+    """Unit: CursorStreamDecoder routes a done/status:error to the error terminal."""
+    from akana_server.orchestrator.base import CursorStreamDecoder
+
+    dec = CursorStreamDecoder(model="composer-2")
+    dec.feed(
+        {"ev": "done", "ok": True, "text": "", "status": "error", "error": "boom"}
+    )
+    assert dec.terminal == "error"
+    assert dec.bridge_error is not None
+    # A normal finished done still terminates as "done".
+    dec2 = CursorStreamDecoder(model="composer-2")
+    dec2.feed({"ev": "done", "ok": True, "text": "ok", "status": "finished"})
+    assert dec2.terminal == "done"
+
+
+# -- BUG 5: duplicate phase:"start" tool events must not duplicate the ledger ----------
+
+
+def test_decoder_dedups_repeated_tool_start_by_call_id() -> None:
+    """On the aggregated (voice/blocking) path the SDK streams several phase:"start"
+    events for one call (partial-tool-call + tool-call-started, same call_id). The
+    decoder must dedup by id — otherwise the persisted tool_calls ledger carries N-1
+    duplicate rows frozen at "start" (inflated tool count, duplicate cards on reload)."""
+    from akana_server.orchestrator.base import CursorStreamDecoder
+
+    dec = CursorStreamDecoder(model="composer-2")
+    dec.feed({"ev": "tool", "phase": "start", "call_id": "tc-1", "name": "shell", "args": {"cmd": "l"}})
+    dec.feed({"ev": "tool", "phase": "start", "call_id": "tc-1", "name": "shell", "args": {"cmd": "ls -"}})
+    dec.feed({"ev": "tool", "phase": "start", "call_id": "tc-1", "name": "shell", "args": {"cmd": "ls -la"}})
+    dec.feed({"ev": "tool", "phase": "end", "call_id": "tc-1", "name": "shell", "result": "ok", "status": "completed"})
+    # Exactly ONE ledger entry, merged to the completed state.
+    assert len(dec.tool_calls) == 1
+    entry = dec.tool_calls[0]
+    assert entry["id"] == "tc-1"
+    assert entry["result"] == "ok"
+    assert entry["status"] == "completed"
+    assert entry["args"] == {"cmd": "ls -la"}  # last non-None args won
+
+
+# -- BUG 2: cursor key rotation on the PRODUCTION stream path (not _ensure_proc direct) --
+
+
+def test_key_rotation_on_real_stream_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """b12 regression: a saved new cursor key must take effect on the next chat TURN —
+    driven through ``stream_run`` (the production path), not ``_ensure_proc`` directly.
+
+    The old guard counted the calling turn's OWN ``_claims_pending`` increment, so the
+    deferred-rotation branch always saw >=1 and NEVER respawned on the stream path — the
+    stale key stayed frozen until a full server restart. Feed one turn to completion,
+    rotate the key, run a second turn: the daemon must respawn with the NEW key."""
+    from akana_server.network.guard import reset_global_registry
+    from akana_server.secret_store import set_secrets
+
+    reset_global_registry()
+    settings = _make_settings(monkeypatch, tmp_path)
+
+    procs: list[_FakeProc] = []
+    envs: list[dict[str, Any]] = []
+
+    class _RotProc(_FakeProc):
+        def __init__(self, rid: str) -> None:
+            super().__init__()
+            self.killed = False
+            # ping pong + a clean done for this turn's rid; persistent stdout stays open.
+            self.feed(
+                _PONG,
+                {"id": rid, "ev": "done", "ok": True, "text": "ok", "status": "finished"},
+                eof=False,
+            )
+
+        def kill(self) -> None:
+            self.killed = True
+            self.returncode = -9
+
+        async def wait(self) -> int:
+            return self.returncode or 0
+
+    async def _fake_spawn(*cmd: str, **kwargs: Any):
+        # rid counter lives in the pool: 1st turn → "1", 2nd → "2".
+        rid = str(len(procs) + 1)
+        proc = _RotProc(rid)
+        procs.append(proc)
+        envs.append(kwargs.get("env") or {})
+        return proc
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_spawn)
+    pool = BridgePool(settings)
+
+    async def run() -> None:
+        ev1 = [ev async for ev in pool.stream_run({"prompt": "p1", "session_key": "conv-r"})]
+        assert ev1[-1]["done"] is True
+        assert len(procs) == 1
+        assert envs[0]["CURSOR_API_KEY"] == "test-key-123"
+
+        # Key saved via the dashboard/settings while the daemon is idle between turns.
+        set_secrets(tmp_path, {"cursor_api_key": "rotated-key-456"})
+
+        ev2 = [ev async for ev in pool.stream_run({"prompt": "p2", "session_key": "conv-r"})]
+        assert ev2[-1]["done"] is True
+        # The daemon respawned on the new key — the whole point of the rotation.
+        assert len(procs) == 2, "daemon did not respawn after key rotation on the stream path"
+        assert procs[0].killed
+        assert envs[1]["CURSOR_API_KEY"] == "rotated-key-456"
+
+    asyncio.run(run())
+
+
+# -- BUG 6: a self-exited daemon must not leak its pid file on respawn -----------------
+
+
+def test_self_exited_daemon_releases_old_pid_file_on_respawn(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """When the previous daemon died on its OWN (returncode set — idle crash / broken
+    pipe path), ``_ensure_proc`` falls through to a fresh spawn and overwrites
+    ``_proc_token`` WITHOUT ``_kill_proc_unlocked`` running. It must release the old
+    token's pid file first — otherwise a stale ``run/llm/<token>.json`` leaks per
+    self-death and the next boot's reaper can force-kill a recycled pid."""
+    from akana_server.orchestrator.llm_process import llm_pid_dir
+
+    settings = _make_settings(monkeypatch, tmp_path)
+
+    procs: list[_FakeProc] = []
+
+    class _LiveProc(_FakeProc):
+        def __init__(self) -> None:
+            super().__init__()
+            self.feed(_PONG, eof=False)
+
+    async def _fake_spawn(*cmd: str, **kwargs: Any):
+        proc = _LiveProc()
+        proc.pid = 5000 + len(procs)  # distinct pid per spawn
+        procs.append(proc)
+        return proc
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_spawn)
+    pool = BridgePool(settings)
+
+    async def run() -> None:
+        await pool._ensure_proc()
+        assert len(list(llm_pid_dir(tmp_path).glob("*.json"))) == 1
+        # Simulate the daemon dying on its own (returncode set) — NOT via _kill_proc_unlocked.
+        procs[0].returncode = 0
+        # Next turn respawns: the old token's pid file must be released, not leaked.
+        await pool._ensure_proc()
+        assert len(procs) == 2
+        pid_files = list(llm_pid_dir(tmp_path).glob("*.json"))
+        assert len(pid_files) == 1, f"stale pid file leaked on self-exit respawn: {pid_files}"
+
+    asyncio.run(run())

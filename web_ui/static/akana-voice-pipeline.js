@@ -164,7 +164,9 @@ const _pipeT = (k, vars) => {
         const wantTts = !!bridge.getTtsEnabled?.();
         if (wantTts) {
           fd.append("tts", "1");
-          fd.append("tts_lang", sl.startsWith("en") ? "en" : "tr");
+          // Resolve "auto" via the shared helper — sl.startsWith("en") ? "en" : "tr" would map
+          // "auto" (Whisper auto-detect) to Turkish, giving an English user a Turkish voice.
+          fd.append("tts_lang", bridge.ttsLangFromSpeech ? bridge.ttsLangFromSpeech() : (sl.startsWith("en") ? "en" : "tr"));
         }
         const convId = window.AkanaChat?.conversationIdForMemory?.();
         if (convId) fd.append("conversation_id", convId);
@@ -235,7 +237,7 @@ const _pipeT = (k, vars) => {
             // tts_error frame) + a one-tap Speak retry that re-synthesizes via POST /voice/tts —
             // otherwise read-aloud fails silently with zero user feedback.
             const retryText = body.text || "";
-            const retryLang = sl.startsWith("en") ? "en" : "tr";
+            const retryLang = bridge.ttsLangFromSpeech ? bridge.ttsLangFromSpeech() : (sl.startsWith("en") ? "en" : "tr");
             const failRow = bridge.hooks.appendRow(
               `<div class="meta">${_pipeT("voice.meta_voice")}</div>` +
                 `<div class="bubble-bot">${escapeHtml(_pipeT("voice.tts_failed_meta"))} ` +
@@ -299,6 +301,14 @@ const _pipeT = (k, vars) => {
             } else {
               bridge.session.transition(bridge.VPhase.IDLE, "postVoice:done", { force: true });
             }
+          } else if (bridge.voice.conversationMode) {
+            // The epoch moved on because the user ENTERED conversation mode WHILE this wake POST
+            // was in flight: enterConversationMode's initial startConversationCapture early-returned
+            // on postInFlight (still true here) and nothing else re-arms on the postInFlight→false
+            // edge. Now that postInFlight is cleared (above), re-arm listening — otherwise the scene
+            // sits open and permanently deaf (no convWatchdog was armed; with TTS off no tts-drain
+            // rescue exists). maybeReArm's own guards (isCapturing/awaitingReply/TTS) keep this safe.
+            bridge.maybeReArmConversation?.("postDone");
           }
           bridge.syncVoiceUi();
         }

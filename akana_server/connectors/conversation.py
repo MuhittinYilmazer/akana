@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import threading
+import uuid
 from pathlib import Path
 
 __all__ = [
@@ -46,6 +47,27 @@ _CHANNEL_LABELS = {"telegram": "Telegram"}
 _COMMANDS = frozenset({"yeni", "durum", "baglan"})
 
 _BINDINGS_FILENAME = "connector_bindings.json"
+
+#: Cross-INSTANCE file locks keyed by the resolved bindings path. A per-instance
+#: threading.Lock does NOT serialize writes between the router's own store and the
+#: bind-API route's separate store over the same JSON file, so their read-modify-write
+#: could interleave and lose a binding (last writer wins). Keying the lock on the file
+#: path makes every ChannelBindingStore over the same file share one lock.
+_PATH_LOCKS: dict[str, threading.Lock] = {}
+_PATH_LOCKS_GUARD = threading.Lock()
+
+
+def _lock_for(path: Path) -> threading.Lock:
+    try:
+        key = str(path.resolve())
+    except OSError:  # pragma: no cover - resolve on an odd path
+        key = str(path)
+    with _PATH_LOCKS_GUARD:
+        lock = _PATH_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _PATH_LOCKS[key] = lock
+        return lock
 
 
 def resolve_history_budget() -> int:
@@ -114,7 +136,10 @@ class ChannelBindingStore:
 
     def __init__(self, data_dir: Path) -> None:
         self._path = Path(data_dir) / _BINDINGS_FILENAME
-        self._lock = threading.Lock()
+        # Cross-instance lock keyed on the resolved file path (NOT a per-instance
+        # Lock): the router and the bind-API route each build their own store over the
+        # same file, and only a shared lock serializes their read-modify-write.
+        self._lock = _lock_for(self._path)
 
     def _load(self) -> dict[str, dict[str, str]]:
         try:
@@ -133,11 +158,24 @@ class ChannelBindingStore:
 
     def _save(self, data: dict[str, dict[str, str]]) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._path.with_suffix(".json.tmp")
-        tmp.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        # A UNIQUE temp name per write (pid + uuid): the fixed ``.json.tmp`` was shared
+        # by every instance, so two concurrent saves collided on the same temp file —
+        # on Windows the write_text/replace of one raised a sharing-violation
+        # PermissionError against the other. A unique temp file makes the write private;
+        # the shared path lock still serializes the replace onto the final file.
+        tmp = self._path.with_name(
+            f"{self._path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
         )
-        tmp.replace(self._path)
+        try:
+            tmp.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+            )
+            tmp.replace(self._path)
+        finally:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
 
     def get(self, connector_id: str, chat_id: str) -> str | None:
         with self._lock:

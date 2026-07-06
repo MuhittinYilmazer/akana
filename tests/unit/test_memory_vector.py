@@ -156,6 +156,83 @@ def test_detach_prevents_duplicate_embeds_on_rebuild(memory, store):
     assert emb.calls == 1  # one subscriber → one embed (leak closed)
 
 
+# -- U6: cascade delete independent of the indexer -----------------------------------
+
+
+def test_forget_drops_embedding_without_subscriber(memory, embedder):
+    """U6: with NO indexer subscribed, forget_fact (soft AND hard) still drops the fact's
+    embedding. Old behavior leaked the row (nothing pruned the table when the embedder was
+    unresolved: vector/embed off, fastembed missing, ollama down)."""
+    vs = VectorStore(memory._db_path)  # inspect the SAME memory.db table
+
+    _closed, soft = memory.assert_fact_direct(key="kedi adı", value="Pamuk", trust="user_statement")
+    vs.index_fact(soft.id, "kedi adı: Pamuk", embedder)  # simulate a prior embedding
+    assert vs.count() == 1
+    assert memory.forget_fact(soft.id) is True  # soft invalidate
+    assert vs.count() == 0  # OLD: stayed 1 (leak); NEW: cascaded
+
+    _closed, hard = memory.assert_fact_direct(key="dil", value="Python", trust="user_statement")
+    vs.index_fact(hard.id, "dil: Python", embedder)
+    assert vs.count() == 1
+    assert memory.forget_fact(hard.id, hard=True) is True  # hard delete
+    assert vs.count() == 0
+
+
+def test_supersede_cascade_leaves_only_new_embedding(memory, embedder):
+    """U6: supersede without a subscriber drops the OLD embedding via the invalidation seam.
+    The new fact's embedding is only present if an indexer wrote it; here none is wired, so
+    the table must end empty (old row cascaded, new row never indexed)."""
+    vs = VectorStore(memory._db_path)
+    _closed, fact = memory.assert_fact_direct(key="kedi adı", value="Pamuk", trust="user_statement")
+    vs.index_fact(fact.id, "kedi adı: Pamuk", embedder)
+    assert vs.count() == 1
+
+    old, new = memory.supersede_fact(fact.id, new_value="Boncuk")
+    assert vs.count() == 0  # old cascaded; no subscriber ever indexed `new`
+
+
+def test_vector_recall_excludes_forgotten_fact(memory, store, embedder):
+    """U6 regression: after forget the vector strategy returns no block for the deleted fact,
+    even if a stale embedding row somehow survived (double defense: cascade + is_valid gate)."""
+    indexer = VectorIndexer(store, embedder)
+    memory.subscribe(indexer.on_event)
+    _closed, fact = memory.assert_fact_direct(key="kedi adı", value="Pamuk", trust="user_statement")
+    assert store.count() == 1
+
+    memory.forget_fact(fact.id, hard=True)
+    assert store.count() == 0
+    vector_first = make_vector_strategy(memory, store, embedder)
+    assert vector_first(query="kedi adı").blocks == []
+
+
+def test_prune_orphans_removes_deleted_and_invalidated(memory, embedder):
+    """U6: prune_orphans deletes embeddings whose fact is gone or invalidated, keeps valid ones."""
+    vs = VectorStore(memory._db_path)
+    _closed, valid = memory.assert_fact_direct(key="dil", value="Python", trust="user_statement")
+    vs.index_fact(valid.id, "dil: Python", embedder)
+    # An orphan for a fact id that never existed (leaked historical row).
+    vs.index_fact("ghost-fact-id", "ghost: text", embedder)
+    # A soft-invalidated fact whose embedding lingers (indexer was offline at delete time).
+    _closed, gone = memory.assert_fact_direct(key="kedi adı", value="Pamuk", trust="user_statement")
+    vs._init_db()  # no-op; keep the store live
+    memory._semantic.invalidate_fact(gone.id)  # invalidate WITHOUT the cascade seam
+    vs.index_fact(gone.id, "kedi adı: Pamuk", embedder)
+    assert vs.count() == 3
+
+    assert vs.prune_orphans() == 2  # ghost + invalidated removed
+    assert vs.count() == 1
+    assert vs.search(embedder.embed(["dil"])[0], limit=5)[0][0] == valid.id
+
+
+def test_prune_orphans_noop_without_facts_table(store, embedder):
+    """A standalone VectorStore (embeddings table but no facts table) must prune NOTHING —
+    it cannot tell orphans apart, so wiping would be data loss."""
+    store.index_fact("f1", "kedi adı: Pamuk", embedder)
+    assert store.count() == 1
+    assert store.prune_orphans() == 0  # no facts table → guard returns 0
+    assert store.count() == 1
+
+
 def test_reindex_backfills_existing_facts(memory, store, embedder):
     memory.assert_fact_direct(key="kedi adı", value="Pamuk")
     memory.assert_fact_direct(key="favori dil", value="Python")
@@ -265,6 +342,56 @@ def test_rrf_budget_skips_bloated_block(memory, store, embedder):
     assert big.id not in ids
     assert result.trace.dropped_for_budget >= 1
     assert result.trace.total_tokens <= 200
+
+
+def _cosine_for(store, embedder, fact_id, text):
+    """Cosine of `text`'s embedding against `fact_id`'s stored vector, or 0.0."""
+    hits = dict(
+        store.search(embedder.embed([text])[0], limit=50, model=embedder.name)
+    )
+    return hits.get(fact_id, 0.0)
+
+
+def test_boot_heal_reindexes_stale_text_after_correct_without_indexer(tmp_path):
+    """C11/U6: a correct_fact done during a no-indexer window leaves the fact's
+    embedding pointing at the RETIRED value; the count-only boot heal (indexed >=
+    expected) masks it forever. With the embedded-text-hash sidecar the heal
+    detects the stale row and re-embeds it, so semantic recall matches the
+    corrected value and no longer the old one.
+    """
+    from akana.memory.mcp import build_orchestrator
+
+    embedder = HashingEmbedder()
+
+    # Boot 1: indexer wired, embed the fact "favorite city: Paris".
+    memory, _orch, indexer = build_orchestrator(tmp_path, embedder=embedder)
+    assert indexer is not None
+    _closed, fact = memory.assert_fact_direct(
+        key="favorite city", value="Paris", trust="user_statement"
+    )
+    store = VectorStore.for_data_dir(tmp_path)
+    assert store.count() == 1
+    paris_before = _cosine_for(store, embedder, fact.id, "favorite city: Paris")
+    assert paris_before > 0.9  # Paris vector is what got embedded
+
+    # No-indexer window: detach so the correct_fact event has NO subscriber.
+    indexer.detach()
+    corrected = memory.correct_fact(fact.id, new_value="Rome")
+    assert corrected is not None and corrected.value == "Rome"
+    # The vector row survives with the OLD text → count is unchanged, so the
+    # count-only heal would return early and never fix it.
+    assert store.count() == 1
+    rome_stale = _cosine_for(store, embedder, fact.id, "favorite city: Rome")
+    paris_stale = _cosine_for(store, embedder, fact.id, "favorite city: Paris")
+    assert paris_stale > rome_stale  # pre-heal: still matches the retired value
+
+    # Boot 2: embedder restored → the heal must repair the stale-text row.
+    memory2, _orch2, _indexer2 = build_orchestrator(tmp_path, embedder=embedder)
+    store2 = VectorStore.for_data_dir(tmp_path)
+    rome_after = _cosine_for(store2, embedder, fact.id, "favorite city: Rome")
+    paris_after = _cosine_for(store2, embedder, fact.id, "favorite city: Paris")
+    assert rome_after > paris_after  # corrected value now wins
+    assert rome_after > 0.9
 
 
 def test_rrf_via_orchestrator_intent(memory):

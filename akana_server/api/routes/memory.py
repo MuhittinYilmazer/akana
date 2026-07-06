@@ -828,10 +828,18 @@ async def memory_stats(request: Request) -> dict[str, Any]:
     )
     conversations = await asyncio.to_thread(memory.conversation_count)
     turns = await asyncio.to_thread(memory.turn_count)
-    try:
-        vector_embeddings = VectorStore.for_data_dir(_data_dir(request)).count()
-    except Exception:  # embeddings table unreadable → report 0, never 500
-        vector_embeddings = 0
+    def _read_vector_embeddings() -> int:
+        try:
+            return VectorStore.for_data_dir(_data_dir(request)).count()
+        except Exception:  # embeddings table unreadable → report 0, never 500
+            return 0
+
+    vector_embeddings = await asyncio.to_thread(_read_vector_embeddings)
+    # BUG (loop-freeze): _vector_health runs a synchronous httpx probe (embed.is_available,
+    # 1.5s timeout) plus sync sqlite reads (distinct_models); when embed_backend=ollama and
+    # the daemon is down this blocks the whole asyncio server for up to 1.5s — and the UI
+    # polls /memory/stats repeatedly per turn. Offload it like the COUNT(*) queries above.
+    vector = await asyncio.to_thread(_vector_health, request, vector_embeddings)
     return {
         "facts": total_facts,
         "valid_facts": valid_facts,
@@ -839,6 +847,6 @@ async def memory_stats(request: Request) -> dict[str, Any]:
         "conversations": conversations,
         "staging_pending": memory.staging.count_pending(),
         "vector_embeddings": vector_embeddings,
-        "vector": _vector_health(request, vector_embeddings),
+        "vector": vector,
         "ledger_path": str(memory.ledger.path),
     }

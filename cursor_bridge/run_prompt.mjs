@@ -24,6 +24,7 @@ import {
   languageFrom,
   makeOnDelta,
   normalizeError,
+  resultError,
   waitWithHeartbeat,
 } from "./lib.mjs";
 
@@ -70,22 +71,29 @@ async function runStreaming(input) {
         onUsage: (u) => {
           usage = u;
         },
+        language: languageFrom(input),
       }),
     });
     runId = run.id;
     agentId = run.agentId || agentId;
     emitLine({ ev: "meta", run_id: runId, agent_id: agentId, model: input.model || "composer-2" });
     const result = await waitWithHeartbeat(run, emitLine);
-    const text = (acc || String(result?.result || "")).trim();
-    emitLine({
-      ev: "done",
-      ok: true,
-      text,
-      status: result?.status || "finished",
-      run_id: result?.id || runId,
-      usage,
-      agent_id: agentId,
-    });
+    const runErr = resultError(result);
+    if (runErr) {
+      emitLine({ ev: "error", ok: false, ...runErr, run_id: result?.id || runId, agent_id: agentId });
+      process.exitCode = 1;
+    } else {
+      const text = (acc || String(result?.result || "")).trim();
+      emitLine({
+        ev: "done",
+        ok: true,
+        text,
+        status: result?.status || "finished",
+        run_id: result?.id || runId,
+        usage,
+        agent_id: agentId,
+      });
+    }
   } catch (e) {
     emitLine({ ev: "error", ok: false, ...normalizeError(e), run_id: runId, agent_id: agentId });
     process.exitCode = 1;
@@ -127,19 +135,26 @@ async function runOneShot(input) {
         onUsage: (u) => {
           usage = u;
         },
+        language: languageFrom(input),
       }),
     });
     const result = await run.wait();
-    const text = (acc || String(result?.result || "")).trim();
-    emitLine({
-      ok: true,
-      text,
-      status: result?.status || "finished",
-      run_id: result?.id || run.id,
-      agent_id: result?.agentId || run.agentId || agent.agentId,
-      usage,
-      timing_ms: Date.now() - tSend,
-    });
+    const runErr = resultError(result);
+    if (runErr) {
+      emitLine({ ok: false, ...runErr });
+      process.exitCode = 1;
+    } else {
+      const text = (acc || String(result?.result || "")).trim();
+      emitLine({
+        ok: true,
+        text,
+        status: result?.status || "finished",
+        run_id: result?.id || run.id,
+        agent_id: result?.agentId || run.agentId || agent.agentId,
+        usage,
+        timing_ms: Date.now() - tSend,
+      });
+    }
   } catch (e) {
     emitLine({ ok: false, ...normalizeError(e) });
     process.exitCode = 1;

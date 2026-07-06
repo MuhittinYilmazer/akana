@@ -5,10 +5,11 @@ Limits (honest report):
 * **JPEG** — APP1 segments (Exif + XMP; GPS data lives in the Exif IFD) are
   dropped entirely. Pixel data and other segments (JFIF APP0, ICC APP2,
   quantization/huffman tables) are preserved byte for byte.
-* **PNG** — ``eXIf`` chunks are dropped (in PNG, GPS is standard only here).
-  ``tEXt``/``iTXt`` free-text chunks are left untouched — they are not a
-  location standard; deleting them aggressively would corrupt legitimate
-  metadata.
+* **PNG** — ``eXIf`` chunks are dropped, and ``tEXt``/``iTXt``/``zTXt`` chunks
+  whose keyword is ``XML:com.adobe.xmp`` (the XMP packet, which carries
+  ``exif:GPSLatitude``/``GPSLongitude`` as written by Lightroom/Photoshop) are
+  dropped too. Other free-text chunks are left untouched — deleting them
+  aggressively would corrupt legitimate metadata.
 * **WebP** — ``EXIF`` and ``XMP `` chunks are dropped from the RIFF container,
   the EXIF (0x08) / XMP (0x04) flag bits in the ``VP8X`` header are cleared, and
   the RIFF size is recomputed.
@@ -96,6 +97,21 @@ def _strip_jpeg(data: bytes) -> StripResult:
     return StripResult(bytes(out), stripped, note)
 
 
+#: PNG text chunks that can carry an XMP packet, and the XMP keyword. Lightroom/
+#: Photoshop store the XMP block (with exif:GPSLatitude/GPSLongitude) in an iTXt
+#: chunk keyed 'XML:com.adobe.xmp'; the keyword is the null-terminated head of
+#: the chunk data for tEXt/iTXt/zTXt alike.
+_PNG_TEXT_CHUNKS = (b"tEXt", b"iTXt", b"zTXt")
+_XMP_KEYWORD = b"XML:com.adobe.xmp"
+
+
+def _is_xmp_text_chunk(ctype: bytes, chunk_data: bytes) -> bool:
+    if ctype not in _PNG_TEXT_CHUNKS:
+        return False
+    keyword = chunk_data.split(b"\x00", 1)[0]
+    return keyword == _XMP_KEYWORD
+
+
 def _strip_png(data: bytes) -> StripResult:
     out = bytearray(data[:8])  # imza
     pos = 8
@@ -113,11 +129,13 @@ def _strip_png(data: bytes) -> StripResult:
             # the trailing `out += data[pos:]`, leaking GPS data. Rebuild from
             # recognized chunks only (as _strip_webp does): stop without the
             # verbatim tail.
-            if ctype == b"eXIf":
+            if ctype == b"eXIf" or _is_xmp_text_chunk(
+                ctype, data[pos + 8 : n]
+            ):
                 stripped = True
             pos = n  # prevent the trailing copy for ANY overrunning chunk
             break
-        if ctype == b"eXIf":
+        if ctype == b"eXIf" or _is_xmp_text_chunk(ctype, data[pos + 8 : end - 4]):
             stripped = True
         else:
             out += data[pos:end]
@@ -126,7 +144,7 @@ def _strip_png(data: bytes) -> StripResult:
         # tail — a real eXIf (GPS) chunk placed AFTER IEND would otherwise ride
         # along in that remainder. Keep scanning so any late eXIf is dropped;
         # rebuild from recognized, in-bounds chunks only (mirrors _strip_webp).
-    note = "png: eXIf chunk stripped" if stripped else "png: no eXIf chunk"
+    note = "png: eXIf/XMP location chunk stripped" if stripped else "png: no eXIf/XMP chunk"
     return StripResult(bytes(out), stripped, note)
 
 

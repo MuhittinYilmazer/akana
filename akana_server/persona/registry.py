@@ -34,6 +34,8 @@ from typing import Any, Callable
 
 from akana_server.persona.builtin import (
     DEFAULT_PERSONA_ID,
+    _BY_LANGUAGE,
+    _VOICE_DIRECTIVE_BY_LANGUAGE,
     builtin_personas,
     default_voice_directive,
 )
@@ -326,12 +328,25 @@ class PersonaRegistry:
         return self._store.get_override(_BASE_PROMPT_KEY) is not None
 
     def set_base_prompt(self, text: str) -> None:
-        """Override the core prompt (entire base including identity/language-lock)."""
+        """Override the core prompt (entire base including identity/language-lock).
+
+        U5: saving text that equals ANY language's builtin default CLEARS the override
+        instead of freezing it. The persona pane prefills the textarea with the current
+        language-resolved default, so pressing Save without editing would otherwise store
+        that default verbatim — and the override then wins over the language-resolved
+        builtin forever, so switching the UI language no longer changes the core prompt
+        ('UI dili değişince çekirdek prompt dili değişmiyor'). A genuine user edit is not a
+        default and stays frozen (intended user content — we never auto-translate it).
+        """
         t = (text or "").strip()
         if not t:
             raise PersonaError("core prompt cannot be empty")
         if len(t) > MAX_PROMPT:
             raise PersonaError(f"core prompt must be at most {MAX_PROMPT} characters")
+        builtin_defaults = {prompt.strip() for prompt, _tone in _BY_LANGUAGE.values()}
+        if t in builtin_defaults:
+            self._store.clear_override(_BASE_PROMPT_KEY)
+            return
         self._store.set_override(_BASE_PROMPT_KEY, t)
 
     def reset_base_prompt(self) -> None:
@@ -352,12 +367,21 @@ class PersonaRegistry:
         return self._store.get_override(_VOICE_DIRECTIVE_KEY) is not None
 
     def set_voice_directive(self, text: str) -> None:
-        """Override the voice-mode directive (injected on top of the persona)."""
+        """Override the voice-mode directive (injected on top of the persona).
+
+        U5: like set_base_prompt, saving text equal to ANY language's builtin voice
+        directive CLEARS the override so the directive keeps following the language picker
+        (saving the unchanged prefilled default no longer freezes its language).
+        """
         t = (text or "").strip()
         if not t:
             raise PersonaError("voice directive cannot be empty")
         if len(t) > MAX_PROMPT:
             raise PersonaError(f"voice directive must be at most {MAX_PROMPT} characters")
+        builtin_defaults = {d.strip() for d in _VOICE_DIRECTIVE_BY_LANGUAGE.values()}
+        if t in builtin_defaults:
+            self._store.clear_override(_VOICE_DIRECTIVE_KEY)
+            return
         self._store.set_override(_VOICE_DIRECTIVE_KEY, t)
 
     def reset_voice_directive(self) -> None:

@@ -224,6 +224,9 @@
       function ttsPreferredLang() {
         const cached = localStorage.getItem(LS_TTS_LANG);
         if (cached === "tr" || cached === "en") return cached;
+        // Resolve "auto" via the shared helper — startsWith("en") ? "en" : "tr" would map
+        // "auto" (Whisper auto-detect) to Turkish, giving an English user a Turkish voice.
+        if (bridge.ttsLangFromSpeech) return bridge.ttsLangFromSpeech();
         return bridge.speechLang().startsWith("en") ? "en" : "tr";
       }
 

@@ -35,7 +35,11 @@ from packs.contract.host import (
     PackRef,
     PackState,
 )
-from packs.contract.manifest import ValidationResult, load_manifest, validate_pack_dir
+from packs.contract.manifest import (
+    ValidationResult,
+    load_manifest,
+    validate_pack_dir,
+)
 
 log = logging.getLogger(__name__)
 
@@ -246,6 +250,23 @@ class AkanaPackHost:
                 self._disabled.discard(pack_id)
                 self._save_state()
                 return pack
+            # Re-parse the manifest from disk so skills/personas added to the pack
+            # WHILE it was disabled are picked up on enable (the in-memory
+            # ``contains`` snapshot froze at load time; a stale re-autodiscover is a
+            # no-op). A disabled pack has nothing copied yet, so register alone
+            # (no prune) reconciles it. Best effort — a bad manifest keeps the old.
+            try:
+                manifest = load_manifest(pack.root / "pack.yaml")
+                autodiscover_contents(manifest, pack.root)
+                pack = LoadedPack(
+                    manifest=manifest,
+                    root=pack.root,
+                    state=PackState.DISABLED,
+                    registered={},
+                )
+                self._loaded[pack_id] = pack
+            except Exception:
+                log.warning("pack %s: manifest refresh on enable failed", pack_id, exc_info=True)
             self._register_pack(pack)
             # Restore a previously-consented MCP mount that ``disable`` parked as
             # ``enabled: false`` — a reversible toggle must not require a fresh
@@ -335,7 +356,7 @@ class AkanaPackHost:
     def rescan(self) -> dict[str, list[str]]:
         """Reconcile the loaded set with what's on disk — hot, no restart.
 
-        Two directions, atomic under the lock:
+        Three directions, atomic under the lock:
 
         - **added**: packs that appeared under ``packs/`` since the last scan are
           loaded and (unless disabled) registered.
@@ -344,18 +365,31 @@ class AkanaPackHost:
           and are dropped from ``_loaded`` — so a deleted pack's persona/skills
           disappear from the UI/registries without a restart. The pack is also
           discarded from the persisted disabled set (it no longer exists).
+        - **updated**: packs still present whose SKILL/persona contents changed on
+          disk (a skill added to or removed from an already-mounted pack) are
+          re-parsed and re-registered so the new skill is copied + scanned (and a
+          removed one pruned) without a full restart.
 
-        Already-loaded packs that are still present keep their state. Returns
-        ``{"added": [...], "removed": [...]}``.
+        Other already-loaded packs keep their state untouched. Returns
+        ``{"added": [...], "removed": [...], "updated": [...]}``.
         """
         with self._lock:
             present = {ref.pack_id: ref for ref in self.discover()}
             added: list[str] = []
             removed: list[str] = []
+            updated: list[str] = []
 
-            # 1) Newly appeared packs → load + register (enabled ones).
+            # 1) Newly appeared packs → load + register (enabled ones); still-present
+            #    packs whose on-disk content changed → refresh (add/remove skills).
             for pack_id, ref in present.items():
                 if pack_id in self._loaded:
+                    try:
+                        if self._refresh_pack_content(pack_id, ref):
+                            updated.append(pack_id)
+                    except Exception:
+                        log.warning(
+                            "rescan: pack %s content refresh failed", pack_id, exc_info=True
+                        )
                     continue
                 try:
                     pack = self.load(ref)
@@ -370,9 +404,25 @@ class AkanaPackHost:
                     log.warning("rescan: pack %s could not be loaded", pack_id, exc_info=True)
 
             # 2) Vanished packs → withdraw registrations + forget (hot-delete).
+            #    A pack absent from ``present`` because its pack.yaml momentarily
+            #    fails to parse (a YAML typo, a temporarily-invalid id/version saved
+            #    mid-edit) is NOT a deletion: discover() skips it, but its source
+            #    DIRECTORY still exists. Treating that as an uninstall would truly
+            #    unmount the consented MCP entry and rmtree the skill dir (destroying
+            #    user runtime state like contacts.json). Keep such packs' derived
+            #    state intact (last-good LoadedPack) — only fire the hot-delete when
+            #    the pack's directory (and its pack.yaml) is actually gone from disk.
             state_dirty = False
             for pack_id in list(self._loaded):
                 if pack_id in present:
+                    continue
+                pack = self._loaded.get(pack_id)
+                if pack is not None and (pack.root / "pack.yaml").is_file():
+                    log.warning(
+                        "rescan: pack %s has an unparseable pack.yaml but its folder "
+                        "still exists — keeping derived state (not uninstalling)",
+                        pack_id,
+                    )
                     continue
                 self._unregister_pack(pack_id)  # skills + persona + MCP unmount
                 self._loaded.pop(pack_id, None)
@@ -397,7 +447,78 @@ class AkanaPackHost:
                 log.info("rescan: %d new pack(s): %s", len(added), ", ".join(added))
             if removed:
                 log.info("rescan: %d removed pack(s): %s", len(removed), ", ".join(removed))
-            return {"added": added, "removed": removed}
+            if updated:
+                log.info("rescan: %d updated pack(s): %s", len(updated), ", ".join(updated))
+            return {"added": added, "removed": removed, "updated": updated}
+
+    def _refresh_pack_content(self, pack_id: str, ref: PackRef) -> bool:
+        """Re-parse a still-present pack and re-register it if its content changed.
+
+        Detects skills/personas added to or removed from a pack that is already
+        loaded (the frozen ``contains`` snapshot taken at first ``load`` never
+        updates by itself). A fresh ``load_manifest`` + ``autodiscover_contents``
+        is required — re-running discovery on the stale in-memory manifest is a
+        no-op (``autodiscover_contents`` only fills an EMPTY ``contains``).
+
+        Only skills/personas are reconciled; the pack's consented MCP mount is
+        left completely untouched (no ToolsAdapter unregister), so a content
+        refresh never parks/flips a mount. Returns True iff something changed.
+        """
+        current = self._loaded.get(pack_id)
+        if current is None:
+            return False
+        manifest = load_manifest(ref.root / "pack.yaml")
+        autodiscover_contents(manifest, ref.root)
+
+        old_skills = set(current.manifest.contains.skills)
+        new_skills = set(manifest.contains.skills)
+        old_personas = set(current.manifest.contains.personas)
+        new_personas = set(manifest.contains.personas)
+        # A moved root (folder rename with the same pack id, or removal of a
+        # ~/.akana override that shadowed a repo pack) is ALSO a content change:
+        # the id sets can be identical while ref.root now points somewhere new.
+        # If we returned False here the LoadedPack would keep a root that no longer
+        # exists, and a later enable() would find no source dirs and silently strip
+        # every skill/persona. Compare resolved roots so a rename is caught.
+        root_moved = ref.root.resolve() != current.root.resolve()
+        if not root_moved and old_skills == new_skills and old_personas == new_personas:
+            return False
+
+        enabled = current.state == PackState.ENABLED
+        pack = LoadedPack(
+            manifest=manifest,
+            root=ref.root,
+            state=current.state,
+            registered={},
+        )
+        self._loaded[pack_id] = pack
+        if not enabled:
+            # A disabled pack registers nothing — just surface the fresh contents
+            # in listings. Nothing to copy/scan.
+            return True
+
+        # Prune ONLY the skills the pack dropped (targeted): the skills it still
+        # ships are re-copied by SkillsAdapter.register, which preserves runtime
+        # state (contacts.json) — an unregister-first would rmtree that state.
+        dropped = sorted(old_skills - new_skills)
+        if dropped:
+            self._skills.drop_skills(pack_id, dropped)
+            # drop_skills defers the registry reload to the caller (so a batched
+            # drop+register does ONE reload). But SkillsAdapter.register early-
+            # returns when the pack now ships NO skills, skipping its _refresh — so
+            # when a pack drops its LAST skill the disk copy is pruned yet the
+            # cached registry (feeding the catalog/turn-injection) still lists it.
+            # Force the reload here whenever register won't run one.
+            if not new_skills:
+                self._skills.refresh()
+        # Personas carry no runtime state → a clean unregister+register is safe and
+        # removes any persona the pack dropped.
+        try:
+            self._personas.unregister(pack_id)
+        except Exception:
+            log.warning("pack %s: persona unregister (refresh) failed", pack_id, exc_info=True)
+        self._register_pack(pack)
+        return True
 
     # -- introspection ----------------------------------------------------- #
 

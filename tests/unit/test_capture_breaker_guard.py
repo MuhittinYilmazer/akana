@@ -88,3 +88,42 @@ def test_capture_runs_when_breaker_closed(
     )
     assert out == []
     assert calls == [1]  # breaker closed → the capture path ran
+
+
+def test_inline_capture_bounded_by_timeout(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The inline (blocking/voice) capture must be time-bounded like the background path.
+
+    Old bug: _stage_memory_captures awaited propose_memory_captures with NO wait_for, so
+    with Ollama's default no-timeout a wedged capture call blocked the already-generated
+    reply from returning and held the conversation's TURN_BUSY slot indefinitely. The call
+    is now bounded by _MEMORY_CAPTURE_TIMEOUT_S and a timeout returns [] (capture skipped)."""
+    _install_env(monkeypatch, tmp_path)
+    request = _request(tmp_path)
+
+    # Shrink the bound so the test doesn't wait 45s; a proposer that sleeps past it must be cut.
+    monkeypatch.setattr(persist_mod, "_MEMORY_CAPTURE_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(chat_state, "_cursor_breaker_open", lambda _s=None: False)
+
+    async def _hang_propose(*_a: object, **_k: object) -> list:
+        await asyncio.sleep(3600)  # a wedged daemon that never returns tokens
+        return [object()]
+
+    monkeypatch.setattr(
+        "akana_server.api.routes.chat.propose_memory_captures",
+        _hang_propose,
+        raising=False,
+    )
+
+    async def _run() -> list:
+        # If the bound is missing this awaits ~forever; wait_for gives the test a hard ceiling.
+        return await asyncio.wait_for(
+            persist_mod._stage_memory_captures(
+                request, conversation_id="c1", user_text="u", assistant_text="a"
+            ),
+            timeout=5,
+        )
+
+    out = asyncio.run(_run())
+    assert out == []  # the stalled capture was cut and did not block/hang the turn

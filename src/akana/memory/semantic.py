@@ -566,7 +566,12 @@ class SemanticStore:
                 # valid row must carry its supersede instant onto that row — otherwise the
                 # passed valid_from is dropped and the [valid_from, invalidated_at) windows
                 # stop tiling gaplessly. Plain upserts (set_valid_from=False) never touch it.
-                valid_from_eff = vf_canon
+                # Only ever move valid_from EARLIER: tiling needs the row valid AT the
+                # supersede instant, which min() already guarantees, and moving it forward
+                # would erase validity the row genuinely had (facts_as_of would return
+                # nothing for a period the fact was valid). existing_vf/vf_canon are both
+                # canonical ms-Z, so lexicographic min == temporal min.
+                valid_from_eff = min(existing_vf, vf_canon)
                 conn.execute(
                     """
                     UPDATE facts SET ts_last = ?, confidence = ?, importance = ?,

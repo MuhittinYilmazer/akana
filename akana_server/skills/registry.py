@@ -250,13 +250,30 @@ def scan_cursor_skills(roots: list[Path] | None = None) -> list[SkillEntry]:
             if skill_id in by_id:
                 continue
             text = _read_text(skill_md) or ""
-            title = _title_from_skill_md(text, skill_id.replace("-", " ").title())
+            # Parse frontmatter like the akana path: a Claude-format skill (YAML
+            # frontmatter + ``##`` subheadings, no ``# `` H1) must not fall back to
+            # the literal ``---`` delimiter as its title. Use the frontmatter
+            # title/name when present, and derive the H1 fallback from the STRIPPED
+            # body (never the raw text, whose first line is the ``---`` delimiter).
+            fm: dict[str, Any] = {}
+            body = text
+            try:
+                parsed = parse_skill_md(text, path=skill_md)
+                fm, body = parsed.frontmatter, parsed.body
+            except SkillParseError as e:
+                log.warning("cursor SKILL.md parse failed %s: %s", skill_md, e)
+            title = (
+                str(fm.get("title") or fm.get("name") or "").strip()
+                or _title_from_skill_md(body, skill_id.replace("-", " ").title())
+            )
+            description = fm.get("description")
             by_id[skill_id] = SkillEntry(
                 id=skill_id,
                 source="cursor",
                 title=title,
                 path=str(child.resolve()),
                 risk="low",
+                description=str(description).strip() if description else None,
             )
     return sorted(by_id.values(), key=lambda e: e.id)
 
@@ -363,10 +380,15 @@ class SkillRegistry:
             errors: list[dict[str, str]] = []
             akana = scan_akana_skills(akana_skills_dir(self._data_dir), errors=errors)
             cursor = scan_cursor_skills() if self._include_cursor else []
-            new_entries = sorted([*akana, *cursor], key=lambda e: (e.source, e.id))
             new_index: dict[str, SkillEntry] = {}
             for e in [*akana, *cursor]:  # on an id clash, akana takes priority
                 new_index.setdefault(e.id, e)
+            # _entries MUST agree with _index: keep exactly the deduped winners so
+            # list()/suggest_for_text (which iterate _entries) can never surface an
+            # id that get()/load_body (via _index) resolves to a DIFFERENT entry,
+            # and so a tie on (id, trigger-len) can't fall through to comparing
+            # unorderable SkillEntry objects in suggest_for_text's sort.
+            new_entries = sorted(new_index.values(), key=lambda e: (e.source, e.id))
             self._rebuild_search_index(new_index)
             # Publish atomically, then flip _loaded LAST so _ensure_loaded's
             # unlocked read either sees the old snapshot or the fully new one.
@@ -508,13 +530,19 @@ class SkillRegistry:
         )
         return scored[: max(1, top_k)]
 
-    def suggest_for_text(self, user_text: str, top_k: int = 3) -> list[dict[str, Any]]:
+    def suggest_for_text(
+        self, user_text: str, top_k: int = 3, *, allowed: set[str] | None = None
+    ) -> list[dict[str, Any]]:
         """WI-1 contract — the single entry point for "find the right skill at the start of the turn".
 
         Input:
             user_text: Raw user turn text (Turkish folding is done here, the caller
                 does not have to normalize).
             top_k: Maximum number of suggestions (default 3; ``<1`` → 1).
+            allowed: Optional catalog selection (WI-2). ``None`` = all skills
+                eligible; otherwise only ids in this set are considered, and the
+                filter is applied BEFORE the ``top_k`` cap so an excluded skill can
+                never fill a slot ahead of a selected one.
 
         Returns: at most ``top_k`` dicts, ordered. Each dict carries the
         ``SkillEntry.to_dict()`` fields (id, title, source, risk, trust_tier, ...)
@@ -549,8 +577,14 @@ class SkillRegistry:
             d["requires_approval"] = bool(entry.requires_approval)
             return d
 
-        exact: list[tuple[int, str, SkillEntry]] = []
+        by_id: dict[str, SkillEntry] = {}
+        # Sort key is (-max_trigger_len, id) only — a TOTAL order over hashable
+        # values. Never put SkillEntry in the key: it is frozen but not order=True,
+        # so a tie on (len, id) would fall through to comparing entries → TypeError.
+        exact: list[tuple[int, str]] = []
         for entry in self.list():
+            if allowed is not None and entry.id not in allowed:
+                continue  # catalog-excluded skills must not consume a suggestion slot
             # A very short trigger (1–2 letters) counts only if it equals the ENTIRE
             # text — a substring match produces a wrong ``trigger_exact`` (score 1.0)
             # in ordinary text and pins an irrelevant skill to the top.
@@ -561,18 +595,24 @@ class SkillRegistry:
                 and (t in folded if len(t) >= _MIN_TRIGGER_SUBSTR_LEN else t == folded)
             ]
             if hits:
-                exact.append((-max(len(t) for t in hits), entry.id, entry))
+                by_id.setdefault(entry.id, entry)
+                exact.append((-max(len(t) for t in hits), entry.id))
         exact.sort()
 
         out: list[dict[str, Any]] = []
         seen: set[str] = set()
-        for _, _, entry in exact[:k]:
+        for _, eid in exact[:k]:
+            entry = by_id[eid]
             out.append(to_suggestion(entry, 1.0, "trigger_exact"))
             seen.add(entry.id)
         if len(out) < k:
-            for sk in self.search(user_text, top_k=k + len(seen)):
+            # Over-request so that dropping excluded entries below still leaves
+            # enough allowed results to fill the remaining slots.
+            for sk in self.search(user_text, top_k=k + len(seen) + len(self._entries)):
                 if sk.entry.id in seen:
                     continue
+                if allowed is not None and sk.entry.id not in allowed:
+                    continue  # catalog-excluded → never fills a slot
                 out.append(to_suggestion(sk.entry, sk.score, sk.match_reason))
                 seen.add(sk.entry.id)
                 if len(out) >= k:

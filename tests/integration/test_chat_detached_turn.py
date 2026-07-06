@@ -1234,6 +1234,166 @@ def test_shutdown_background_tasks_cancels_and_clears() -> None:
     asyncio.run(main())
 
 
+def test_blocking_persists_agent_id_with_provider_tag(
+    env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A claude BLOCKING /chat turn must persist the returned agent_id WITH its provider tag.
+
+    Old bug: the blocking handler persisted the id only via _mirror_cursor_agent_meta
+    (agent_id, no agent_provider). get_agent_id then defaults a tagless id to 'cursor' →
+    a claude blocking session never resumes and a claude uuid could leak into a cursor
+    resume. The fix also calls persist_agent_id (which tags the correct provider)."""
+    monkeypatch.setenv("LLM_PROVIDER", "claude")
+
+    async def _complete_with_agent(*_a: Any, **_k: Any):
+        return "cevap", {
+            "prompt_tokens": 1,
+            "completion_tokens": 1,
+            "tool_calls": [],
+            "agent_id": "sess-claude-block-1",
+        }
+
+    monkeypatch.setattr(
+        "akana_server.api.routes.chat.complete_chat_with_usage", _complete_with_agent
+    )
+
+    async def main() -> None:
+        app = create_app()
+        async with app.router.lifespan_context(app):
+            svc = app.state.conversation_service
+            meta = svc.create()
+            req = _make_request(app)
+            resp = await chat_routes.post_chat(
+                ChatRequest(text="merhaba", conversation_id=meta.id),
+                req,
+                services=get_services(req),
+            )
+            assert resp.text == "cevap"
+
+            jm = svc.get_json_metadata(meta.id)
+            assert jm.get("agent_id") == "sess-claude-block-1"
+            # agent_provider was MISSING before the fix (→ leak-guard defaulted to 'cursor').
+            assert jm.get("agent_provider") == "claude"
+            # The next turn resumes: get_agent_id returns the id (stored provider == active).
+            assert chat_context.get_agent_id(req, meta.id) == "sess-claude-block-1"
+
+    asyncio.run(main())
+
+
+def test_streaming_bootstrap_retry_does_not_duplicate_user_turn(
+    env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On the bootstrap-retry (resume-lost) path the reloaded history must NOT re-include
+    the current user turn (which the streaming path persisted BEFORE the LLM).
+
+    Old bug: the retry history reload at chat_producer.py:886 returned the just-persisted
+    current user turn as its last entry, so the retry sent the user's question TWICE — once
+    as the last history message and once as the live prompt — and pushed one genuine older
+    turn out of the chat_max_turns window."""
+    call_n = {"n": 0}
+    seen_histories: list[list[dict[str, Any]]] = []
+
+    async def _resume_then_bootstrap(*_args: Any, **kwargs: Any):
+        # Record the history each attempt was dispatched with.
+        seen_histories.append(list(kwargs.get("history") or []))
+        call_n["n"] += 1
+        if call_n["n"] == 1:
+            # First attempt: the agent resume is lost → signal a history bootstrap.
+            yield {"need_history_bootstrap": True, "done": False}
+            return
+        # Retry attempt: stream a normal reply.
+        yield {"delta": "tekrar ", "done": False}
+        yield {
+            "done": True,
+            "text": "tekrar yanıt",
+            "usage": {"prompt_tokens": 1, "completion_tokens": 2, "tool_calls": []},
+            "status": "finished",
+            "tool_calls": [],
+        }
+
+    monkeypatch.setattr(chat_routes, "stream_user_chat", _resume_then_bootstrap)
+
+    async def main() -> None:
+        app = create_app()
+        async with app.router.lifespan_context(app):
+            svc = app.state.conversation_service
+            meta = svc.create()
+            # Seed a prior exchange so the reloaded history is non-trivial.
+            svc.ensure(meta.id)
+            req = _make_request(app)
+            resp = await chat_routes.post_chat_stream(
+                ChatRequest(text="şu anki soru", conversation_id=meta.id), req, tts=None
+            )
+            turn = chat_routes._active_turns(app).get(meta.id)
+            assert turn is not None and turn.task is not None
+            await asyncio.wait_for(turn.task, timeout=10)
+
+        # Two dispatch attempts happened (initial resume + bootstrap retry).
+        assert call_n["n"] == 2, "expected a bootstrap retry after need_history_bootstrap"
+        retry_history = seen_histories[1]
+        # The retry history must NOT end with the CURRENT user turn (that would double-send it).
+        assert not (
+            retry_history
+            and retry_history[-1].get("role") == "user"
+            and retry_history[-1].get("content") == "şu anki soru"
+        ), "bootstrap-retry history re-included the current user turn (question sent twice)"
+
+    asyncio.run(main())
+
+
+def test_cancel_persists_captured_agent_id(
+    env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """STOP/cancel mid-stream must persist the agent_id captured from the stream.
+
+    Old bug: the finally disconnect/cancel rescue persisted the partial assistant text but
+    NOT the mid-stream-captured agent_id, so a STOP during a turn that minted a FRESH bridge
+    session orphaned it — the next message cold-started a new agent. The fix persists the
+    captured agent_id (tombstone-gated) in the rescue path too."""
+    monkeypatch.setenv("LLM_PROVIDER", "claude")
+
+    async def _agent_then_slow(*_args: Any, **_kwargs: Any):
+        # Mint a fresh session id + one delta, then stall (STOP fires here).
+        yield {"agent_id": "sess-cancel-1", "done": False}
+        yield {"delta": "kısmi ", "done": False}
+        for _ in range(200):
+            yield {"delta": ".", "done": False}
+            await asyncio.sleep(0.05)
+
+    monkeypatch.setattr(chat_routes, "stream_user_chat", _agent_then_slow)
+
+    async def main() -> None:
+        app = create_app()
+        async with app.router.lifespan_context(app):
+            svc = app.state.conversation_service
+            meta = svc.create()
+            req = _make_request(app)
+            resp = await chat_routes.post_chat_stream(
+                ChatRequest(text="uzun", conversation_id=meta.id), req, tts=None
+            )
+            it = resp.body_iterator
+            # Wait until the agent_id + first delta are buffered, then STOP.
+            loop = asyncio.get_running_loop()
+            turn = chat_routes._active_turns(app).get(meta.id)
+            assert turn is not None
+            deadline = loop.time() + 5.0
+            while loop.time() < deadline:
+                buffered = b"".join(list(turn.chunks)).decode("utf-8", "replace")
+                if "event: delta" in buffered:
+                    break
+                await asyncio.sleep(0.01)
+            await it.aclose()
+            res = await chat_routes.cancel_chat_active(meta.id, req)
+            assert res["cancelled"] is True
+            # give the finally rescue a beat to run its off-loop persists
+            await asyncio.sleep(0.2)
+
+            # The mid-stream-captured agent_id survived the cancel → the next turn resumes it.
+            assert chat_context.get_agent_id(req, meta.id) == "sess-cancel-1"
+
+    asyncio.run(main())
+
+
 def test_delete_path_skips_turn_cancel_await_reset_keeps_it(monkeypatch) -> None:
     """Regression (5-6s delete): DELETE (tombstone=True) with an active turn MUST NOT WAIT
     for the turn's finally (mid-LLM cancel, up to _CANCEL_AWAIT_TIMEOUT=15s) — the

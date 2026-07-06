@@ -65,6 +65,7 @@ def test_rescan_returns_list(client: TestClient) -> None:
     body = r.json()
     assert "added" in body and isinstance(body["added"], list)
     assert "removed" in body and isinstance(body["removed"], list)
+    assert "updated" in body and isinstance(body["updated"], list)
     assert "packs" in body
 
 

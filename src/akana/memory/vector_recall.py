@@ -16,7 +16,9 @@ oversized blocks skipped) so budgets mean the same thing everywhere.
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import sqlite3
 import threading
 import time
 from dataclasses import replace
@@ -69,6 +71,112 @@ class _StrategyFn(Protocol):
 def _fact_text(key: str, value: str) -> str:
     """The one rendering of a fact we embed — matches recall's semantic blocks."""
     return f"{key}: {value}"
+
+
+def _text_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+class _EmbeddingMeta:
+    """Durable ``fact_id -> hash(embedded text)`` sidecar in the vector db (U6/C11).
+
+    The ``embeddings`` table stores only the vector, not the text it was built
+    from, so a boot heal that compares row COUNTS cannot notice a row whose
+    fact value was corrected while no indexer was subscribed (fastembed missing
+    / vector off / ollama down): the stale-text vector still counts as indexed,
+    ``indexed >= expected`` returns early, and the corrected value is never
+    matched again. Recording the embedded text's hash here lets the heal detect
+    such rows independent of count. Own short-lived connections mirror
+    :class:`VectorStore`'s concurrency pattern (WAL, busy_timeout).
+    """
+
+    def __init__(self, db_path: str) -> None:
+        self._path = db_path
+        self._lock = threading.Lock()
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute(
+                    "CREATE TABLE IF NOT EXISTS embedding_meta ("
+                    "fact_id TEXT PRIMARY KEY, text_hash TEXT NOT NULL)"
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self._path, check_same_thread=False)
+        conn.execute("PRAGMA busy_timeout=10000")
+        return conn
+
+    def record(self, fact_id: str, text: str) -> None:
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute(
+                    "INSERT OR REPLACE INTO embedding_meta (fact_id, text_hash) "
+                    "VALUES (?, ?)",
+                    (fact_id, _text_hash(text)),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+    def record_many(self, items: list[tuple[str, str]]) -> None:
+        if not items:
+            return
+        rows = [(fid, _text_hash(text)) for fid, text in items]
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.executemany(
+                    "INSERT OR REPLACE INTO embedding_meta (fact_id, text_hash) "
+                    "VALUES (?, ?)",
+                    rows,
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+    def drop(self, fact_id: str) -> None:
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute("DELETE FROM embedding_meta WHERE fact_id = ?", (fact_id,))
+                conn.commit()
+            finally:
+                conn.close()
+
+    def hashes(self) -> dict[str, str]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    "SELECT fact_id, text_hash FROM embedding_meta"
+                ).fetchall()
+            finally:
+                conn.close()
+        return {str(r[0]): str(r[1]) for r in rows}
+
+    def clear(self) -> None:
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute("DELETE FROM embedding_meta")
+                conn.commit()
+            finally:
+                conn.close()
+
+    def stale_fact_ids(self, facts: list[tuple[str, str]]) -> list[str]:
+        """Fact ids whose current embed text hash differs from / is missing in
+        the recorded embedded hash — i.e. rows the vector index no longer
+        reflects, even though the count is unchanged."""
+        recorded = self.hashes()
+        stale: list[str] = []
+        for fid, text in facts:
+            if recorded.get(fid) != _text_hash(text):
+                stale.append(fid)
+        return stale
 
 
 # Package-internal reuse, same rationale as ``_trust_allowset``: budget
@@ -170,6 +278,10 @@ class VectorIndexer:
         self._store = store
         self._embedder = embedder
         self._health = health if health is not None else VectorHealth()
+        # C11/U6: durable embedded-text-hash sidecar so a boot heal can spot a
+        # row whose fact value was corrected during a no-indexer window (see
+        # _EmbeddingMeta). Lives in the same db as the vectors.
+        self._meta = _EmbeddingMeta(str(store._path))
         #: the ``memory.subscribe`` unsubscribe callable (filled in by enable_vector_recall).
         self._unsubscribe: Callable[[], None] | None = None
         # audit C11: fact events whose embed is skipped while the health gate is tripped
@@ -207,8 +319,10 @@ class VectorIndexer:
                 with self._dirty_lock:
                     self._dirty[fid] = (key, value)
                 return
+            text = _fact_text(key, value)
             try:
-                self._store.index_fact(fid, _fact_text(key, value), self._embedder)
+                self._store.index_fact(fid, text, self._embedder)
+                self._meta.record(fid, text)
                 self._health.record_success()
                 with self._dirty_lock:
                     self._dirty.pop(fid, None)
@@ -221,6 +335,7 @@ class VectorIndexer:
             with self._dirty_lock:
                 self._dirty.pop(fid, None)  # no longer valid → do not re-embed it
             self._store.delete(fid)  # no embed involved — always runs
+            self._meta.drop(fid)
 
     def _replay_dirty(self) -> None:
         """Re-embed facts whose update was skipped during a health cooldown (C11).
@@ -236,8 +351,10 @@ class VectorIndexer:
                 with self._dirty_lock:
                     self._dirty[fid] = (key, value)
                 continue
+            text = _fact_text(key, value)
             try:
-                self._store.index_fact(fid, _fact_text(key, value), self._embedder)
+                self._store.index_fact(fid, text, self._embedder)
+                self._meta.record(fid, text)
                 self._health.record_success()
             except Exception as e:
                 self._health.record_failure(e)
@@ -275,10 +392,10 @@ class VectorIndexer:
                 )
                 break
             batch = facts[start : start + step]
+            pairs = [(f.id, _fact_text(f.key, f.value)) for f in batch]
             try:
-                n += self._store.index_many(
-                    [(f.id, _fact_text(f.key, f.value)) for f in batch], self._embedder
-                )
+                n += self._store.index_many(pairs, self._embedder)
+                self._meta.record_many(pairs)
                 self._health.record_success()
             except Exception as e:  # degrade, don't raise: lexical recall still answers
                 self._health.record_failure(e)
@@ -288,6 +405,53 @@ class VectorIndexer:
                     e,
                     n,
                     len(facts),
+                )
+                break
+        return n
+
+    def stale_fact_ids(self, memory: Memory) -> list[str]:
+        """Currently-valid fact ids whose embedded text is stale/missing (C11/U6).
+
+        A ``correct_fact`` (or supersede) during a no-indexer window rewrites a
+        fact's value under the same id but leaves the vector — and the row
+        COUNT — unchanged, so the count-only boot heal never reindexes it. This
+        compares each valid fact's current embed text against the recorded
+        embedded-text hash, catching stale-text rows the count check masks.
+        """
+        pairs = [
+            (f.id, _fact_text(f.key, f.value))
+            for f in memory.semantic.list_all_facts()
+        ]
+        return self._meta.stale_fact_ids(pairs)
+
+    def reindex_stale(self, memory: Memory) -> int:
+        """Re-embed only the facts whose embedded text is stale (C11/U6).
+
+        Returns how many were re-embedded. Cheaper than a full reindex — it
+        touches only the drifted rows — so the boot heal can run it whenever
+        stale rows are detected without re-embedding the whole database.
+        """
+        stale = set(self.stale_fact_ids(memory))
+        if not stale:
+            return 0
+        pairs = [
+            (f.id, _fact_text(f.key, f.value))
+            for f in memory.semantic.list_all_facts()
+            if f.id in stale
+        ]
+        n = 0
+        for fid, text in pairs:
+            if not self._health.active():
+                break
+            try:
+                self._store.index_fact(fid, text, self._embedder)
+                self._meta.record(fid, text)
+                self._health.record_success()
+                n += 1
+            except Exception as e:  # degrade, don't raise
+                self._health.record_failure(e)
+                log.warning(
+                    "vector stale-repair failed (%s); keyword recall continues", e
                 )
                 break
         return n

@@ -383,17 +383,33 @@ async def _stage_memory_captures(
         return []
     memory = get_memory_core(settings.data_dir)
     from akana_server.api.routes.chat import propose_memory_captures  # patch surface
-    candidates = await propose_memory_captures(
-        settings,
-        memory,
-        user_text=user_text,
-        assistant_text=assistant_text,
-        conversation_id=conversation_id,
-        # Stateless capture call: do NOT PASS a cursor-specific tag — with model=None each
-        # provider resolves its own default (gemini/openai/ollama would already ignore a
-        # foreign tag; cursor falls to settings.cursor_model).
-        model=None,
-    )
+    # Bound the inline capture the same way the background path is (``_MEMORY_CAPTURE_TIMEOUT_S``):
+    # the blocking/voice surfaces await this BEFORE returning the HTTP response, so an unbounded
+    # capture LLM call (e.g. Ollama with its default no-timeout on a wedged daemon) would block
+    # the already-generated reply from returning and hold the conversation's TURN_BUSY slot until
+    # the user manually STOPs. On timeout, skip capture (best-effort) and let the turn finish.
+    try:
+        candidates = await asyncio.wait_for(
+            propose_memory_captures(
+                settings,
+                memory,
+                user_text=user_text,
+                assistant_text=assistant_text,
+                conversation_id=conversation_id,
+                # Stateless capture call: do NOT PASS a cursor-specific tag — with model=None each
+                # provider resolves its own default (gemini/openai/ollama would already ignore a
+                # foreign tag; cursor falls to settings.cursor_model).
+                model=None,
+            ),
+            timeout=_MEMORY_CAPTURE_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        log.warning(
+            "inline memory capture did not return within %.0fs conv=%s — skipped (reply unaffected)",
+            _MEMORY_CAPTURE_TIMEOUT_S,
+            conversation_id,
+        )
+        return []
     if not candidates:
         return []
     # b25: the usability gate was evaluated BEFORE the (up to ~45s) capture LLM call above. Re-check
@@ -431,6 +447,7 @@ async def _persist_assistant_turn_end(
     tool_calls: list[dict[str, Any]] | None = None,
     stage_captures: bool = True,
     usage: dict[str, Any] | None = None,
+    ask_user: dict[str, Any] | None = None,
 ) -> list[dict[str, str]]:
     """Write assistant message after stream/LLM completes; optional memory capture.
 
@@ -461,6 +478,7 @@ async def _persist_assistant_turn_end(
             tool_calls=[c for c in (tool_calls or []) if isinstance(c, dict)] or None,
             data_dir=getattr(settings, "data_dir", None),
             usage=usage,
+            ask_user=ask_user if isinstance(ask_user, dict) else None,
         )
     except Exception:
         log.warning(
@@ -593,11 +611,15 @@ async def _capture_memory_background(
         if not candidates:
             return
         # staging is a synchronous sqlite write → a thread so it doesn't block the loop.
+        # Thread user_text so the C30 rejected-re-add rescue fires on the STREAMING path
+        # too: without it user_fold folds to "" and any recently-rejected pair is dropped
+        # unconditionally, even when the user just restated the value this turn.
         staged = await _off_loop(
             _stage_candidates,
             memory,
             candidates,
             conversation_id=conversation_id,
+            user_text=user_text,
         )
         if staged:
             log.info(

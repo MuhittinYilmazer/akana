@@ -459,3 +459,102 @@ def test_personas_missing_file_skipped(tmp_path: Path) -> None:
     adapter.register(pack)
     assert adapter.get_active_personas() == []
     assert pack.registered.get("personas", []) == []
+
+
+def _persona_pack(tmp_path: Path, pack_id: str, dir_name: str, prompt: str) -> LoadedPack:
+    """A pack shipping a single persona id 'web_op' from its own root."""
+    root = tmp_path / dir_name
+    base = root / "personas"
+    base.mkdir(parents=True)
+    (base / "web_op.yaml").write_text(
+        yaml.safe_dump({"persona": {"id": "web_op", "system_prompt": prompt}}),
+        encoding="utf-8",
+    )
+    return _pack(tmp_path, pack_id=pack_id, root=root, personas=["web_op"])
+
+
+def test_same_id_persona_across_packs_no_shadow_and_disable_keeps_other(tmp_path: Path) -> None:
+    """Two enabled packs shipping the same persona id must not shadow each other,
+    and disabling one must not remove the persona owned by the still-enabled pack.
+
+    Regression: PersonasAdapter keyed _active by persona id only (no ownership
+    guard), so a later pack overwrote an enabled pack's persona and unregister
+    unconditionally popped it — the persona vanished from prompt injection while
+    the owning pack was still enabled.
+    """
+    adapter = PersonasAdapter()
+    pack_a = _persona_pack(tmp_path, "user/pack-a", "pack-a", "A")
+    pack_b = _persona_pack(tmp_path, "user/pack-b", "pack-b", "B")
+
+    adapter.register(pack_a)
+    adapter.register(pack_b)  # same id — must NOT shadow pack-a's active persona
+
+    actives = adapter.get_active_personas()
+    assert [p["id"] for p in actives] == ["web_op"]
+    assert actives[0]["_pack_id"] == "user/pack-a", "incumbent must not be shadowed"
+    # pack-b's copy was skipped, so it is not recorded as registered by pack-b.
+    assert pack_b.registered.get("personas", []) == []
+
+    # Disabling the later pack must leave pack-a's persona active.
+    adapter.unregister("user/pack-b")
+    assert [p["id"] for p in adapter.get_active_personas()] == ["web_op"]
+    assert adapter.get_active_personas()[0]["_pack_id"] == "user/pack-a"
+
+    # Disabling the owner removes it cleanly.
+    adapter.unregister("user/pack-a")
+    assert adapter.get_active_personas() == []
+
+
+def test_mid_loop_copytree_failure_then_disable_enable(
+    tmp_path: Path, _no_skill_refresh, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A copytree that raises on the 2nd skill must not permanently wedge the 1st.
+
+    Regression: register recorded per-skill provenance in-loop but only assigned
+    _installed after the loop, so a mid-loop failure escaped register() with no
+    _installed entry. A later disable then removed 0 dirs yet _forget_provenance
+    stripped the copied skill's provenance, orphaning it (register's user-authored
+    guard refused to ever reinstall it).
+    """
+    import akana_server.packs.adapters as mod
+
+    data_dir = tmp_path / "data"
+    pack_root = tmp_path / "pack"
+    for sid in ("aaa", "bbb"):
+        src = pack_root / "skills" / sid
+        src.mkdir(parents=True)
+        (src / "SKILL.md").write_text(f"# {sid}", encoding="utf-8")
+
+    adapter = SkillsAdapter(data_dir)
+    pack = _pack(tmp_path, pack_id="user/twopack", root=pack_root, skills=["aaa", "bbb"])
+
+    real_copytree = mod.shutil.copytree
+    calls = {"n": 0}
+
+    def _boom(src, dst, *a, **kw):
+        calls["n"] += 1
+        if calls["n"] == 2:  # fail on the SECOND skill
+            raise OSError("simulated Windows file lock")
+        return real_copytree(src, dst, *a, **kw)
+
+    monkeypatch.setattr(mod.shutil, "copytree", _boom)
+    with pytest.raises(OSError):
+        adapter.register(pack)
+    monkeypatch.setattr(mod.shutil, "copytree", real_copytree)
+
+    # The first skill was copied and MUST keep its provenance (owned by the pack).
+    dest_aaa = akana_skills_dir(data_dir) / "aaa"
+    assert dest_aaa.is_dir()
+    assert adapter.provenance().get("aaa") == "user/twopack"
+
+    # Disable removes exactly the copied dir; provenance is forgotten only for it.
+    adapter.unregister("user/twopack")
+    assert not dest_aaa.exists(), "disable must remove the skill that WAS copied"
+    assert "aaa" not in adapter.provenance()
+
+    # Re-enable must reinstall 'aaa' (NOT treat it as a user-authored collision).
+    src_aaa = pack_root / "skills" / "aaa"  # still present in the pack source
+    assert src_aaa.is_dir()
+    adapter.register(pack)
+    assert (akana_skills_dir(data_dir) / "aaa").is_dir()
+    assert adapter.provenance().get("aaa") == "user/twopack"

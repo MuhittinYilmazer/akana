@@ -200,8 +200,12 @@ async def plan_skill_turn(
 
     try:
         reg = registry or get_registry(Path(settings.data_dir))
+        # Pass the catalog selection INTO the search so excluded skills are dropped
+        # before the top-k cap — otherwise excluded skills with longer triggers can
+        # fill every suggestion slot and the selected skill is never suggested. The
+        # post-filter below (line ~215) stays as a belt-and-suspenders guard.
         suggestions = await asyncio.wait_for(
-            asyncio.to_thread(reg.suggest_for_text, text, max(3, max_n)),
+            asyncio.to_thread(reg.suggest_for_text, text, max(3, max_n), allowed=allowed),
             timeout=timeout,
         )
     except Exception as e:  # the suggestion search NEVER breaks the turn

@@ -161,7 +161,23 @@ SENSITIVE_EGRESS_PATTERNS: tuple[dict[str, Any], ...] = (
         # being masked. Hex secrets (32/40/64 chars: MD5/SHA1/SHA256, many API
         # secrets) and 40+ base64 blobs (e.g. AWS secret keys) are the target.
         "id": "credential.high_entropy",
-        "pattern": r"\b(?:[0-9a-fA-F]{32,}|[A-Za-z0-9/+_\-]{40,})\b",
+        # A base64 secret blob (incl. AWS secret keys with `/`+`+`) starts with an
+        # alnum/`+`/`_` char and is a single unbroken run. The OLD pattern
+        # `\b[A-Za-z0-9/+_\-]{40,}\b` let `/` be a LEADING/joining char, so `\b`
+        # started the match at a URL host and swallowed the whole slash-joined path
+        # (github.com/owner/repo/commit/<sha>, docs.google.com/document/d/<id>/edit,
+        # a POSIX path) as one ≥40-char "token" — redacting ordinary links in the sent
+        # message AND (via the router's persisted archive) the web-UI record. The fix:
+        # (1) the base64 run must START on an alnum/`+`/`_` (never `/`), so a URL path
+        # segment beginning right after a `/` cannot anchor the match; (2) the leading
+        # `(?<![./:@\w-])` refuses a candidate glued to a preceding `.`/`/`/`:`/`@`/word
+        # char — i.e. a URL host label, path segment, scheme, or userinfo. Every alnum
+        # segment inside a URL path is preceded by `/` or `.`, so all of them are
+        # rejected, while a real secret after `=`/`{`/space still matches.
+        "pattern": (
+            r"(?<![./:@\w-])"
+            r"(?:[0-9a-fA-F]{32,}|[A-Za-z0-9+_][A-Za-z0-9/+_\-]{39,})\b"
+        ),
         "reason": "Bare high-entropy secret (hex/base64)",
         "validate": "high_entropy",
     },

@@ -264,6 +264,38 @@ def test_commands_are_not_persisted(tmp_path: Path) -> None:
     assert meta.message_count == 2  # the /durum pair did not enter the archive
 
 
+def test_baglan_binds_web_conversation_not_own_thread(tmp_path: Path) -> None:
+    """/baglan must link the chat to the WEB conversation, not re-bind to its own thread.
+
+    Regression: _cmd_bind used list_conversations(limit=1) (updated_at DESC). Every
+    persisted Telegram turn bumps the chat's own conversation to most-recent, so after
+    any prior exchange the "most recent" conversation IS the chat's own thread and
+    /baglan no-oped (bound the chat to the conversation it was already on). The fix
+    excludes the requesting chat's own bound conversation.
+    """
+    async def ok(settings, text: str, **kw) -> str:
+        return "ok"
+
+    router, fake, conversations = _stack(tmp_path, ok)
+
+    # A web conversation the user was chatting in (older activity).
+    web = conversations.create(title="Web thread")
+
+    async def run() -> None:
+        # A prior Telegram exchange creates + bumps the chat's OWN conversation, making
+        # it the most-recently-updated one — the exact state the bug no-oped on.
+        await router.handle(_msg("hi"))
+        await router.handle(_msg("/baglan"))
+
+    asyncio.run(run())
+
+    # The chat is now bound to the WEB conversation, not its own «Fake: Alice» thread.
+    bound = router._bindings.get("fake", "42")
+    assert bound == web.id
+    reply = fake.sent[-1].text
+    assert "Web thread" in reply
+
+
 # -- boundary split --------------------------------------------------------------------
 
 
@@ -581,6 +613,52 @@ def test_worker_cap_backpressures_then_drains(tmp_path: Path) -> None:
     assert sorted(seen) == ["m0", "m1", "m2", "m3"]  # NO LOSS (all processed)
 
 
+def test_drain_processes_queued_and_inflight_before_teardown(tmp_path: Path) -> None:
+    """router.drain() must let messages already accepted (sitting in the shared inbound
+    queue + a per-worker queue, and an in-flight turn) finish before teardown — NOT drop
+    them. Regression: a live reload hard-stopped the router, discarding queued messages
+    (already offset-confirmed to Telegram, never redelivered) and aborting the in-flight
+    turn with no reply. drain() drains them; a plain stop() would have lost them."""
+    release = asyncio.Event()
+    seen: list[str] = []
+
+    async def slow_complete(settings, text: str, *, history=None, **kw) -> str:
+        seen.append(text)
+        if text == "first":
+            await release.wait()  # hold the in-flight turn so a 2nd msg queues behind it
+        return "ok"
+
+    reg = ConnectorRegistry()
+    reg.register(FakeConnector())
+    router = InboundRouter(
+        _settings(tmp_path),
+        reg,
+        complete=slow_complete,
+        conversations=ConversationService(tmp_path),
+        skill_planner=_no_skills,
+    )
+
+    async def run() -> None:
+        router.start()
+        # Same chat → same worker, FIFO: "first" runs (and blocks), "second" queues.
+        await reg.inbound.put(_msg("first"))
+        await asyncio.sleep(0.05)
+        await reg.inbound.put(_msg("second"))
+        await reg.inbound.put(_msg("third"))  # still sitting in the shared inbound queue
+        await asyncio.sleep(0.05)
+        # Kick off the graceful drain; once the in-flight turn is released everything
+        # queued (second + third) must still be handled before drain returns.
+        drain_task = asyncio.create_task(router.drain(timeout=5.0))
+        await asyncio.sleep(0.05)
+        release.set()
+        drained = await drain_task
+        assert drained is True
+        await router.stop()
+
+    asyncio.run(run())
+    assert sorted(seen) == ["first", "second", "third"]  # NONE dropped by the reload
+
+
 # -- CTX-2: PUT /connectors/telegram persists atomically -------------------------
 
 
@@ -628,5 +706,54 @@ def test_put_telegram_atomic_persist_and_failure(monkeypatch, tmp_path: Path) ->
         after = store.load()
         assert after["telegram_enabled"] is True
         assert after["telegram_allowed_chat_ids"] == ["42", "7"]
+
+    reset_runtime_stores()
+
+
+def test_put_telegram_secret_failure_does_not_persist_enabled(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A combined enable+token save where the vault write fails (e.g. assert_writable on
+    a corrupt master key) must NOT durably flip telegram_enabled. Regression: set_secrets
+    ran AFTER set_many with no error handling, so a vault failure left telegram_enabled
+    persisted, 500'd implying no change, skipped the reload — and the bridge came up
+    enabled with no working token on the next restart. The fix writes (and validates) the
+    secret BEFORE the runtime store, so a vault failure aborts before any durable change."""
+    from fastapi.testclient import TestClient
+
+    from akana_server.api.app import create_app
+    from akana_server.runtime_settings import get_store, reset_runtime_stores
+
+    reset_runtime_stores()
+    monkeypatch.setenv("AKANA_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AKANA_TOKEN", "")
+    monkeypatch.setenv("CURSOR_API_KEY", "")
+    app = create_app()
+
+    with TestClient(app) as client:
+        settings = app.state.settings
+        store = get_store(settings.data_dir)
+        before = store.load()
+        assert before.get("telegram_enabled") in (None, False)
+
+        # Vault write fails for this combined enable + bot_token save.
+        def _vault_boom(_data_dir, _patch):
+            raise RuntimeError("vault is not writable")
+
+        monkeypatch.setattr(
+            "akana_server.api.routes.connectors.set_secrets", _vault_boom
+        )
+        r = client.put(
+            "/api/v1/connectors/telegram",
+            json={
+                "enabled": True,
+                "bot_token": "123456789:AAH" + "z" * 32,  # real-secret-shaped
+            },
+        )
+        assert r.status_code == 500
+        assert r.json()["detail"]["error"]["code"] == "PERSIST_FAILED"
+        # telegram_enabled was NOT durably persisted despite the failure.
+        after = store.load()
+        assert after.get("telegram_enabled") in (None, False)
 
     reset_runtime_stores()

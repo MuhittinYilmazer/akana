@@ -50,6 +50,7 @@ from akana_server.chat_context import (
     ensure_conversation,
     get_agent_id,
     make_bootstrap_retry_hooks,
+    persist_agent_id,
     snapshot_conversation_llm,
 )
 from akana_server.context import ContextRequest
@@ -226,10 +227,14 @@ async def post_chat(
         # #6: persist the agent_id the bridge returned → the next blocking turn reuses
         # it (it used to be a cold-start every turn since one-shot didn't return agent_id).
         if outcome.agent_id:
-            # Off-load: _mirror_cursor_agent_meta runs a locked memory.db UPDATE txn
-            # (busy_timeout=10000). On the loop it would freeze every SSE/WS/HTTP endpoint
-            # under lock/txn contention — the streaming producer already wraps this exact
-            # call in _off_loop (chat_producer.py); mirror that here (b2h-#4).
+            # persist_agent_id writes agent_id WITH its agent_provider tag (read from the
+            # bind_conversation_llm snapshot bound above). Without it, get_agent_id's leak-guard
+            # defaults a tagless id to 'cursor' → a claude blocking turn's session never resumes,
+            # and a claude uuid could later leak into a cursor resume. Mirror the streaming path
+            # (chat_producer.py), which writes BOTH persist_agent_id and the dual-write mirror.
+            # Off-load: both run a locked memory.db UPDATE txn (busy_timeout=10000). On the loop
+            # they would freeze every SSE/WS/HTTP endpoint under lock/txn contention (b2h-#4).
+            await _off_loop(persist_agent_id, request, conv_id, outcome.agent_id)
             await _off_loop(
                 _mirror_cursor_agent_meta, request, conv_id, outcome.agent_id
             )

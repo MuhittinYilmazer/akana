@@ -113,6 +113,9 @@
             : `<span class="persona-badge">${window.AkanaI18n.t("persona.base.badge_default")}</span>`) +
         `</h3>` +
         `<p class="field-hint">${window.AkanaI18n.t("persona.base.hint")}</p>` +
+        (base.is_override
+          ? `<p class="field-hint field-hint-warn">${window.AkanaI18n.t("persona.base.override_lang_hint")}</p>`
+          : "") +
         `<textarea id="persona-base-text" rows="8" spellcheck="false">${esc(baseText)}</textarea>` +
         `<div class="settings-row-actions">` +
           `<button type="button" class="btn-primary" data-action="save-base">${window.AkanaI18n.t("persona.base.save_btn")}</button>` +
@@ -131,6 +134,9 @@
             : `<span class="persona-badge">${window.AkanaI18n.t("persona.voice.badge_default")}</span>`) +
         `</h3>` +
         `<p class="field-hint">${window.AkanaI18n.t("persona.voice.hint")}</p>` +
+        (voice.is_override
+          ? `<p class="field-hint field-hint-warn">${window.AkanaI18n.t("persona.voice.override_lang_hint")}</p>`
+          : "") +
         `<textarea id="persona-voice-text" rows="4" spellcheck="false">${esc(voiceText)}</textarea>` +
         `<div class="settings-row-actions">` +
           `<button type="button" class="btn-primary" data-action="save-voice">${window.AkanaI18n.t("persona.voice.save_btn")}</button>` +

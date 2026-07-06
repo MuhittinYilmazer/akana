@@ -64,7 +64,16 @@ pack:
         # ToolsAdapter.consent writes this `mcp` block to mcp_servers.yaml
         # (managed_by-stamped). scripts/mcp_computer.py is a launcher FILE that puts the
         # repo root first on sys.path from its own __file__ — so the spawn needs NO cwd
-        # and NO PYTHONPATH, and the repo-root akana.py can't shadow the package.
+        # and NO PYTHONPATH, and the repo-root akana.py can't shadow the package. This is
+        # why the args invoke that launcher FILE and NOT `-m akana_server.computer_mcp`:
+        # akana_server is not pip-installed, so `-m` only resolves when the child inherits
+        # cwd=repo-root — but the claude CLI spawns with cwd=settings.workspace and the
+        # in-process bridge inherits the server's cwd, so `-m` dies with
+        # ModuleNotFoundError('akana_server') off the repo root. The launcher file is
+        # cwd-immune (symmetric with the built-in memory/vault children).
+        # `<AKANA_REPO>` is a mount-time marker ToolsAdapter.consent rewrites to the
+        # absolute repo root (the manifest can't know it); the yaml written to
+        # mcp_servers.yaml holds the resolved absolute launcher path.
         # `${AKANA_PYTHON:-python}`: see the COMMAND / PYTHON RESOLUTION note above.
         # `${AKANA_DATA_DIR:-}`: forwarded so screenshots land under the SAME data dir as
         # the rest of Akana; empty ⇒ the child falls back to ~/.akana (its own default).
@@ -72,8 +81,7 @@ pack:
           type: stdio
           command: "${AKANA_PYTHON:-python}"
           args:
-            - "-m"
-            - "akana_server.computer_mcp"
+            - "<AKANA_REPO>/scripts/mcp_computer.py"
           env:
             AKANA_DATA_DIR: "${AKANA_DATA_DIR:-}"
     minimum_akana_version: "0.1.0"

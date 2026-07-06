@@ -112,6 +112,13 @@ class Memory:
         self._db_path = db_path
         self._data_dir = data_dir
         self._subscribers: list[Subscriber] = []
+        # U6: a lazy, best-effort VectorStore over this Memory's own memory.db, used to
+        # cascade-delete a fact's embedding on EVERY delete path — independent of whether
+        # a VectorIndexer happens to be subscribed. Embeddings otherwise leak whenever the
+        # embedder is unresolved (vector/embed off, fastembed missing, ollama down): no
+        # indexer subscribes, so nothing prunes the row. Built on first delete only.
+        self._vector_store: VectorStore | None = None
+        self._vector_store_built = False
         # b22: guards the lazy first-time construction of conversations_meta (and any other
         # lazy store) on this process-wide shared singleton, so concurrent first callers don't
         # each build a separate store. Only taken on the lazy-build path, never in the hot _emit.
@@ -253,7 +260,28 @@ class Memory:
         data: dict[str, Any] = {"fact_id": fact.id, "key": fact.key, "value": fact.value}
         if superseded_by:
             data["superseded_by"] = superseded_by
+        self._drop_embedding(fact.id)
         self._emit("fact_invalidated", **data)
+
+    def _drop_embedding(self, fact_id: str) -> None:
+        """Cascade-delete a fact's embedding from the vector table (U6).
+
+        Best-effort and idempotent by fact_id: a still-subscribed VectorIndexer also
+        deletes the same row, so a double delete is harmless. The store is built lazily
+        over this Memory's own memory.db so cascade works even when no indexer is wired
+        (vector/embed off, fastembed missing, ollama down). Vector cleanup must never
+        break a fact write, so every failure is swallowed at debug level.
+        """
+        if self._db_path is None:
+            return
+        try:
+            if not self._vector_store_built:
+                self._vector_store = VectorStore(self._db_path)
+                self._vector_store_built = True
+            if self._vector_store is not None:
+                self._vector_store.delete(fact_id)
+        except Exception:
+            log.debug("embedding cascade-delete failed for %s", fact_id, exc_info=True)
 
     # -- episodic: what happened ----------------------------------------------
 
@@ -271,6 +299,7 @@ class Memory:
         tool_calls: list[dict[str, Any]] | None = None,
         file_ids: list[str] | None = None,
         usage: dict[str, Any] | None = None,
+        ask_user: dict[str, Any] | None = None,
     ) -> EpisodicTurn:
         turn = self._episodic.append_turn(
             turn_id=turn_id or _new_id(),
@@ -284,6 +313,7 @@ class Memory:
             tool_calls=tool_calls,
             file_ids=file_ids,
             usage=usage,
+            ask_user=ask_user,
         )
         self._emit("turn", turn_id=turn.id, conversation_id=conversation_id, role=role)
         return turn
@@ -456,6 +486,11 @@ class Memory:
         else:
             ok = self._semantic.invalidate_fact(fact_id) is not None
         if ok:
+            # U6: cascade the embedding regardless of whether an indexer is subscribed.
+            # forget_fact emits the raw event (not via _emit_fact_invalidated), so drop
+            # here directly. Both hard and soft forget shrink the table — matching the
+            # indexer's contract that it tracks only currently-valid facts.
+            self._drop_embedding(fact_id)
             self._emit("fact_invalidated", fact_id=fact_id, hard=hard)
         return ok
 

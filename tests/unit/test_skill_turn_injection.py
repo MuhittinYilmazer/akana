@@ -39,13 +39,20 @@ class FakeRegistry:
         self.suggest_delay_s = suggest_delay_s
         self.calls: list[tuple[str, int]] = []
 
-    def suggest_for_text(self, text: str, top_k: int = 3) -> list[dict[str, Any]]:
+    def suggest_for_text(
+        self, text: str, top_k: int = 3, *, allowed: set[str] | None = None
+    ) -> list[dict[str, Any]]:
         self.calls.append((text, top_k))
         if self.suggest_delay_s:
             time.sleep(self.suggest_delay_s)
         if self.raise_on_suggest is not None:
             raise self.raise_on_suggest
-        return list(self.suggestions)
+        # Mirror the real registry: the catalog selection is applied inside the
+        # search (before the top-k cap), not only in the caller's post-filter.
+        out = list(self.suggestions)
+        if allowed is not None:
+            out = [s for s in out if str(s.get("id")) in allowed]
+        return out
 
     def load_body(self, skill_id: str) -> str:
         body = self.bodies.get(skill_id)

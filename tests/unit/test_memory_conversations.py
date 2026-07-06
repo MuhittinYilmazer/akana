@@ -83,6 +83,29 @@ def test_list_orders_by_updated_at_desc_and_limits(store: ConversationStore) -> 
     assert [m.id for m in store.list(limit=2)] == ["c1", "c3"]
 
 
+def test_list_archived_only_survives_newer_active_beyond_ceiling(
+    store: ConversationStore,
+) -> None:
+    """archived_only must filter to archived rows in SQL BEFORE the 200-row ceiling.
+
+    Regression: the Archived view fetched a MIXED active+archived window (include_archived
+    → base '1=1') trimmed to the ceiling by updated_at; an archived conversation older than
+    the newest 200 active ones fell out of the window and — search hard-codes archived=0 —
+    became invisible and un-unarchivable. With archived_only the archived row is always in
+    the result regardless of how many newer active conversations exist.
+    """
+    store.ensure("arch")
+    store.patch("arch", archived=True)  # oldest, archived
+    for i in range(201):  # more than the 200 store ceiling, all newer + active
+        store.ensure(f"active-{i:03d}")
+    got = store.list(limit=50, archived_only=True)
+    assert [m.id for m in got] == ["arch"]  # only the archived one, and it's present
+    # Sanity: the mixed window (old behavior) would NOT contain it — the archived row is
+    # older than 200 active rows, so it spills out of the ceiling.
+    mixed = store.list(limit=50, include_archived=True)
+    assert "arch" not in {m.id for m in mixed}
+
+
 # -- auto-title + message hooks -------------------------------------------------
 
 

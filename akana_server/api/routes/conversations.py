@@ -113,10 +113,16 @@ async def list_conversations(
     # competing writer's WAL lock) finishes, every SSE/WS/endpoint freezes — the
     # "2-3 sec stall" on list refresh after a new chat grows from here. Move it to
     # a worker thread.
+    #
+    # ?archived=true is the Archived TAB (an archived-ONLY view), not "active plus
+    # archived": route it to archived_only so the SQL filter runs before the store's
+    # 200-row ceiling. Otherwise an archived conversation older than the newest 200
+    # active ones falls out of the mixed window and — search excludes archived rows —
+    # becomes invisible and un-unarchivable from the UI.
     items = await _off_loop(
         svc.list_conversations,
         limit=limit,
-        include_archived=archived,
+        archived_only=bool(archived),
         pinned_only=bool(pinned),
     )
     return {"conversations": [_meta_out(m) for m in items]}
@@ -369,6 +375,9 @@ async def list_messages(
                 # (token/cost info after a page refresh). None on user turns or
                 # when the info is missing.
                 **( {"usage": _safe_usage(m.usage)} if m.role == "assistant" and m.usage else {} ),
+                # Structured AskUser payload on a question turn → the interactive card
+                # re-renders on a chat switch / reload (not just the summary text).
+                **( {"ask_user": m.ask_user} if isinstance(m.ask_user, dict) and m.ask_user else {} ),
             }
             for m in messages
         ],

@@ -332,6 +332,43 @@ def test_turn_complete_without_user_text_is_orphan_safe(tmp_path, monkeypatch) -
     assert calls == []  # orphan guard: no pair → no write
 
 
+def test_orphan_turn_complete_does_not_merge_into_next_turn(tmp_path, monkeypatch) -> None:
+    """REGRESSION: an orphan turn (only assistant transcribed — VAD fired on noise) whose
+    turn_complete is a no-op orphan persist must NOT leave _out_buf populated, or the stale
+    reply merges into the NEXT persisted turn's assistant_text. The following full turn must
+    persist with its OWN answer only, not 'A1-orphan A2-reply'."""
+    capture: dict = {}
+    session = _FakeSession(
+        [
+            # Orphan turn: assistant text, no input transcription, then turn_complete.
+            _Resp(server_content=_SC(out="A1-orphan ")),
+            _Resp(server_content=_SC(turn_complete=True)),
+            # A real full turn follows.
+            _Resp(server_content=_SC(inp="question2")),
+            _Resp(server_content=_SC(out="A2-reply")),
+            _Resp(server_content=_SC(turn_complete=True)),
+        ]
+    )
+    _patch_common(monkeypatch, session, capture)
+    calls: list = []
+    monkeypatch.setattr(
+        "akana_server.orchestrator.turn_writer.persist_user_turn",
+        lambda **kw: calls.append(("user", kw.get("user_text"))) or "uid",
+    )
+    monkeypatch.setattr(
+        "akana_server.orchestrator.turn_writer.persist_assistant_turn",
+        lambda **kw: calls.append(("assistant", kw.get("assistant_text"))) or "aid",
+    )
+    ws = _FakeWS([])
+    bridge = gl.LiveBridge(ws, _settings(tmp_path), app=_fake_app(None), conv_id="c")
+    asyncio.run(bridge.run())
+    user_texts = [v for (role, v) in calls if role == "user"]
+    assistant_texts = [v for (role, v) in calls if role == "assistant"]
+    # Exactly one persisted record (the orphan turn was dropped), the answer NOT merged.
+    assert user_texts == ["question2"]
+    assert assistant_texts == ["A2-reply"]  # NOT "A1-orphan A2-reply"
+
+
 def test_interrupt_forwarded_to_browser(tmp_path, monkeypatch) -> None:
     capture: dict = {}
     session = _FakeSession([_Resp(server_content=_SC(interrupted=True))])

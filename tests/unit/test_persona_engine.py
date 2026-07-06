@@ -266,3 +266,94 @@ def test_get_persona_registry_cache(tmp_path) -> None:
         assert a is b
     finally:
         reset_persona_registries()
+
+
+# -- U5: language drives the core prompt / voice directive; saving the unchanged --- #
+#    default must NOT freeze the prompt language ---------------------------------- #
+
+
+def _set_runtime_language(tmp_path, lang: str) -> None:
+    """Write the runtime `language` setting so registry._language() resolves to it."""
+    from akana_server.runtime_settings.store import get_store, reset_runtime_stores
+
+    reset_runtime_stores()  # drop any cached store bound to a different value
+    get_store(tmp_path).set("language", lang)
+
+
+def test_base_prompt_follows_language_when_no_override(tmp_path) -> None:
+    """With no override, the core prompt is the builtin default for the runtime language."""
+    from akana_server.persona.builtin import CHAT_SYSTEM_PREFIX_EN, CHAT_SYSTEM_PREFIX_TR
+    from akana_server.runtime_settings.store import reset_runtime_stores
+
+    try:
+        reg = PersonaRegistry(tmp_path)
+        _set_runtime_language(tmp_path, "en")
+        assert reg.get_base_prompt() == CHAT_SYSTEM_PREFIX_EN
+        _set_runtime_language(tmp_path, "tr")
+        assert reg.get_base_prompt() == CHAT_SYSTEM_PREFIX_TR
+    finally:
+        reset_runtime_stores()
+
+
+def test_saving_unchanged_default_clears_override_and_keeps_language(tmp_path) -> None:
+    """U5 primary: pressing Save on the prefilled default (verbatim, in EITHER language)
+    must CLEAR the override, so switching the language still switches the core prompt.
+    Old behavior stored the default verbatim → the prompt froze in the saved language."""
+    from akana_server.persona.builtin import CHAT_SYSTEM_PREFIX_EN, CHAT_SYSTEM_PREFIX_TR
+    from akana_server.runtime_settings.store import reset_runtime_stores
+
+    try:
+        reg = PersonaRegistry(tmp_path)
+        _set_runtime_language(tmp_path, "en")
+        # Save the EN default unchanged (the prefill) → no override.
+        reg.set_base_prompt(CHAT_SYSTEM_PREFIX_EN)
+        assert reg.base_prompt_is_override() is False
+        # The language still drives the prompt after the "save".
+        _set_runtime_language(tmp_path, "tr")
+        assert reg.get_base_prompt() == CHAT_SYSTEM_PREFIX_TR
+
+        # Saving the OTHER language's default verbatim must also clear (not freeze).
+        reg.set_base_prompt(CHAT_SYSTEM_PREFIX_TR)
+        assert reg.base_prompt_is_override() is False
+        _set_runtime_language(tmp_path, "en")
+        assert reg.get_base_prompt() == CHAT_SYSTEM_PREFIX_EN
+    finally:
+        reset_runtime_stores()
+
+
+def test_genuine_custom_base_prompt_stays_frozen(tmp_path) -> None:
+    """A real user edit is not a default → it stays as the override across a language switch
+    (documented behavior; the UI shows a hint that it no longer follows the picker)."""
+    from akana_server.runtime_settings.store import reset_runtime_stores
+
+    try:
+        reg = PersonaRegistry(tmp_path)
+        _set_runtime_language(tmp_path, "en")
+        reg.set_base_prompt("You are Akana. Custom identity.")
+        assert reg.base_prompt_is_override() is True
+        _set_runtime_language(tmp_path, "tr")
+        assert reg.get_base_prompt() == "You are Akana. Custom identity."  # frozen
+    finally:
+        reset_runtime_stores()
+
+
+def test_saving_unchanged_voice_default_clears_override(tmp_path) -> None:
+    """U5: same guard for the voice directive — saving the prefilled default clears it,
+    so the voice directive keeps following the language picker."""
+    from akana_server.persona.builtin import VOICE_DIRECTIVE_EN, VOICE_DIRECTIVE_TR
+    from akana_server.runtime_settings.store import reset_runtime_stores
+
+    try:
+        reg = PersonaRegistry(tmp_path)
+        _set_runtime_language(tmp_path, "en")
+        reg.set_voice_directive(VOICE_DIRECTIVE_EN)
+        assert reg.voice_directive_is_override() is False
+        _set_runtime_language(tmp_path, "tr")
+        assert reg.get_voice_directive() == VOICE_DIRECTIVE_TR
+
+        reg.set_voice_directive("Speak like a pirate.")  # a real edit stays frozen
+        assert reg.voice_directive_is_override() is True
+        _set_runtime_language(tmp_path, "en")
+        assert reg.get_voice_directive() == "Speak like a pirate."
+    finally:
+        reset_runtime_stores()

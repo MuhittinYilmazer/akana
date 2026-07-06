@@ -16,6 +16,7 @@ import {
   languageFrom,
   makeOnDelta,
   normalizeError,
+  resultError,
   sessionKeyFrom,
   waitWithHeartbeat,
 } from "./lib.mjs";
@@ -29,9 +30,11 @@ const sessionInflight = new Map();
 /**
  * STOP/abort that arrives WHILE ``agent.send()`` is still setting up — before the run
  * is registered in ``sessionActiveRun`` — would otherwise be lost. We record the intent
- * here; the setup path cancels the run the moment it exists. Cleared at each run start.
- */
-const sessionAbortIntent = new Set();
+ * here TAGGED with the turn id it targets; the setup path cancels the run the moment it
+ * exists. Keyed by session → the mid-setup turn's id. Tagging by turn id is load-bearing:
+ * a later turn B must not delete an intent that targeted an earlier turn A (that would let
+ * the STOPped prompt A run to completion). @type {Map<string, string>} */
+const sessionAbortIntent = new Map();
 
 function emit(id, obj) {
   process.stdout.write(JSON.stringify({ id, ...obj }) + "\n");
@@ -64,21 +67,34 @@ async function abortActiveRun(sessionKey) {
       /* ignore */
     }
     sessionActiveRun.delete(sessionKey);
-  } else if (sessionInflight.has(sessionKey)) {
-    // A ``send()`` is mid-setup (the run is not registered yet). Record the intent so the setup
-    // path cancels the run as soon as it is created (see runStreaming). b13: gate on
-    // sessionInflight — a stray abort on a fully-idle session must NOT leave a permanent marker
-    // (sessionAbortIntent would grow unbounded over the daemon's lifetime).
-    sessionAbortIntent.add(sessionKey);
+    // Run-registered branch: the run is torn down, so settle+drop the inflight gate
+    // now — that is what serializes the immediate stream retry.
+    clearSessionInflight(sessionKey);
+  } else {
+    const inflight = sessionInflight.get(sessionKey);
+    if (inflight) {
+      // A ``send()`` is mid-setup (the run is not registered yet). Record the intent
+      // TAGGED with the setting-up turn's id so its C6 check cancels the run as soon as
+      // it is created (see runStreaming). b13: gate on sessionInflight — a stray abort on
+      // a fully-idle session must NOT leave a permanent marker (the map would grow
+      // unbounded). Do NOT clearSessionInflight here: settling the gate would let an
+      // immediately-resent turn B skip the :94 serialization loop and delete this intent,
+      // so the STOPped turn A would still run to completion. Keep the gate live — B waits
+      // until A's setup window resolves and A honors its own intent.
+      if (inflight.id != null) sessionAbortIntent.set(sessionKey, inflight.id);
+    }
   }
-  clearSessionInflight(sessionKey);
   return Boolean(activeRun);
 }
 
 /** Hard reset: cancel the run + close the agent (chat deletion / unrecoverable stuck). */
 async function closeSession(sessionKey) {
   await abortActiveRun(sessionKey);
-  sessionAbortIntent.delete(sessionKey); // b13: drop any lingering intent for a closed session
+  // Hard reset (chat deletion / unrecoverable stuck): unlike a plain STOP, tear the
+  // session down fully — settle any mid-setup inflight gate and drop lingering intent
+  // (b13) so nothing waits on / references a session that no longer exists.
+  clearSessionInflight(sessionKey);
+  sessionAbortIntent.delete(sessionKey);
   closeCachedSession(sessions, sessionKey);
 }
 
@@ -105,13 +121,19 @@ async function runStreaming(id, input) {
   const inflightGate = new Promise((resolve) => {
     settleInflight = resolve;
   });
-  sessionInflight.set(sessionKey, { promise: inflightGate, settle: settleInflight });
+  // Tag the inflight gate with THIS turn's id so a mid-setup abort records an intent
+  // that targets this turn specifically (not whichever turn later runs on the session).
+  sessionInflight.set(sessionKey, { promise: inflightGate, settle: settleInflight, id });
 
   let run;
   try {
-    // Fresh run for this session → drop any stale abort-intent so only a STOP that
-    // targets THIS run (during the setup window below) counts.
-    sessionAbortIntent.delete(sessionKey);
+    // Fresh run for this session → drop any STALE abort-intent left by a PRIOR turn so
+    // only a STOP that targets THIS run (during the setup window below) counts. Guard on
+    // the turn id: an abort that arrived for THIS turn between the gate set above and here
+    // must NOT be wiped (that intent targets our id and our C6 check below honors it).
+    if (sessionAbortIntent.get(sessionKey) !== id) {
+      sessionAbortIntent.delete(sessionKey);
+    }
     const agentResult = await getOrCreateAgent(id, input);
     if (agentResult.needHistory) {
       emit(id, { ev: "need_history" });
@@ -145,6 +167,7 @@ async function runStreaming(id, input) {
           onUsage: (u) => {
             usage = u;
           },
+          language: languageFrom(input),
         }),
       });
       sessionActiveRun.set(sessionKey, run);
@@ -152,10 +175,12 @@ async function runStreaming(id, input) {
       agentId = run.agentId || agentId;
       emit(id, { ev: "meta", run_id: runId, agent_id: agentId, model: input.model || "composer-2" });
       // C6: a STOP/abort that landed while ``agent.send()`` was still setting up could
-      // not see this run (it wasn't registered yet). Honor it now — cancel immediately;
-      // waitWithHeartbeat then returns the cancelled result and the normal done/error
-      // path emits the terminal event.
-      if (sessionAbortIntent.delete(sessionKey)) {
+      // not see this run (it wasn't registered yet). Honor it now — but ONLY if the
+      // recorded intent targets THIS turn's id (a later turn's intent must not cancel
+      // this run, and vice versa). Cancel immediately; waitWithHeartbeat then returns
+      // the cancelled result and the normal done/error path emits the terminal event.
+      if (sessionAbortIntent.get(sessionKey) === id) {
+        sessionAbortIntent.delete(sessionKey);
         try {
           await run.cancel?.();
         } catch {
@@ -163,16 +188,25 @@ async function runStreaming(id, input) {
         }
       }
       const result = await waitWithHeartbeat(run, (obj) => emit(id, obj));
-      const text = (acc || String(result?.result || "")).trim();
-      emit(id, {
-        ev: "done",
-        ok: true,
-        text,
-        status: result?.status || "finished",
-        run_id: result?.id || runId,
-        usage,
-        agent_id: agentId,
-      });
+      // run.wait() RESOLVES (not rejects) on a server/SDK-side failure with
+      // status:"error"/"cancelled" — surface the real cause as an error event
+      // instead of a fake ok:true done (which dropped result.error and reported
+      // an empty/truncated turn as success).
+      const runErr = resultError(result);
+      if (runErr) {
+        emit(id, { ev: "error", ok: false, ...runErr, run_id: result?.id || runId, agent_id: agentId });
+      } else {
+        const text = (acc || String(result?.result || "")).trim();
+        emit(id, {
+          ev: "done",
+          ok: true,
+          text,
+          status: result?.status || "finished",
+          run_id: result?.id || runId,
+          usage,
+          agent_id: agentId,
+        });
+      }
       if (reuse) {
         const cached = sessions.get(sessionKey);
         if (cached) cached.agentId = agentId;
@@ -232,20 +266,32 @@ async function runOneShot(id, input) {
         onUsage: (u) => {
           usage = u;
         },
+        language: languageFrom(input),
       }),
     });
     const result = await run.wait();
-    const text = (acc || String(result?.result || "")).trim();
-    emit(id, {
-      ev: "done",
-      ok: true,
-      text,
-      status: result?.status || "finished",
-      run_id: result?.id || run.id,
-      usage,
-      agent_id: result?.agentId || run.agentId || agent.agentId,
-      timing_ms: Date.now() - tSend,
-    });
+    const runErr = resultError(result);
+    if (runErr) {
+      emit(id, {
+        ev: "error",
+        ok: false,
+        ...runErr,
+        run_id: result?.id || run.id,
+        agent_id: result?.agentId || run.agentId || agent.agentId,
+      });
+    } else {
+      const text = (acc || String(result?.result || "")).trim();
+      emit(id, {
+        ev: "done",
+        ok: true,
+        text,
+        status: result?.status || "finished",
+        run_id: result?.id || run.id,
+        usage,
+        agent_id: result?.agentId || run.agentId || agent.agentId,
+        timing_ms: Date.now() - tSend,
+      });
+    }
   } catch (e) {
     emit(id, { ev: "error", ok: false, ...normalizeError(e) });
   } finally {
@@ -350,5 +396,12 @@ rl.on("line", (line) => {
     emit("?", { ev: "error", ok: false, error: e?.message || String(e) });
   });
 });
+// stdin EOF = the parent Akana server is gone (it holds our only stdin writer).
+// The daemon runs in its OWN process group (start_new_session) and caches live
+// SDK agents that keep the Node event loop alive, so without this it survives a
+// hard (non-aclose) server death — SIGKILL/OOM/crash — as an orphan until the
+// NEXT boot's reaper finds it. Exit promptly on EOF so the parent's death takes
+// the daemon (and its SDK children) with it. Canonical guard for a stdio daemon.
+rl.on("close", () => process.exit(0));
 
 process.stderr.write("akana bridge_daemon ready\n");

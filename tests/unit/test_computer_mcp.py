@@ -106,14 +106,21 @@ def test_pack_manifest_parses_and_validates():
     assert result.ok, result.errors
 
 
-def test_pack_mcp_config_targets_the_module():
+def test_pack_mcp_config_targets_the_launcher_file():
     from packs.contract.manifest import load_manifest
 
     manifest = load_manifest(_PACK / "pack.yaml")
     mcp_cfg = manifest.dependencies.external_tools[0].model_dump().get("mcp")
     assert isinstance(mcp_cfg, dict)
     assert mcp_cfg.get("type") == "stdio"
-    assert mcp_cfg.get("args") == ["-m", "akana_server.computer_mcp"]
+    # The spawn must invoke the cwd-immune launcher FILE, not `-m akana_server.computer_mcp`:
+    # akana_server is not pip-installed, so `-m` only resolves when the child inherits
+    # cwd=repo-root, which the claude CLI / in-process bridge do not (dies with
+    # ModuleNotFoundError off the repo root). `<AKANA_REPO>` is the mount-time marker
+    # ToolsAdapter.consent rewrites to the absolute repo root.
+    args = mcp_cfg.get("args")
+    assert args == ["<AKANA_REPO>/scripts/mcp_computer.py"], args
+    assert "-m" not in args
     assert "AKANA_DATA_DIR" in (mcp_cfg.get("env") or {})
 
 

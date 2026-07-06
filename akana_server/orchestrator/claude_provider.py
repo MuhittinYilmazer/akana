@@ -861,28 +861,63 @@ async def _stream_single_run(
         raise
     assert proc.stdout and proc.stderr  # noqa: S101 - pipes always present
 
-    # Windows cmd path: feed the prompt over stdin, then EOF (close). Wrapped so a
-    # broken pipe (claude already exited) never crashes the turn — the stream/stderr
-    # below surface the real error. Keyed on ``cmd_wrapper``, not the spill: an env-only
-    # spill (POSIX/``.exe``) still passes the prompt as a positional arg with DEVNULL stdin.
-    if cmd_wrapper and proc.stdin is not None:
-        try:
-            proc.stdin.write(prompt.encode("utf-8"))
-            await proc.stdin.drain()
-        except (BrokenPipeError, ConnectionResetError, OSError):  # pragma: no cover
-            pass
-        finally:
-            try:
-                proc.stdin.close()
-            except OSError:  # pragma: no cover
-                pass
-
     # BUG 1: pid file — so on a SIGKILL abrupt shutdown the bootstrap reaper can
     # clean up this claude subtree with killpg (best-effort, doesn't break the stream).
+    # Registered BEFORE the Windows stdin drain below: on the cmd path the flattened
+    # bootstrap prompt can exceed the ~64KB pipe buffer, so ``drain()`` SUSPENDS until
+    # the CLI starts reading. A turn cancelled at that await (STOP / client disconnect
+    # right at turn start) must still be reapable — if the pid were registered only
+    # after the drain, the orphaned claude.cmd process would be invisible to both the
+    # shutdown path and the next-boot reaper.
     _proc_token = uuid.uuid4().hex
     register_llm_process(
         getattr(settings, "data_dir", None) or ".", _proc_token, proc.pid, "claude_cli"
     )
+
+    # Windows cmd path: feed the prompt over stdin, then EOF (close). Wrapped so a
+    # broken pipe (claude already exited) never crashes the turn — the stream/stderr
+    # below surface the real error. Keyed on ``cmd_wrapper``, not the spill: an env-only
+    # spill (POSIX/``.exe``) still passes the prompt as a positional arg with DEVNULL stdin.
+    #
+    # The ``drain()`` can SUSPEND (prompt > pipe buffer, CLI not yet reading). This region
+    # is OUTSIDE the main try/finally below, so a CancelledError delivered here (STOP /
+    # disconnect at turn start) would otherwise leak the live claude process, its spill
+    # temp dir (system prompt / MCP config, possibly the vault key) AND the pid file.
+    # Guard it: on ANY exception (incl. CancelledError) kill the process group, release
+    # the pid, clean the spill, then re-raise.
+    if cmd_wrapper and proc.stdin is not None:
+        try:
+            try:
+                proc.stdin.write(prompt.encode("utf-8"))
+                await proc.stdin.drain()
+            except (BrokenPipeError, ConnectionResetError, OSError):  # pragma: no cover
+                pass
+            finally:
+                try:
+                    proc.stdin.close()
+                except OSError:  # pragma: no cover
+                    pass
+        except BaseException as _setup_exc:
+            # Cancellation (STOP / disconnect) is not a provider fault → don't taint
+            # the breaker (mirrors the main-body handler below); any real error is
+            # counted once.
+            if _breaker is not None and not isinstance(
+                _setup_exc, (asyncio.CancelledError, GeneratorExit)
+            ):
+                _breaker.record_failure()
+            try:
+                await terminate_process_group(proc.pid)
+            except Exception:  # pragma: no cover - already dead / race
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
+            release_llm_process(
+                getattr(settings, "data_dir", None) or ".", _proc_token
+            )
+            if spill is not None:
+                spill.cleanup()
+            raise
 
     async def _drain_stderr() -> bytes:
         try:

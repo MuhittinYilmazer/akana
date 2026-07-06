@@ -318,6 +318,38 @@ _SPECS: tuple[RuntimeSettingSpec, ...] = (
         max=10,
     ),
     RuntimeSettingSpec(
+        key="skill_catalog_max_entries",
+        type="int",
+        label="Catalog entry ceiling",
+        description=(
+            "Max number of installed capabilities listed in the system-prompt catalog "
+            "(WI-2). The default (256) covers a large install; if you install more, raise "
+            "this. When the limit is hit the catalog appends a visible «(+N more)» note — "
+            "entries are never dropped silently."
+        ),
+        category="beceri",
+        env_var="AKANA_SKILL_CATALOG_MAX_ENTRIES",
+        default=256,
+        min=16,
+        max=2048,
+    ),
+    RuntimeSettingSpec(
+        key="skill_catalog_max_chars",
+        type="int",
+        label="Catalog character ceiling",
+        description=(
+            "Max size (characters) of the installed-capabilities catalog block in the "
+            "system prompt. Bounds how much of every turn's prompt the inventory can use; "
+            "overflow is summarized with a visible «(+N more)» note. Raising it toward the "
+            "context budget lets larger installs list every capability."
+        ),
+        category="beceri",
+        env_var="AKANA_SKILL_CATALOG_MAX_CHARS",
+        default=20_000,
+        min=2_000,
+        max=200_000,
+    ),
+    RuntimeSettingSpec(
         key="skill_suggest_timeout_s",
         type="float",
         label="Suggestion search time budget (seconds)",

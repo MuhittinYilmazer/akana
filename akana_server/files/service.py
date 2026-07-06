@@ -95,8 +95,32 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _is_reparse_point(p: Path) -> bool:
+    """True for a Windows directory junction / reparse point.
+
+    ``Path.is_symlink()`` is False for a junction, so is_symlink() alone lets
+    ``_walk`` descend a junction pointing outside the root. os.lstat exposes the
+    reparse flag via ``st_reparse_tag`` (Python 3.8+ on Windows) or the
+    ``FILE_ATTRIBUTE_REPARSE_POINT`` bit in ``st_file_attributes``. On POSIX
+    neither attribute exists, so this is a Windows-only guard.
+    """
+    try:
+        st = p.lstat()
+    except OSError:
+        return False
+    if getattr(st, "st_reparse_tag", 0):
+        return True
+    attrs = getattr(st, "st_file_attributes", 0)
+    return bool(attrs & 0x400)  # FILE_ATTRIBUTE_REPARSE_POINT
+
+
 def _entry_type(p: Path) -> str:
-    if p.is_symlink():
+    # A Windows directory junction has is_symlink()==False + is_dir()==True, so
+    # without this it classifies as "dir" and _walk descends it — enumerating
+    # files that physically live OUTSIDE the allowlist (list_dir does no
+    # per-child _resolve_allowed re-check). Classify any reparse point as
+    # "symlink" so it is reported but never descended, mirroring POSIX symlinks.
+    if p.is_symlink() or _is_reparse_point(p):
         return "symlink"
     if p.is_dir():
         return "dir"
