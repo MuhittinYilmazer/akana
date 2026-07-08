@@ -14,7 +14,9 @@ is a new implementation, not a refactor. Two implementations ship today:
 from __future__ import annotations
 
 import math
+import os
 import zlib
+from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 import httpx
@@ -167,6 +169,22 @@ class OllamaEmbedder:
         return [[float(x) for x in vec] for vec in vectors]
 
 
+def _local_cache_dir() -> str:
+    """Persistent on-disk cache for the fastembed model download.
+
+    fastembed's own default is ``<tempdir>/fastembed_cache`` — on Linux the temp
+    dir is ``/tmp``, which most distros clear on every reboot, so the ~220MB model
+    silently re-downloads on each boot. Anchor it under the XDG cache dir (which
+    survives reboots) instead. ``FASTEMBED_CACHE_PATH`` (the env var fastembed
+    itself honours) still wins as an explicit override.
+    """
+    override = os.environ.get("FASTEMBED_CACHE_PATH")
+    if override:
+        return override
+    base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    return str(Path(base) / "fastembed")
+
+
 class LocalEmbedder:
     """In-process semantic embeddings via fastembed (ONNX) — NO Ollama, NO torch.
 
@@ -198,7 +216,11 @@ class LocalEmbedder:
                     "bare 'pip install' can land in user-site where the server won't see it)"
                 ) from e
             try:
-                self._model = TextEmbedding(model_name=self._model_name)
+                # cache_dir anchors the download under a reboot-persistent path
+                # (fastembed defaults to /tmp on Linux → re-downloads every boot).
+                self._model = TextEmbedding(
+                    model_name=self._model_name, cache_dir=_local_cache_dir()
+                )
             except Exception as e:  # unknown model name / download / ONNX failure
                 raise EmbeddingError(
                     f"fastembed model failed to load ({self._model_name!r}): {e}"
