@@ -436,6 +436,16 @@ def test_voice_frontend_bugfixes_harness() -> None:
     _run_node_harness(REPO_ROOT / "tests/web/voice_frontend_bugfixes.harness.mjs")
 
 
+def test_code_tools_scroll_extent_harness() -> None:
+    """Node-vm contract: the code-copy capsule (.akana-code-tools) must be fully
+    dismissed on conversation switch ([hidden] + cleared top) and born [hidden].
+    User report: after a long chat, a new/other chat stayed scrollable for the OLD
+    chat's full extent — the capsule, absolutely positioned in #log-scroll, was
+    stranded at the old chat's deep `top` (opacity-0 boxes still count toward
+    scrollable overflow) and its Copy button floated over the new chat."""
+    _run_node_harness(REPO_ROOT / "tests/web/code_tools_scroll_extent.harness.mjs")
+
+
 @pytest.mark.parametrize("page", list(EXPECTED_BY_PAGE))
 def test_html_theme_preload_prevents_fouc(page: str) -> None:
     """The saved theme (akana.theme) must be applied via an inline script before the first paint.

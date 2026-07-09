@@ -2007,6 +2007,14 @@ body .log-scroll .akana-code-tools.is-visible {
   pointer-events: auto;
 }
 
+/* Conversation-switch dismiss (akana-shell.js _dismissCodeTools): display:flex above
+   OVERRIDES the UA's [hidden]{display:none} (same trap as .conv-pane) → an explicit
+   rule is REQUIRED. Without it the opacity-0 capsule stranded at the old chat's deep
+   `top` kept inflating the scroller's scroll extent on the new chat. */
+body .log-scroll .akana-code-tools[hidden] {
+  display: none;
+}
+
 /* language badge: mono xs, calm glass pill */
 body .akana-code-tools .akana-code-lang {
   font-family: var(--j-font-mono);

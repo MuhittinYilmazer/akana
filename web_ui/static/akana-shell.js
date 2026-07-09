@@ -959,6 +959,13 @@ const _t = (k, p) => window.AkanaI18n?.t(k, p) ?? k;
   // Language is read from data-lang written by the markdown renderer
   // (akana-markdown.js: <pre class="md-code" data-lang="…">). No #log/#log-scroll
   // in memory.html → silent no-op.
+  // Conversation-switch dismiss hook: the capsule is a SIBLING of #log floating in
+  // #log-scroll (like the msg action bar), so hiding the leaving pane leaves it
+  // stranded at its old absolute `top`. An opacity-0 element still counts toward
+  // scrollable overflow → the NEW chat inherited the OLD chat's scroll extent
+  // (user report: empty chat scrollable as far as the previous long chat).
+  let _dismissCodeTools = null;
+
   function wireCodeCopy() {
     // audit B7: prefer the CONTAINER (#log), NOT hooks.log (= displayed pane)
     // → click-delegate covers all conversation panes (panes are descendants of #log).
@@ -979,6 +986,9 @@ const _t = (k, p) => window.AkanaI18n?.t(k, p) ?? k;
     btn.setAttribute("aria-label", _t("shell.code_copy_aria"));
     tools.appendChild(badge);
     tools.appendChild(btn);
+    // Born [hidden]: display:none until the first hover, so the capsule's box never
+    // pads the scroll extent of a chat it has not been shown in (fresh/empty chats).
+    tools.hidden = true;
     scroller.appendChild(tools);
 
     let currentPre = null;
@@ -997,6 +1007,7 @@ const _t = (k, p) => window.AkanaI18n?.t(k, p) ?? k;
     // so scrollTop is added to top and it stays aligned during scrolling.
     const showFor = (pre) => {
       currentPre = pre;
+      tools.hidden = false; // undo a conversation-switch dismiss
       const pr = pre.getBoundingClientRect();
       const sr = scroller.getBoundingClientRect();
       tools.style.top = `${pr.top - sr.top + scroller.scrollTop + 6}px`;
@@ -1010,6 +1021,18 @@ const _t = (k, p) => window.AkanaI18n?.t(k, p) ?? k;
     const hideTools = () => {
       currentPre = null;
       tools.classList.remove("is-visible");
+    };
+
+    // Full dismiss (conversation switch): hover-out only fades (keeps `top` for the
+    // transition), which is fine WITHIN a chat — the anchor block is part of the
+    // content, so the capsule never exceeds it. Across a switch the old `top` can
+    // point far beyond the new chat's content → also clear the offsets and go
+    // display:none ([hidden]) so the box stops contributing to scroll overflow.
+    _dismissCodeTools = () => {
+      hideTools();
+      tools.hidden = true;
+      tools.style.top = "";
+      tools.style.right = "";
     };
 
     const preFrom = (target) => {
@@ -1088,6 +1111,10 @@ const _t = (k, p) => window.AkanaI18n?.t(k, p) ?? k;
         // pane does not remove them — without this they persist onto the new chat
         // (user report: old chat's speaker/Quote/Copy show up in a fresh chat).
         window.AkanaMsgActionBar?.hide?.();
+        // Same family: the code-copy capsule — stranded at the OLD chat's absolute
+        // `top` it kept the old scroll extent alive (empty chat scrollable for
+        // thousands of px) and floated its Copy button over the new chat.
+        _dismissCodeTools?.();
       }
       return pane;
     },
