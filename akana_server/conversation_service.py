@@ -114,14 +114,23 @@ class ConversationService:
     # -- meta derivation -------------------------------------------------------
 
     def _newest_turn(self, conversation_id: str) -> EpisodicTurn | None:
-        """Fetch the newest turn (for preview + last_message_at) — SINGLE row.
+        """Fetch the newest USER/ASSISTANT turn (for preview + last_message_at) — SINGLE row.
 
         Previously fetched the full conversation (1000 rows) and took ``[-1]``;
         calling this for every sidebar row in ``list_conversations`` caused N×M
-        queries (N+1 problem). Now ``EpisodicStore.newest_turn`` reads exactly 1 row
-        per conversation.
+        queries (N+1 problem). This reads exactly 1 row per conversation.
+
+        Contract: a failed turn (``role="error"``, persisted by ``turn_writer`` so the
+        UI can re-render the error card) must NOT become the conversation's latest-message
+        preview — the write path deliberately does not bump ``updated_at`` for it, so an
+        unfiltered ``newest_turn`` would pin the failure text + timestamp on a row that
+        still sorts by its old activity. Window to user/assistant roles in SQL (same role
+        set as ``recent_llm_messages``) so error/system/tool turns never drive the sidebar.
         """
-        return self._episodic.newest_turn(conversation_id)
+        turns = self._episodic.list_conversation_recent(
+            conversation_id, limit=1, roles=("user", "assistant")
+        )
+        return turns[-1] if turns else None
 
     def _default_title(self) -> str:
         """Localized fallback for an untitled conversation.

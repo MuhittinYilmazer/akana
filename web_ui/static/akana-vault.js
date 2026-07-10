@@ -20,6 +20,7 @@
   const apiBase = () => `${window.AkanaCore.baseUrl()}/api/v1/system/vault`;
 
   let busy = false;
+  let reloadPending = false; // a load() requested while another was in flight — coalesce
 
   const $ = (id) => document.getElementById(id);
 
@@ -129,7 +130,16 @@
 
   async function load() {
     const root = $(ROOT_ID);
-    if (!root || busy) return;
+    if (!root) return;
+    // A load() requested while one is in flight must NOT be dropped: the dropped
+    // request is usually the one carrying post-mutation truth (e.g. the row a
+    // just-confirmed Delete removed), so dropping it re-renders from GETs issued
+    // BEFORE the mutation and resurrects the deleted secret. Coalesce — re-run once
+    // when the current load settles so the freshest server state is the one rendered.
+    if (busy) {
+      reloadPending = true;
+      return;
+    }
     busy = true;
     try {
       const [summary, scalarsResp] = await Promise.all([api("GET", ""), api("GET", "/scalars")]);
@@ -148,6 +158,10 @@
       root.innerHTML = `<p class="field-hint" style="color:var(--danger,#c0392b)">${window.AkanaI18n.t("vault.load_failed", { error: esc(err.message) })}</p>`;
     } finally {
       busy = false;
+    }
+    if (reloadPending) {
+      reloadPending = false;
+      await load();
     }
   }
 

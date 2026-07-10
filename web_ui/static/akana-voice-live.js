@@ -211,6 +211,13 @@
   // for the page lifetime (OS indicator on) with no way to release it short of a reload.
   let _startToken = 0;
   let _muted = false; // Live-mode mic mute (Aurora "Mute" button): gates outbound PCM to the provider
+  // Barge latch: set by interrupt() (client "Stop"). The provider streams the whole turn
+  // faster than realtime and the backend does NOT forward our control frame, so the
+  // interrupted turn's tail audio keeps arriving after the flush → it would re-open playback
+  // and flip the orb back to SPEAKING. While latched, _onServerMessage DROPS incoming
+  // assistant audio (and does not flip state); the next turn boundary (turn_complete/ready)
+  // clears it so the following turn plays normally.
+  let _interruptedUntilTurn = false;
   let _established = false; // whether onopen fired at least once this session (first connect vs reconnect)
   let _attempt = 0; // consumed reconnect attempts (reset only after a STABLE connection)
   let _reconnectTimer = null; // pending setTimeout handle
@@ -257,6 +264,9 @@
   function _onServerMessage(ev) {
     // Binary (ArrayBuffer) = assistant audio → enqueue for playback (transfer).
     if (ev.data instanceof ArrayBuffer) {
+      // Post-barge: drop the interrupted turn's still-in-flight tail (see _interruptedUntilTurn).
+      // Do NOT flip to SPEAKING — that would audibly resume the reply the user just stopped.
+      if (_interruptedUntilTurn) return;
       if (_playbackNode && ev.data.byteLength) {
         _setState("assistant_audio");
         try {
@@ -277,6 +287,7 @@
     if (!msg || typeof msg !== "object") return;
     switch (msg.type) {
       case "ready":
+        _interruptedUntilTurn = false; // turn boundary → next turn's audio may play
         _setState("ready");
         // BUG B3 fix: adopt the server-minted conversation_id so a later reconnect
         // rebuilds the URL with it instead of the stale (often null) _opts value,
@@ -294,6 +305,7 @@
         _setState("interrupt");
         break;
       case "turn_complete":
+        _interruptedUntilTurn = false; // the interrupted turn ended → clear the barge latch
         _setState("turn_complete");
         break;
       default:
@@ -552,6 +564,7 @@
     _established = false;
     _attempt = 0;
     _muted = false; // fresh session starts unmuted
+    _interruptedUntilTurn = false; // fresh session: no pending barge latch
     _startToken += 1; // new session → supersede any in-flight acquire from a prior start/stop
     _clearReconnectTimer();
     // Pick the active voice mode (Gemini Live / OpenAI Realtime) from /voice/config →
@@ -616,6 +629,22 @@
     }
   }
 
+  /** Client-initiated barge (Aurora "Stop" button in Live mode). The turn-based Stop path
+   *  (onConversationBargeIn) touches only SSE/TTS objects Live mode never uses, so live playback
+   *  would keep talking. Mirror the server ``interrupt`` frame client-side: flush the buffered PCM
+   *  (the provider streams the whole turn faster than realtime, so the tail is already queued in
+   *  the playback worklet) and drive the state machine to LISTENING so the orb/accumulators reset.
+   *  No-op when no session is active. */
+  function interrupt() {
+    if (!_active) return;
+    // Latch until the next turn boundary so the interrupted turn's tail audio (already
+    // queued ahead of realtime; the backend ignores our control frame) is dropped instead
+    // of re-opening playback and flipping the orb back to SPEAKING.
+    _interruptedUntilTurn = true;
+    _flushPlayback();
+    _setState("interrupt");
+  }
+
   const api = {
     AUDIO_TAG,
     INPUT_RATE,
@@ -632,6 +661,7 @@
     stop,
     isActive,
     setMuted,
+    interrupt,
   };
   if (typeof window !== "undefined") window.AkanaVoiceLive = api;
   if (typeof globalThis !== "undefined") globalThis.AkanaVoiceLive = api;

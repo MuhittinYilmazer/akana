@@ -351,6 +351,9 @@ window.AkanaI18nStrings = Object.assign(window.AkanaI18nStrings || {}, {
   "memory.back_aria": { en: "Back to chat", tr: "Sohbete dön" },
   "memory.back_label": { en: "← Chat", tr: "← Sohbet" },
   "memory.page_title": { en: "Memory", tr: "Hafıza" },
+  // Browser-tab <title> ONLY — keeps the app name so the tab reads "Memory — Akana"
+  // (the bare memory.page_title above is the in-page h1 heading, without "— Akana").
+  "memory.page_title_tab": { en: "Memory — Akana", tr: "Hafıza — Akana" },
   "memory.page_subtitle": { en: "Command Centre", tr: "Komuta Merkezi" },
   "memory.search_label": { en: "Search memory", tr: "Hafızada ara" },
   "memory.search_ph": { en: "Search all memory…  (Enter → Recall)", tr: "Tüm hafızada ara…  (Enter → Recall)" },

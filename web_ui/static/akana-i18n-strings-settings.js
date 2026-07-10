@@ -651,6 +651,7 @@ window.AkanaI18nStrings = Object.assign(window.AkanaI18nStrings || {}, {
   "persona.status.updated":         { en: "«{name}» updated", tr: "«{name}» güncellendi" },
   "persona.status.created":         { en: "«{name}» created", tr: "«{name}» oluşturuldu" },
   "persona.status.fork_ready":      { en: "copy form filled — edit and Save", tr: "kopya formu dolduruldu — düzenleyip Kaydet" },
+  "persona.fork.name_suffix":       { en: "(copy)", tr: "(kopya)" },
   "persona.status.deleted":         { en: "«{name}» deleted", tr: "«{name}» silindi" },
   "persona.status.activated":       { en: "Default persona set", tr: "varsayılan persona ayarlandı" },
   "persona.status.base_empty":      { en: "core prompt cannot be empty", tr: "çekirdek prompt boş olamaz" },
@@ -731,6 +732,7 @@ window.AkanaI18nStrings = Object.assign(window.AkanaI18nStrings || {}, {
   "pair.modal.copy_title": { en: "Copy link", tr: "Bağlantıyı kopyala" },
   "pair.toast.no_token":   { en: "Set a token first", tr: "Önce token ayarlayın" },
   "pair.toast.no_server_token": { en: "Set an API access token (AKANA_TOKEN) to pair — Settings → Connection", tr: "Eşleştirmek için bir API erişim token'ı (AKANA_TOKEN) ayarlayın — Ayarlar → Bağlantı" },
+  "pair.toast.serve_inactive": { en: "Enable Tailscale Serve to pair — there's no tailnet HTTPS address yet", tr: "Eşleştirmek için Tailscale Serve'i etkinleştirin — henüz tailnet HTTPS adresi yok" },
   "pair.qr.failed": {
     en: "QR could not be generated — copy the link and paste it on your phone manually.",
     tr: "QR oluşturulamadı — bağlantıyı kopyalayıp telefona elle yapıştırın.",

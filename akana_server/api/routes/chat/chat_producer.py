@@ -883,7 +883,11 @@ async def _stream_chat_response(
                 registry.incr("llm_session_bootstrap_retry")
                 context_mode = CONTEXT_MODE_BOOTSTRAP_RETRY
                 await _off_loop(clear_agent_id, request, conv_id)
-                history_msgs, _ = await async_llm_history_and_dropped(request, conv_id)
+                history_msgs, dropped_retry = await async_llm_history_and_dropped(request, conv_id)
+                # dropped_before was captured on the RESUME path (0 by definition); this retry
+                # bootstraps + truncates, so fold the reloaded count in — otherwise the done
+                # event reports dropped_turns=0 (max(0, post-persist 0)) on a truncated turn.
+                dropped_before = max(dropped_before, dropped_retry)
                 # The streaming path persists the user turn BEFORE the LLM (_persist_user_once),
                 # so this reload includes the CURRENT user turn as the last history entry. The
                 # retry re-dispatches it as the live prompt below — without stripping it the

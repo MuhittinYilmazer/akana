@@ -307,7 +307,7 @@
         const p = byId(btn.dataset.id);
         if (!p) return;
         editingId = null; // fork = create NEW persona
-        fillForm({ name: `${p.name} (kopya)`, system_prompt: p.system_prompt, tone: p.tone }, { mode: "create" });
+        fillForm({ name: `${p.name} ${window.AkanaI18n.t("persona.fork.name_suffix")}`, system_prompt: p.system_prompt, tone: p.tone }, { mode: "create" });
         setStatus(window.AkanaI18n.t("persona.status.fork_ready"), false);
       } else if (action === "cancel-edit") {
         resetForm();

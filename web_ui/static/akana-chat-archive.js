@@ -25,6 +25,11 @@
     // rendered again.
     const _deletedConvIds = new Set();
     const _DELETED_CAP = 500;
+    // Pinned/archived state cache from the last FULL (non-search) list load. The
+    // /conversations/search endpoint returns no pinned field, so search rows would
+    // otherwise hardcode pinned:false → an already-pinned chat found via search shows
+    // "Pin" and unpinning becomes impossible. Enrich search rows from this cache.
+    const _convMetaCache = new Map();
     function tombstoneConv(id) {
       const cid = String(id || "").trim();
       if (!cid) return;
@@ -233,11 +238,24 @@
     }
 
     async function deleteConversationApi(convId) {
-      const r = await fetch(`${baseUrl()}/api/v1/conversations/${encodeURIComponent(convId)}`, {
-        method: "DELETE",
-        headers: authHeaders(),
-      });
+      // ROLLBACK CONTRACT: the caller optimistically removeArchiveRow()s BEFORE this
+      // call, which tombstones the id (never rendered again). If the DELETE fails
+      // (network/500) the caller reloads the authoritative list to "bring the row
+      // back" — but the tombstone filter would drop it from every render + search for
+      // the rest of the session. So on ANY failure clear the tombstone here, making
+      // that reload rollback actually possible.
+      let r;
+      try {
+        r = await fetch(`${baseUrl()}/api/v1/conversations/${encodeURIComponent(convId)}`, {
+          method: "DELETE",
+          headers: authHeaders(),
+        });
+      } catch (e) {
+        _deletedConvIds.delete(String(convId || "").trim());
+        throw e;
+      }
       if (r.ok || r.status === 204) return;
+      _deletedConvIds.delete(String(convId || "").trim());
       const err = await r.json().catch(() => ({}));
       throw new Error(parseApiError(err, r.status) || window.AkanaI18n.t("archive.error.delete_failed", { code: r.status }));
     }
@@ -311,25 +329,37 @@
       titleEl.replaceWith(input);
       input.focus();
       input.select();
+      // Single-shot guard: Escape / blur / Enter can all race into finish(). Once it
+      // has run, later events (especially the blur that fires when Escape or a
+      // background list re-render removes focus) must NOT re-save. Escape also detaches
+      // the blur listener so a subsequent focus loss cannot PATCH a title the user
+      // just CANCELLED.
+      let done = false;
+      const onBlur = () => void finish(true);
       const finish = async (save) => {
-        if (save) {
-          const t = input.value.trim();
-          if (t && t !== conv.title) {
-            try {
-              await patchConversationApi(convId, { title: t });
-              bridge.hooks.showToast(window.AkanaI18n.t("archive.toast.title_updated"));
-              if (convId === ctx.conversationIdForMemory()) {
-                activeConversationMeta = { ...activeConversationMeta, title: t };
-                syncChatThreadBar();
-              }
-            } catch (e) {
-              bridge.hooks.showToast(e.message || String(e), "err");
+        if (done) return;
+        done = true;
+        input.removeEventListener("blur", onBlur);
+        const t = input.value.trim();
+        // Restore the title element synchronously BEFORE the reload: the
+        // "skip re-render while a rename input is present" guard in
+        // renderChatArchiveList would otherwise block finish()'s own reload.
+        input.replaceWith(titleEl);
+        if (save && t && t !== conv.title) {
+          try {
+            await patchConversationApi(convId, { title: t });
+            bridge.hooks.showToast(window.AkanaI18n.t("archive.toast.title_updated"));
+            if (convId === ctx.conversationIdForMemory()) {
+              activeConversationMeta = { ...activeConversationMeta, title: t };
+              syncChatThreadBar();
             }
+          } catch (e) {
+            bridge.hooks.showToast(e.message || String(e), "err");
           }
         }
         void loadChatArchiveList();
       };
-      input.addEventListener("blur", () => void finish(true));
+      input.addEventListener("blur", onBlur);
       input.addEventListener("keydown", (e) => {
         if (e.key === "Enter") {
           e.preventDefault();
@@ -396,6 +426,11 @@
           makeArchiveActionBtn(c.pinned ? window.AkanaI18n.t("archive.btn.unpin") : window.AkanaI18n.t("archive.btn.pin"), "pin", async () => {
             try {
               await patchConversationApi(c.id, { pinned: !c.pinned });
+              // Keep the pinned cache in sync so the reload's search-row re-enrichment
+              // reflects the NEW state. Toggling pin from a search result re-runs the
+              // search branch, which reads pinned from _convMetaCache — a stale entry would
+              // leave the pin action dead (stuck on the old label) while a query is active.
+              _convMetaCache.set(String(c.id), { pinned: !c.pinned });
               bridge.hooks.showToast(c.pinned ? window.AkanaI18n.t("archive.toast.unpinned") : window.AkanaI18n.t("archive.toast.pinned"));
               void loadChatArchiveList();
               if (c.id === ctx.conversationIdForMemory()) void refreshActiveConversationMeta();
@@ -519,6 +554,12 @@
     function renderChatArchiveList(items, opts = {}) {
       const list = document.getElementById("chat-archive-list");
       if (!list) return;
+      // Do NOT destroy an in-progress inline rename. Background/automatic re-renders
+      // (post-turn refresh, ws:conversation_updated titler broadcasts) would wipe the
+      // focused rename input via `list.innerHTML = ""` — and removing a focused input
+      // fires no blur in Chrome, so the mid-typing edit vanishes with no save. Skip;
+      // the reload after the rename finishes (which restores the title first) re-renders.
+      if (list.querySelector(".chat-archive-rename-input")) return;
       // Preserve scroll position during re-render: clicking a chat or a background
       // refresh must not jump the list to the top. Use opts.preserveScroll if provided
       // (the value captured BEFORE loadChatArchiveList's "Loading…" placeholder);
@@ -671,7 +712,12 @@
       }
       const q = (document.getElementById("chat-archive-search")?.value || "").trim();
       try {
-        if (q.length >= 2) {
+        // The search endpoint (WHERE archived = 0) only ever returns ACTIVE rows, so in
+        // the ARCHIVED view a server search would always come back empty and the view
+        // filter would drop everything → "no results" for a chat that IS visible when the
+        // query is cleared. Skip it: fall through to the archived listing and let the
+        // client-side hay filter in renderChatArchiveList match archived rows.
+        if (q.length >= 2 && chatArchiveView !== "archived") {
           const sr = await fetch(
             `${baseUrl()}/api/v1/conversations/search?q=${encodeURIComponent(q)}&limit=40`,
             { headers: authHeaders() },
@@ -680,16 +726,21 @@
           if (sr.ok) {
             const data = await sr.json();
             if (myGen !== _archiveListGen) return;
-            chatArchiveItems = (data.results || []).map((r) => ({
-              id: r.conversation_id,
-              title: r.title,
-              preview: r.preview,
-              pinned: false,
-              archived_at: null,
-              message_count: null,
-              last_message_at: null,
-              updated_at: null,
-            }));
+            chatArchiveItems = (data.results || []).map((r) => {
+              // Enrich pinned from the last full load: the endpoint omits it, so a
+              // hardcoded false would strand the pin action on "Pin" (unpin impossible).
+              const cached = _convMetaCache.get(String(r.conversation_id)) || {};
+              return {
+                id: r.conversation_id,
+                title: r.title,
+                preview: r.preview,
+                pinned: Boolean(cached.pinned),
+                archived_at: null,
+                message_count: null,
+                last_message_at: null,
+                updated_at: null,
+              };
+            });
             renderChatArchiveList(chatArchiveItems, { preserveScroll: savedScrollTop });
             void refreshKnownArchiveActivity();
             return;
@@ -712,6 +763,10 @@
         const data = await r.json();
         if (myGen !== _archiveListGen) return;
         chatArchiveItems = data.conversations || [];
+        // Remember pinned state so a later search (which loses it) can re-enrich rows.
+        for (const c of chatArchiveItems) {
+          if (c && c.id) _convMetaCache.set(String(c.id), { pinned: Boolean(c.pinned) });
+        }
         renderChatArchiveList(chatArchiveItems, { preserveScroll: savedScrollTop });
         void refreshKnownArchiveActivity();
       } catch {

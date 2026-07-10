@@ -24,6 +24,11 @@
   let phase = "preparing";
   let toolLabel = "";
   let timer = null;
+  // The conversation this retained clock/phase belongs to. The strip is a global
+  // singleton but two conversations can stream concurrently; recording the id lets
+  // resume() refuse to attribute another conversation's elapsed/phase to the one now
+  // displayed (see resume()). null = unbound (new-chat before adoption / no turn).
+  let turnConvId = null;
 
   function formatElapsed(ms) {
     const totalSec = Math.max(0, Math.floor(ms / 1000));
@@ -69,12 +74,36 @@
     form.insertBefore(strip, inner || null);
   }
 
-  function begin() {
+  function begin(convId) {
     mount();
     active = true;
     startedAt = Date.now();
     phase = "preparing";
     toolLabel = "";
+    turnConvId = convId || null;
+    paint();
+    if (timer == null) timer = window.setInterval(paint, 1000);
+  }
+
+  // Re-attach the strip to an ALREADY-RUNNING turn (conversation switch-back) WITHOUT
+  // restarting the clock or reverting the phase — begin() would reset startedAt to now
+  // ("Preparing · 0:00") and lose the true elapsed of the in-flight turn.
+  // CONV-SCOPED: the retained clock/phase belongs to whatever conversation called begin()
+  // LAST. With two concurrent streams (A then B) the snapshot is B's; resuming A must NOT
+  // show B's elapsed/tool label. When the requested id does not match the retained one,
+  // fall back to begin() semantics (fresh clock, generic phase). Also start fresh if no
+  // turn time is retained. A null id (legacy caller / pre-adoption) skips the check.
+  function resume(convId) {
+    mount();
+    active = true;
+    const wantId = convId || null;
+    const mismatch = wantId !== null && turnConvId !== null && wantId !== turnConvId;
+    if (mismatch || !startedAt) {
+      startedAt = Date.now();
+      phase = "preparing";
+      toolLabel = "";
+      turnConvId = wantId;
+    }
     paint();
     if (timer == null) timer = window.setInterval(paint, 1000);
   }
@@ -89,8 +118,9 @@
       strip.hidden = true;
       if (stripLabel) stripLabel.textContent = "";
     }
-    phase = "preparing";
-    toolLabel = "";
+    // startedAt/phase/toolLabel/turnConvId are RETAINED (not reset) so a later resume() —
+    // switching BACK to a conversation whose turn is still running — can restore the real
+    // elapsed + phase (and verify the id matches). The next begin() overwrites them.
   }
 
   function setPhase(next, detail) {
@@ -105,7 +135,7 @@
     return active;
   }
 
-  window.AkanaTurnStatus = { mount, begin, end, setPhase, isActive };
+  window.AkanaTurnStatus = { mount, begin, resume, end, setPhase, isActive };
 
   if (typeof document !== "undefined") {
     if (document.readyState === "loading") {

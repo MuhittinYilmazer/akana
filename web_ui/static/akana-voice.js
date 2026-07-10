@@ -3587,9 +3587,17 @@
     // speaking) and return to listening WITHOUT exiting conversation mode. Same mechanism as a
     // spoken barge-in (cut TTS + abort chat + cancel the server turn + re-arm capture), just
     // user-initiated by tap. No-op if already listening (onConversationBargeIn guards isCapturing).
+    // Live (Gemini/OpenAI realtime) mode uses NONE of the turn-based objects onConversationBargeIn
+    // touches (its re-arm dead-ends at startConversationCapture's `if (voice.liveActive) return`),
+    // so route Stop to the live barge instead — flush the buffered PCM + reset the orb — mirroring
+    // the voice:mic:mute handler's own liveActive branch.
     try {
       window.AkanaBus?.on?.("voice:turn:stop", () => {
         if (!voice.conversationMode) return;
+        if (voice.liveActive) {
+          try { window.AkanaVoiceLive?.interrupt?.(); } catch { /* ignore */ }
+          return;
+        }
         try { onConversationBargeIn(); } catch { /* ignore */ }
       });
     } catch {

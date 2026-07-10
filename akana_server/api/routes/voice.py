@@ -27,6 +27,7 @@ from akana_server.api.routes.chat import (
     run_nonstreaming_turn,
 )
 from akana_server.api.routes.chat._base import _off_loop
+from akana_server.api.routes.chat.chat_producer import _tool_only_summary
 from akana_server.api.services import AppServices, get_services
 from akana_server.chat_context import (
     async_llm_history_for_assemble,
@@ -865,14 +866,24 @@ async def post_voice(
             await _off_loop(_mirror_cursor_agent_meta, request, conv_id, outcome.agent_id)
     text = outcome.text
     usage = outcome.usage
-    tool_calls_resp = outcome.tool_calls
+    tool_calls_resp = [c for c in outcome.tool_calls if isinstance(c, dict)]
 
     llm_latency_ms = int((time.perf_counter() - t0) * 1000)
-    # Persist AFTER the LLM SUCCEEDS: the user + assistant turns are written
-    # TOGETHER, only if there's a real response. On an LLM error/empty response
-    # neither is written → a half pair (orphan) is structurally impossible.
+    # Persist AFTER the LLM SUCCEEDS: the user + assistant turns are written TOGETHER,
+    # only if there's a real response OR the turn ran tools. On an LLM error /
+    # empty-and-toolless response neither is written → a half pair (orphan) is
+    # structurally impossible.
+    #
+    # tool_calls MUST ride on the persisted assistant turn → a /messages reload returns
+    # the tool cards (they were dropped before, so the cards vanished on reload). A
+    # tool-only turn (tools ran, empty final text) still persists BOTH turns with a
+    # placeholder body — mirror the streaming producer (_tool_only_summary); otherwise
+    # the whole exchange (transcript + tools) is silently dropped from the archive.
+    assistant_body = text if text.strip() else (
+        _tool_only_summary(tool_calls_resp) if tool_calls_resp else ""
+    )
     user_turn_id: str | None = None
-    if text.strip():
+    if assistant_body:
         user_turn_id = await _off_loop(
             persist_user_turn,
             conversation_id=conv_id,
@@ -887,11 +898,12 @@ async def post_voice(
         await _off_loop(
             persist_assistant_turn,
             conversation_id=conv_id,
-            assistant_text=text,
+            assistant_text=assistant_body,
             user_turn_id=user_turn_id,
             lang=stt_lang,
             latency_ms=llm_latency_ms,
             intent=intent,
+            tool_calls=tool_calls_resp or None,
             data_dir=settings.data_dir,
         )
     if isinstance(conv_svc, ConversationService):

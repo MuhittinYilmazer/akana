@@ -224,6 +224,11 @@
       updateInboxCount(items.length);
       list.innerHTML = "";
       if (!items.length) {
+        // The empty-state action button (render.setListState reads ds.emptyActionLabel)
+        // is NOT a data-i18n node, so the i18n engine never localizes it — resolve the
+        // data-i18n-empty-action-label key here so it follows the active language.
+        const actionKey = list.dataset.i18nEmptyActionLabel;
+        if (actionKey) list.dataset.emptyActionLabel = t(actionKey);
         ui().setListState(list, "empty", t("memory.inbox_empty_msg"));
         return;
       }
@@ -407,7 +412,10 @@
   function gotoFactsPage(delta) {
     const next = factsOffset + delta * FACTS_PAGE_SIZE;
     factsOffset = Math.max(0, next);
-    void loadFacts();
+    // Paging is an explicit user action that replaces the list — force past the
+    // dirty-editor guard (loadFacts:358) so the mutated offset above is actually
+    // applied and the pager re-rendered (otherwise offset drifts while the page stays put).
+    void loadFacts({ force: true });
     // Scroll the studio's own scroll container (not the list) so the header +
     // search box stay visible; the sticky pager keeps Prev/Next reachable.
     const scroller = $("memory-facts-list")?.closest(".mem-content");
@@ -459,7 +467,10 @@
     try {
       await api().deleteFact(f.id, { hard: false });
       showToast(t("memory.toast_deleted"), "success");
-      await loadFacts();
+      // Explicit delete → force past the dirty-editor guard so the deleted (now
+      // invalidated) fact's card + its stale editor are actually removed; an unforced
+      // reload would skip while any editor is dirty, leaving a Save that 409s.
+      await loadFacts({ force: true });
       void loadStats();
     } catch (e) {
       showToast(t("memory.toast_delete_failed", { err: e.message || e }), "err");
@@ -502,7 +513,9 @@
       setStatus("memory-fact-status", t("memory.status_saved"), false);
       showToast(t("memory.toast_fact_saved"), "success");
       resetNewFactForm();
-      await loadFacts();
+      // Explicit submit → force past the dirty-editor guard so the new fact appears
+      // even when another fact's editor is open with unsaved changes.
+      await loadFacts({ force: true });
       void loadStats();
     } catch (e) {
       setStatus("memory-fact-status", `${t("memory.toast_update_failed", { err: e.message || e })}`, true);
@@ -582,9 +595,16 @@
       session_summary: !!$("memory-session-summary")?.checked,
       vector: $("memory-vector-mode")?.value || "auto",
       embed_backend: $("memory-embed-backend")?.value || "local",
-      ollama_url: ($("memory-ollama-url")?.value || "").trim(),
-      embed_model: ($("memory-embed-model")?.value || "").trim(),
     };
+    // Omit-to-keep (the auto_capture convention): the server merges partially and
+    // treats a missing field as "leave unchanged" — but it silently DROPS an empty
+    // string (put_settings only applies non-empty ollama_url/embed_model). Sending ""
+    // therefore looked like a clear but reverted on the next load. Match the documented
+    // contract: send the value only when non-empty, never a misleading "".
+    const ollamaUrl = ($("memory-ollama-url")?.value || "").trim();
+    if (ollamaUrl) body.ollama_url = ollamaUrl;
+    const embedModel = ($("memory-embed-model")?.value || "").trim();
+    if (embedModel) body.embed_model = embedModel;
     setStatus("memory-settings-status", t("memory.status_saving"), false);
     try {
       await api().putSettings(body);
@@ -820,7 +840,11 @@
     applyMemoryStudioRouteFromUrl,
     captureChatMessageToMemory,
     // Test-only seam: the facts reload path + its unsaved-editor guard, driven directly
-    // by tests/web/memory_facts_editor_guard.harness.mjs without wiring the whole Studio.
-    _test: { loadFacts, openFactEditor, hasDirtyFactEditor },
+    // by tests/web/*.harness.mjs without wiring the whole Studio.
+    _test: {
+      loadFacts, openFactEditor, hasDirtyFactEditor,
+      deleteFact, saveNewFact, gotoFactsPage,
+      loadInbox, resolveAllInbox, saveSettings,
+    },
   };
 })();

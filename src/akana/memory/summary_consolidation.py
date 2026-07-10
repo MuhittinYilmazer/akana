@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 
 from akana.memory._time import iso_now
 from akana.memory.staging import FactCandidate, StagedFact
+from akana.memory.terms import fold_text
 
 if TYPE_CHECKING:
     from akana.memory import Memory
@@ -50,9 +51,9 @@ _STOP_WORDS = frozenset(
         "the", "and", "for", "are", "was", "were", "with", "that", "this", "from",
         "user", "akana", "will", "have", "has", "had", "not", "but", "you", "your",
         "about", "into", "than", "then", "they", "their", "what", "when", "session",
-        # tr (folded)
-        "ve", "ile", "icin", "bir", "bu", "su", "da", "de", "ki", "mi", "ama", "veya",
-        "kullanici", "var", "yok", "cok", "daha", "gibi", "ya",
+        # tr (fold_text-normalized; Turkish chars preserved — matches _tokens' fold_text)
+        "ve", "ile", "için", "bir", "bu", "şu", "da", "de", "ki", "mi", "ama", "veya",
+        "kullanıcı", "var", "yok", "çok", "daha", "gibi", "ya",
     }
 )
 
@@ -104,10 +105,16 @@ def _iso_now() -> str:
 
 
 def _tokens(text: str) -> set[str]:
-    """Lower-cased alphanumeric topical tokens (>=3 chars, stop-words dropped)."""
+    """Turkish-folded alphanumeric topical tokens (>=3 chars, stop-words dropped).
+
+    Uses ``fold_text`` (not bare ``lower()``) so Turkish tokens match the folded
+    ``_STOP_WORDS`` — plain ``lower()`` leaves 'için'/'çok'/'kullanıcı' unfolded (they
+    would never match the stop set and falsely group unrelated summaries) and splits
+    'İstanbul' on the combining dot 'İ'.lower() emits (missing legitimate overlaps).
+    """
     out: set[str] = set()
     word = []
-    for ch in text.lower():
+    for ch in fold_text(text):
         if ch.isalnum():
             word.append(ch)
         elif word:

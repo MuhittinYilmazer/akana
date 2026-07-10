@@ -260,7 +260,11 @@
     // but if the strip persists it stays stuck on "Thinking" forever in the visible (idle) chat.
     try {
       if (active) {
-        if (!window.AkanaTurnStatus?.isActive?.()) window.AkanaTurnStatus?.begin?.();
+        // resume() (NOT begin()) — switching BACK to a conversation whose turn is still
+        // running must preserve the true elapsed/phase; begin() would restart it at 0:00.
+        // Pass the displayed conv id so resume() refuses to attribute a concurrent turn's
+        // clock/phase to this conversation (falls back to a fresh clock on a mismatch).
+        if (!window.AkanaTurnStatus?.isActive?.()) window.AkanaTurnStatus?.resume?.(convId);
       } else {
         window.AkanaTurnStatus?.end?.();
       }
@@ -1316,6 +1320,10 @@
     // below and the wire payload must use the identical set. Previously the echo snapshotted them
     // here (map) while the wire consumed them LATE inside chatPayload (after the network await in
     // streamChat) → the two could diverge and an attachment bled across the send window.
+    // Snapshot the attachment objects BEFORE consume (which revokes previews + clears the
+    // strip) → on a PRE-stream failure the turn never persisted, so restore them to the
+    // composer instead of silently dropping the files from a Retry/re-send (fe-chat-core-5).
+    const _sentAttachments = pendingAttachments.slice();
     const sentFileIds = consumePendingFileIds();
     const userRow = hooks.appendUserMessage(text, sentFileIds);
     // On send, scroll the new user message to the TOP of the viewport → the response
@@ -1337,16 +1345,23 @@
       hooks.resizeComposer();
     }
     // The conversation for THIS turn (used by the safety timer + finally). May be empty
-    // on a new conversation → in that case foreground plan = this turn (fine).
+    // on a new conversation → the thread active at send gets its id bound by
+    // ensureConversationIdReady during the turn, so capture the THREAD too and re-read its
+    // conversationId when the timer fires (survives a mid-turn conversation switch).
     const turnConvId = conversationIdForMemory();
+    let turnThread = null;
+    try { turnThread = chatActiveThread(); } catch { /* threads seam may not expose it */ }
     const safetyTimer = window.setTimeout(
       () => {
-        // CROSS-CONVERSATION GUARD: abort THIS TURN's stream (NOT the foreground plan).
-        // Previously abortActiveChatStream() aborted the foreground plan → A's 10-min safety
-        // timer would KILL B's (the currently displayed conversation's) live stream.
-        // Correct the composer to the displayed conversation's actual state.
+        // CROSS-CONVERSATION GUARD: abort THIS TURN's own stream (NOT the foreground plan).
+        // For a brand-new chat turnConvId was "" at capture time; passing undefined makes
+        // transport fall back to the FOREGROUND (currently displayed) conversation →
+        // A's 10-min safety timer would KILL B's live stream. Resolve this turn's real id
+        // from its own thread and NEVER pass undefined; if still unknown, abort nothing.
+        const ownConvId = turnConvId || turnThread?.conversationId || "";
+        if (!ownConvId) return;
         try {
-          abortActiveChatStream(turnConvId || undefined);
+          abortActiveChatStream(ownConvId);
         } catch {
           /* ignore */
         }
@@ -1409,6 +1424,26 @@
         const errRecord = { kind: "error", text: errText, userText: text };
         if (!turnConvId || !ensureThreads().recordErrorForConversation?.(turnConvId, errRecord)) {
           chatRecordMessage(errRecord);
+        }
+        // fe-chat-core-5: a PRE-stream failure (409 TURN_BUSY / 503 / network before the SSE
+        // opened → !errorCardShown) never persisted the turn, so return the consumed
+        // attachments to the composer — otherwise the error card's text-only Retry (and a
+        // manual re-send) silently drops the file_ids and the image just vanishes. Only when
+        // this turn is the displayed conversation (the composer is shared) and not a voice turn.
+        if (
+          !voiceTurn &&
+          !err?.errorCardShown &&
+          turnIsDisplayed &&
+          _sentAttachments.length &&
+          !pendingAttachments.length
+        ) {
+          for (const a of _sentAttachments) a.previewUrl = ""; // preview URL was revoked on consume
+          pendingAttachments = _sentAttachments;
+          try {
+            renderAttachmentChips();
+          } catch {
+            /* ignore */
+          }
         }
         hooks.setOrb("err");
         // VOICE LATCH SAFETY: in voiceTurn, a PRE-stream HTTP error (409 TURN_BUSY / 503)
@@ -1597,6 +1632,12 @@
     onBackgroundTurnCompleted,
     setQueueDepth,
     setThinkingProvider,
+    // Test-only seam (node-vm contract harness): seed/read the composer's pending
+    // attachments so the pre-stream-failure restore path (fe-chat-core-5) is drivable.
+    _test: {
+      seedPendingAttachment: (att) => { pendingAttachments.push(att); },
+      getPendingAttachments: () => pendingAttachments.slice(),
+    },
   };
 })();
 
@@ -2019,12 +2060,19 @@
 
     /** Show ✓ feedback on the button (1.2 s). */
     function flashOk(btn, ok) {
-      const orig = btn.textContent;
+      // Reentrancy guard: a second click within the 1.2s window must NOT capture the
+      // transient "✓"/"×" glyph as the "original" label (that leaves the button stuck on
+      // "✓" for the page lifetime — the bar's Copy/Quote buttons are created once). Persist
+      // the TRUE label once in dataset, and clear the previous restore timer before re-flashing.
+      if (btn.dataset.flashOrig == null) btn.dataset.flashOrig = btn.textContent;
+      if (btn._flashTimer) window.clearTimeout(btn._flashTimer);
       btn.textContent = ok ? "✓" : "×";
       btn.classList.add(ok ? "is-ok" : "is-err");
-      window.setTimeout(() => {
-        btn.textContent = orig;
+      btn._flashTimer = window.setTimeout(() => {
+        btn.textContent = btn.dataset.flashOrig;
         btn.classList.remove("is-ok", "is-err");
+        delete btn.dataset.flashOrig;
+        btn._flashTimer = null;
       }, 1200);
     }
 
@@ -2081,7 +2129,9 @@
     // the new chat. Without this, hovering a message in chat A then pressing Alt+N
     // (or switching chats) bled A's speaker/Quote/Copy controls onto the new chat
     // (user report).
-    window.AkanaMsgActionBar = { hide: hideBar };
+    // _flashOk: test-only seam (node-vm contract harness) for the reentrancy-guarded button
+    // feedback flash (fe-chat-core-6) — flashOk is a closure with no other reachable caller.
+    window.AkanaMsgActionBar = { hide: hideBar, _flashOk: flashOk };
 
     window.AkanaTurnStatus?.mount?.();
   }

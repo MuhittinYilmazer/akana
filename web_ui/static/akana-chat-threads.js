@@ -83,6 +83,19 @@
     let _switchGen = 0;
     let conversationId = sessionStorage.getItem("akana.conversationId") || null;
 
+    // Supersede any in-flight switchChatConversation. switchChatConversation sets
+    // chatPersistPaused(true) + beginLogHydrate() (logEmpty.dataset.loading="1") and only
+    // resets them in its finally WHEN it is still the most recent switch (myGen===_switchGen).
+    // When a new-chat / delete / archive / server-action supersedes it, that stale finally is
+    // skipped → chatPersistPaused stays true (chatRecordMessage/recordPendingUserMessage drop
+    // saves) and logEmpty stays "loading" (AkanaShell.updateEmptyState hides the hero). The
+    // superseding op must therefore OWN the reset.
+    function staleInFlightSwitch() {
+      _switchGen += 1;
+      try { setChatPersistPaused(false); } catch { /* ignore */ }
+      try { bridge.hooks.setLogLoading?.(false); } catch { /* ignore */ }
+    }
+
     // ── Archive/meta refresh storm shield ─────────────────────────────────────
     // setConversationId used to trigger loadChatArchiveList + refreshActive
     // ConversationMeta on every call; called multiple times within a turn this
@@ -178,11 +191,29 @@
           thread.conversationId = null;
           thread.messages = [];
           saveChatStore();
-          setConversationId(null);
-          // A2: as in the switch-failure path — leaving the foreground gate null lets a lone
-          // background stream be treated as foreground and rebind the active thread on `done`.
-          // Park the gate on the sentinel instead (matches the new-chat path).
-          try { bridge.setForegroundConversation?.(EMPTY_THREAD_FOREGROUND); } catch { /* ignore */ }
+          // STALE-SWITCH GUARD: this 404 may resolve AFTER a rapid second switch moved the
+          // active/displayed conversation to a DIFFERENT thread. The global setConversationId
+          // (→ syncThreadConversationId nulls whatever thread is active NOW) + foreground
+          // parking would then clobber the NEWER conversation's state (it loses its conv id →
+          // the next send forks a new server conv; its composer/STOP gate is wedged on the
+          // sentinel). Only run the GLOBAL destruction when this hydrate's target is still the
+          // active thread; otherwise scope the mutation to the (dead) target thread above.
+          if (!targetThread || targetThread === chatActiveThread()) {
+            setConversationId(null);
+            // A2: as in the switch-failure path — leaving the foreground gate null lets a lone
+            // background stream be treated as foreground and rebind the active thread on `done`.
+            // Park the gate on the sentinel instead (matches the new-chat path).
+            try { bridge.setForegroundConversation?.(EMPTY_THREAD_FOREGROUND); } catch { /* ignore */ }
+          }
+          return false;
+        }
+        // TRANSIENT-ERROR SHIELD: transport returns { status, turns: [] } for ANY non-ok
+        // non-404 response (5xx/401/…) WITHOUT throwing — indistinguishable from an
+        // authoritative empty conversation. Merging that empty array wipes every confirmed
+        // message and saveChatStore()s the wipe (switch success branch then renders a blank
+        // chat). Treat a non-2xx (non-404) status as a fetch failure and bail — keep local.
+        if (typeof status === "number" && (status < 200 || status >= 300)) {
+          void metaP?.catch?.(() => {});
           return false;
         }
         const thread = targetThread || chatActiveThread() || ensureChatThread(chatProfile());
@@ -242,6 +273,11 @@
       try {
         const { status, turns } = await bridge.fetchConversationTurns(convId);
         if (status === 404) return false;
+        // TRANSIENT-ERROR SHIELD (see chatHydrateFromServer): a non-2xx (non-404) status
+        // carries turns:[] with no throw — a transient 5xx/401 must NOT be treated as an
+        // empty conversation, otherwise this fire-and-forget post-turn sync flushes an empty
+        // wipe to localStorage (blank chat on the next paint). Bail — keep the local cache.
+        if (typeof status === "number" && (status < 200 || status >= 300)) return false;
         // This sync must write to the thread BELONGING to `convId`. Callers are
         // fire-and-forget (end of streamChat/resume) — the user may have switched to
         // another chat during the fetch await. Blindly overwriting the active thread
@@ -316,6 +352,10 @@
       if (!convId || !bridge.hooks.log) return false;
       const { status, turns } = await bridge.fetchConversationTurns(convId);
       if (status === 404) return false;
+      // TRANSIENT-ERROR SHIELD (see chatHydrateFromServer): a non-2xx (non-404) status
+      // carries turns:[] with no throw. Rebuilding the log from that empty array would wipe
+      // the visible history on a transient 5xx/401. Bail — keep what is displayed.
+      if (typeof status === "number" && (status < 200 || status >= 300)) return false;
       const thread = chatActiveThread();
       // Stale-reload guard: if the user switched to ANOTHER chat during the fetch
       // await (active thread is now bound to a different conversation), convId is
@@ -354,7 +394,7 @@
 
     async function deleteConversationById(convId, opts = {}) {
       const { confirm = true, quiet = false } = opts;
-      _switchGen += 1; // stale any in-flight conversation switch (don't let it clobber the new thread)
+      staleInFlightSwitch(); // stale any in-flight conversation switch (+ own its persist/loading reset)
       convId = resolveConversationId(convId);
       if (!convId) {
         if (!isEmptyChatSurface()) {
@@ -435,7 +475,7 @@
 
     async function archiveConversationById(convId, opts = {}) {
       const { quiet = false } = opts;
-      _switchGen += 1; // stale any in-flight conversation switch (don't let it clobber the new thread)
+      staleInFlightSwitch(); // stale any in-flight conversation switch (+ own its persist/loading reset)
       convId = resolveConversationId(convId);
       if (!convId) return false;
       // Is the archived chat the DISPLAYED one? Determine BEFORE the mutation:
@@ -484,6 +524,7 @@
     }
 
     function setConversationId(id) {
+      const _prevConvId = conversationId;
       conversationId = id || null;
       if (id) sessionStorage.setItem("akana.conversationId", id);
       else sessionStorage.removeItem("akana.conversationId");
@@ -511,6 +552,19 @@
       // fixes "highlight for the chat I selected is buggy". Full reload arrives
       // later with the same value, keeping things consistent.
       archive.setActiveConversationHighlight?.(id || null);
+      // Chat-context change signal (documented in akana-bus.js). The mobile bottom-tab
+      // strip listens for this to return its highlight to the Chat tab when the user
+      // switches/creates/deletes a conversation (e.g. from the Settings tab via the archive
+      // drawer). Emit only when LEAVING a REAL conversation: an id→other-id switch or an
+      // id→null new-chat/delete. A null→id transition (mid-turn server-id ADOPTION, or the
+      // first open from an empty surface) must NOT fire — it would yank the highlight back
+      // to Chat while the user sits on another tab. Also skip when the id is unchanged
+      // (adopt/eager-create call setConversationId with the same id).
+      if (_prevConvId && (id || null) !== _prevConvId) {
+        try {
+          window.AkanaBus?.emit?.("chat:conversation:changed", { conversationId: id || null, source: "threads" });
+        } catch { /* ignore */ }
+      }
     }
 
     async function switchChatConversation(convId) {
@@ -792,7 +846,7 @@
       // when that switch's hydrate await returns (myGen===_switchGen passes), the OLD
       // conv's messages would be injected into this NEW thread's log and conv_id would
       // be bound incorrectly (user report: "old messages in new chat + next message goes to wrong conv").
-      _switchGen += 1;
+      staleInFlightSwitch(); // + own the superseded switch's persist-pause / log-loading reset
       // CONNECTION-LIMIT FIX: capture the leaving (displayed) chat BEFORE switching to
       // the new empty chat → release its stream AFTER returning to the sentinel
       // (symmetric with switchChatConversation; held POST must not exhaust the pool).
@@ -954,7 +1008,7 @@
     /** Sync UI after server NL commands (`action` on chat / stream done). */
     async function applyChatServerAction(action, payload, opts = {}) {
       if (!action || !payload) return;
-      _switchGen += 1; // stale any in-flight conversation switch (don't clobber the thread setup)
+      staleInFlightSwitch(); // stale any in-flight conversation switch (+ own its persist/loading reset)
       const newId = payload.conversation_id;
       const oldId = opts.priorConversationId || conversationIdForMemory();
       if (action === "conversation_new" && newId) {

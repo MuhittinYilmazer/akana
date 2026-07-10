@@ -1860,11 +1860,14 @@
   }
 
   // ─── Runtime settings (schema → form; backend is the single source of truth) ──
-  const RUNTIME_SOURCE_LABELS = {
-    runtime: t("settings.runtime.source.setting"),
-    env: t("settings.runtime.source.env"),
-    default: t("settings.runtime.source.default"),
-  };
+  // Resolve FRESH per render: a module-scope constant captured through t() at
+  // script-eval time keeps the boot language even after a live language flip (boot
+  // reconcile / another device), leaving the source badges in the stale language.
+  const RUNTIME_SOURCE_KEYS = { runtime: "setting", env: "env", default: "default" };
+  const runtimeSourceLabel = (source) =>
+    RUNTIME_SOURCE_KEYS[source]
+      ? t("settings.runtime.source." + RUNTIME_SOURCE_KEYS[source])
+      : String(source || "?");
   let runtimePayload = null;
 
   function runtimeInputDescriptor(item) {
@@ -1918,7 +1921,7 @@
             unit: loc("runtime.unit." + (s.unit || ""), String(s.unit || "")),
             envVar: String(s.env_var || ""),
             source: String(s.source || "default"),
-            sourceLabel: RUNTIME_SOURCE_LABELS[s.source] || String(s.source || "?"),
+            sourceLabel: runtimeSourceLabel(s.source),
             restartRequired: !!s.restart_required,
             input: runtimeInputDescriptor(s),
           })),
@@ -2664,9 +2667,13 @@
     if (ok) void tgScan();
   }
 
-  function persistAndReconnect() {
+  function persistConnectionLocal() {
     if (baseUrlInput) localStorage.setItem(LS_BASE, baseUrlInput.value.trim());
     if (tokenInput) localStorage.setItem(LS_TOKEN, tokenInput.value.trim());
+  }
+
+  function persistAndReconnect() {
+    persistConnectionLocal();
     clearTimeout(reconnectTimer);
     resetWsReconnectBackoff();
     reconnectTimer = setTimeout(() => {
@@ -2676,7 +2683,13 @@
   }
 
   async function persistAllSettings() {
-    persistAndReconnect();
+    // Fired on visibilitychange-hidden (every tab switch / screen-off). base-url and
+    // token already persist on their own input events, and a healthy /ws/events socket
+    // survives backgrounding — so do NOT force a reconnect here: connectWs(true) would
+    // tear down the open socket and drop broadcasts arriving in the close→handshake gap,
+    // and resetWsReconnectBackoff() would defeat the exponential backoff on every hide.
+    // Persist locally only.
+    persistConnectionLocal();
     try {
       await window.AkanaVoice.persistVoiceSettings();
     } catch {
@@ -3491,6 +3504,9 @@
     _handleWsEvent: handleWsEvent,
     /** testability: schema → form model PURE function (harness contract) */
     _runtimeFormModel: buildRuntimeFormModel,
+    /** testability: the input-driven reconnect path (distinct from the tab-hide
+     *  flush, which must persist WITHOUT reconnecting — harness contract) */
+    _persistAndReconnect: persistAndReconnect,
     get serverApiMarker() {
       return serverApiMarker;
     },
