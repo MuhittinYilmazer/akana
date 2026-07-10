@@ -217,6 +217,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = apply_runtime_overrides(settings)
     bind_runtime_data_dir(settings.data_dir)
     app.state.settings = settings
+    # The app object is a reusable singleton (module-level ``app = create_app()``) and the
+    # codebase supports repeated lifespans on the same app. Reset the shutdown flag on EVERY
+    # startup: the previous lifespan's finally set it True, and a stale True permanently makes
+    # _maybe_drain_queue / the turn-finish drain early-return → a 202-queued message never drains.
+    app.state.chat_shutting_down = False
     # MCP self-check (best-effort, non-blocking): spawn the built-in MCP servers once
     # and log whether they handshake, so server.log answers "is memory connected?" at
     # boot. Skipped under pytest (no subprocess spawns in the suite); disable with

@@ -37,12 +37,72 @@ def _port_free(host: str, port: int) -> bool:
     return False
 
 
+def _resolved_provider() -> str:
+    """Active provider the SERVER will use: the persisted store (llm_settings.json) wins
+    over .env — the app records provider switches there, so .env's LLM_PROVIDER goes stale.
+    Mirrors start_cmd._resolved_provider and the server's resolve_provider so every
+    provider-conditional check below keys off the SAME provider the server would run.
+    Guarded so a broken/absent server package degrades to the .env/env value."""
+    from akana_cli.start_cmd import _valid_provider
+
+    try:
+        import json
+
+        store = default_data_dir() / "llm_settings.json"
+        if store.is_file():
+            raw = json.loads(store.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                prov = _valid_provider(str(raw.get("provider") or "").strip().lower())
+                if prov:
+                    return prov
+    except Exception:  # noqa: BLE001 — never let a store read break doctor
+        pass
+    # .env / shell env fallback (shell wins, same precedence as the port check below).
+    env_val = os.environ.get("LLM_PROVIDER") or read_env_key("LLM_PROVIDER") or ""
+    return _valid_provider(env_val.strip().lower())
+
+
+def _stored_key(key_env: str) -> str | None:
+    """Resolved real key for `key_env`, or None. Checks the runtime secret store FIRST
+    (the documented happy path pastes keys in the UI, which writes them there, NOT .env),
+    then .env/env. The store is keyed by the lowercase ALLOWED_KEYS name, so normalise
+    the uppercase env-var name before the lookup. A shipped placeholder counts as unset.
+    The .env/env leg gates on looks_like_placeholder (no length floor) — the same rule
+    the server runtime applies to env keys — so doctor and server agree on what "set"
+    means; the write-path length floor (is_real_secret) applies to the store leg only."""
+    try:
+        from akana_server.secret_store import get_secret, is_real_secret
+
+        stored = get_secret(default_data_dir(), key_env.lower())
+        if is_real_secret(stored):
+            return stored
+    except Exception:  # noqa: BLE001 — a missing server package degrades to .env/env
+        pass
+    for raw in (read_env_key(key_env), os.environ.get(key_env)):
+        val = (raw or "").strip()
+        if val and not _is_placeholder(val):
+            return val
+    return None
+
+
+def _is_placeholder(value: str) -> bool:
+    """Server's looks_like_placeholder when importable; a marker-scan fallback so an
+    unimportable server package still lets doctor resolve .env/env keys (degrade path)."""
+    try:
+        from akana_server.secret_store import looks_like_placeholder
+
+        return looks_like_placeholder(value)
+    except Exception:  # noqa: BLE001 — degrade: mirror _PLACEHOLDER_MARKERS' core set
+        low = value.lower()
+        return any(m in low for m in ("your-", "-here", "changeme", "change-me", "replace-me", "replace_me"))
+
+
 def run_doctor(*, verbose: bool = True, probe_network: bool = True, mcp: bool = False) -> int:
     issues = 0
     if verbose:
         io.banner(i18n.t("doctor.title"))
 
-    provider = (read_env_key("LLM_PROVIDER") or "").strip().lower()
+    provider = _resolved_provider()
 
     py_sys = find_system_python()
     if py_sys:
@@ -119,14 +179,13 @@ def run_doctor(*, verbose: bool = True, probe_network: bool = True, mcp: bool = 
 
         key_env = provider_key_envs().get(provider)
         if key_env:
-            # Also treat a shipped ACTIVE placeholder as "not set": .env.example used
-            # to carry an active CURSOR_API_KEY=your-…-here that fooled raw truthiness
-            # into "configured", so fresh installs got a silent 401 on the first
-            # chat. Mirror the server's is_real_secret gate via looks_like_placeholder.
-            _kv = (read_env_key(key_env) or "").strip()
-            from akana_server.secret_store import looks_like_placeholder
-
-            _key_ok = bool(_kv) and not looks_like_placeholder(_kv)
+            # Resolve the key the SAME way the server does: the runtime secret store
+            # (where the UI writes keys — the documented happy path keeps them out of
+            # .env) wins, then .env/env. A shipped ACTIVE placeholder (e.g. the old
+            # .env.example CURSOR_API_KEY=your-…-here) still counts as unset via the
+            # is_real_secret gate inside _stored_key. Reading .env ALONE here declared a
+            # UI-configured key "empty" and skipped the store-aware probe below.
+            _key_ok = _stored_key(key_env) is not None
             if _key_ok:
                 if verbose:
                     io.ok(i18n.t("doctor.key_defined", key=key_env))

@@ -823,10 +823,13 @@
       if (!wakeUsable) {
         // Neither the server model nor SpeechRecognition is available → disable and
         // DON'T enable autostart. Clear any stale flag so such a browser never boots
-        // with a wake listener it can't run.
+        // with a wake listener it can't run — but ONLY once the probe has RESOLVED
+        // (serverWakeEnabled !== null). On the optimistic first paint the server-model
+        // verdict is still unknown, so clobbering the saved flag here would destroy a
+        // valid preference before we know wake is truly out of reach.
         toggle.disabled = true;
         toggle.setAttribute("aria-disabled", "true");
-        setWake(false);
+        if (serverWakeEnabled !== null) setWake(false);
       } else {
         toggle.addEventListener("click", function () {
           var next = !toggle.classList.contains("on");
@@ -1128,6 +1131,17 @@
     open: open, close: close, destroy: destroy,
     _deriveConnectState: deriveConnectState,
     _show: function (i) { if (modal) show(i); },
+    // Voice-pane wake-flag guard test (tests/web/blitz3_fe-memory-onboard.harness.mjs):
+    // render the pane against an injected body with serverWakeEnabled reset to the
+    // pre-probe (null) state, so the harness can assert the optimistic first paint
+    // never clobbers the saved akana.wakeAutostart flag.
+    _renderVoiceForTest: function (body) {
+      bodyEl = body;
+      STEPS = makeSteps();
+      for (var i = 0; i < STEPS.length; i++) if (STEPS[i].kind === "voice") step = i;
+      serverWakeEnabled = null;
+      renderVoicePane();
+    },
   };
 
   if (document.readyState === "loading") {

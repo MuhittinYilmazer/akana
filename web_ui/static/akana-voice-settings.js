@@ -103,12 +103,25 @@
       }
 
       if (micDeviceSelect) {
-        micDeviceSelect.addEventListener("change", () => {
+        micDeviceSelect.addEventListener("change", async () => {
           const v = micDeviceSelect.value;
           if (v) localStorage.setItem(LS_MIC_DEVICE, v);
           else localStorage.removeItem(LS_MIC_DEVICE);
           // Tear down so next ensureAudio() picks up the new device.
           try { bridge.stopAudioGraph(); } catch { /* ignore */ }
+          // stopAudioGraph() ALSO clears the model-wake poll + stopSpeechWakeFallback() while
+          // keepWakeArmed leaves the FSM in WAKE_ARMED (wake button lit, no audio graph) — and
+          // nothing re-arms on an idle page (resumeWakeListeningIfIdle only fires on voice/chat
+          // activity). Cycle wake like the wake-source picker below so "Hey Akana" keeps working
+          // after a device switch (await the async release first, per the barge-in lifecycle).
+          if (bridge.voice && bridge.voice.wakeEnabled) {
+            try {
+              await bridge.setWakeListening(false, { silent: true });
+              await bridge.setWakeListening(true, { silent: true });
+            } catch {
+              /* best-effort live re-arm */
+            }
+          }
         });
         void refreshMicDeviceList();
         if (navigator.mediaDevices && typeof navigator.mediaDevices.addEventListener === "function") {

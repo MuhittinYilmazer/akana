@@ -551,7 +551,9 @@ class SemanticStore:
         # STORED value keeps its original casing; only the MATCH is folded.
         row = conn.execute(
             """
-            SELECT id, ts_first, valid_from FROM facts
+            SELECT id, ts_first, valid_from, trust, source_origin, source_detail, confidence,
+                   source_turn_id, quote, extractor
+            FROM facts
             WHERE IFNULL(key_norm, key) = ? AND IFNULL(value_norm, value) = ?
               AND invalidated_at IS NULL
             """,
@@ -561,6 +563,30 @@ class SemanticStore:
             fact_id = str(row["id"])
             ts_first = str(row["ts_first"])
             existing_vf = str(row["valid_from"]) if row["valid_from"] else ts_first
+            # Upgrade-only trust ladder (P6): a re-assertion that dedups onto an existing
+            # valid row must never DOWNGRADE its trust/provenance/confidence. Approving an
+            # 'inferred' inbox duplicate of a 'user_statement' fact would otherwise silently
+            # demote it below a min_trust recall floor. When the incoming write ranks LOWER,
+            # keep the stored trust/origin/detail and the higher confidence.
+            stored_trust = str(row["trust"] or _DEFAULT_TRUST)
+            if trust_rank(trust) < trust_rank(stored_trust):
+                trust = stored_trust  # type: ignore[assignment]
+                if row["source_origin"]:
+                    origin = str(row["source_origin"])
+                if row["source_detail"]:
+                    detail = str(row["source_detail"])
+                if row["confidence"] is not None:
+                    confidence = max(confidence, float(row["confidence"]))
+                # Provenance travels as one unit with trust: the UPDATEs below would
+                # otherwise stamp the lower-trust duplicate's turn/quote/extractor onto
+                # a row whose trust/origin/detail we just chose to keep — a mixed-
+                # provenance row (user_statement trust, inferred quote).
+                if row["source_turn_id"]:
+                    source_turn_id = str(row["source_turn_id"])
+                if row["quote"]:
+                    quote_n = str(row["quote"])
+                if row["extractor"]:
+                    extractor = str(row["extractor"])
             if set_valid_from and vf_canon:
                 # C7: a supersede whose replacement dedups onto a DIFFERENT pre-existing
                 # valid row must carry its supersede instant onto that row — otherwise the

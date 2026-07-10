@@ -119,6 +119,7 @@ window.AkanaI18nStrings = Object.assign(window.AkanaI18nStrings || {}, {
 
   "transport.toast.memory_staged":   { en: "Added to Inbox ({keys}) — approve in Memory",  tr: "Inbox'a eklendi ({keys}) — Hafıza'dan onaylayın" },
   "transport.toast.memory_stored":   { en: "Saved to memory ({keys})",                     tr: "Hafızaya kaydedildi ({keys})" },
+  "transport.toast.memory_key_fallback": { en: "info", tr: "bilgi" },
   "transport.toast.queued":          { en: "Message queued",  tr: "Mesaj sıraya alındı" },
 
   "transport.stream.empty_response": { en: "Model returned an empty response (no text or tool call). Retry; if it persists, the active provider/session may be faulty (Settings → LLM).", tr: "Model boş yanıt döndürdü (metin de araç çağrısı da yok). Tekrar dene; sürerse aktif sağlayıcı/oturum sorunlu olabilir (Ayarlar → LLM)." },

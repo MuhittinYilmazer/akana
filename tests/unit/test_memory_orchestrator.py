@@ -432,7 +432,7 @@ def test_parse_time_range_curly_apostrophe():
 
 def test_search_surfaces_pending_inbox_facts(orch, memory):
     """PENDING (unconfirmed) info matching the query is returned in the 'pending' field
-    with the 'onay_bekliyor' label + a warning — instead of 'I don't know', the assistant
+    with the 'pending_approval' label + a warning — instead of 'I don't know', the assistant
     reports what is awaiting confirmation."""
     from akana.memory.staging import FactCandidate
 
@@ -441,7 +441,7 @@ def test_search_surfaces_pending_inbox_facts(orch, memory):
 
     assert out["pending"], "pending matching the query was expected"
     p = out["pending"][0]
-    assert p["status"] == "onay_bekliyor"
+    assert p["status"] == "pending_approval"
     assert p["key"] == "kedi_adi" and p["value"] == "Pamuk"
     assert any("AWAITING APPROVAL" in w for w in out["warnings"])
 

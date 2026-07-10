@@ -446,7 +446,7 @@ class MemoryOrchestrator:
         min_trust: str | None = None,
         limit: int = 5,
     ) -> list[dict[str, Any]]:
-        """PENDING (inbox) facts matching the query — tagged 'onay_bekliyor'.
+        """PENDING (inbox) facts matching the query — tagged 'pending_approval'.
 
         User decision: everything goes through the inbox (no auto-promote). If recall
         only sees APPROVED facts, then for info the user stated but hasn't approved yet,
@@ -469,7 +469,11 @@ class MemoryOrchestrator:
             return []
         floor = trust_rank(min_trust) if min_trust else None
         out: list[dict[str, Any]] = []
-        for s in self._memory.staging.list_pending(limit=200):
+        # list_pending is ts ASC and the inbox holds up to _MAX_PENDING=500 rows, so a
+        # small limit returns the OLDEST rows and drops the newest candidates — the fact
+        # the user just stated is by definition among the newest. Fetch the whole window
+        # and iterate newest-first (mirrors memory_capture._pending_snapshot).
+        for s in reversed(self._memory.staging.list_pending(limit=500)):
             # Scope gate: if a scope is given, filter out a candidate bound to another
             # conversation (conversation-independent candidates — conversation_id is None — appear in every scope).
             if (
@@ -483,7 +487,7 @@ class MemoryOrchestrator:
                 continue
             if any(t in fold_text(f"{s.key} {s.value}") for t in terms):
                 out.append(
-                    {"id": s.id, "key": s.key, "value": s.value, "status": "onay_bekliyor"}
+                    {"id": s.id, "key": s.key, "value": s.value, "status": "pending_approval"}
                 )
                 if len(out) >= limit:
                     break

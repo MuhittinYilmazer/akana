@@ -113,7 +113,12 @@
 
   // ── Tab definitions ──────────────────────────────────────────────────────
   // SVG icons are drawn with currentColor → active/inactive colour comes from CSS.
-  const TABS = [
+  // Built LAZILY (not at module-eval): labels/aria are read via _t() at build time so a
+  // late akana-i18n reconcile (fresh device: localStorage empty → boots "en", backend "tr")
+  // does not freeze the tab labels in the boot language. relabelNav() re-reads them on
+  // akana:languagechange (the strip carries no data-i18n attributes).
+  function buildTabs() {
+    return [
     {
       key: "sohbet",
       label: _t("nav.tab_chat"),
@@ -157,7 +162,8 @@
         '<path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06A1.65 1.65 0 004.6 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06A1.65 1.65 0 009 4.6a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06A1.65 1.65 0 0019.4 9c.14.31.22.65.22 1z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>' +
         "</svg>",
     },
-  ];
+    ];
+  }
 
   let navEl = null;
   /** @type {Map<string, HTMLButtonElement>} */
@@ -191,19 +197,21 @@
     // mobile/standalone (visibility gate without adding a CSS rule to the base layer).
     el.innerHTML = "";
 
-    for (const t of TABS) {
+    for (const t of buildTabs()) {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "mnav-tab";
       btn.dataset.mnav = t.key;
       btn.setAttribute("aria-label", t.ariaLabel);
       btn.setAttribute("aria-current", "false");
+      // Indicator + icon via innerHTML; the LABEL is a real element node so relabelNav()
+      // can update its text on a language switch (and it stays a queryable child).
       btn.innerHTML =
-        '<span class="mnav-ind" aria-hidden="true"></span>' +
-        t.icon +
-        '<span class="mnav-label">' +
-        t.label +
-        "</span>";
+        '<span class="mnav-ind" aria-hidden="true"></span>' + t.icon;
+      const label = document.createElement("span");
+      label.className = "mnav-label";
+      label.textContent = t.label;
+      btn.appendChild(label);
       btn.addEventListener("click", () => {
         setActive(t.key);
         try {
@@ -220,6 +228,19 @@
     setActive("sohbet"); // default view
   }
 
+  // Re-read the (non-data-i18n) tab labels + aria after a language switch/reconcile so
+  // the strip doesn't stay frozen in the boot language. Preserves active state.
+  function relabelNav() {
+    if (navEl) navEl.setAttribute("aria-label", _t("nav.mobile_aria"));
+    for (const t of buildTabs()) {
+      const btn = tabBtns.get(t.key);
+      if (!btn) continue;
+      btn.setAttribute("aria-label", t.ariaLabel);
+      const label = btn.querySelector(".mnav-label");
+      if (label) label.textContent = t.label;
+    }
+  }
+
   // ── Bus subscriptions: mirror active state (if available) ────────────────
   function wireBus() {
     const bus = window.AkanaBus;
@@ -234,6 +255,7 @@
     syncDeviceClasses();
     buildNav();
     wireBus();
+    window.addEventListener("akana:languagechange", relabelNav);
   }
 
   if (document.readyState === "loading") {

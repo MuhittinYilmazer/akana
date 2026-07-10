@@ -9,22 +9,70 @@
   const ORDERED_RE = /^(\s*)\d+[.)]\s+(.+)$/;
   const TASK_RE = /^(\s*)[-*+]\s+\[([ xX])\]\s+(.+)$/;
 
+  // Fenced code (```…```) is VERBATIM: the preprocessing transforms below must never
+  // touch code inside a fence — a Makefile tab, a `# comment` line, a `1)` step or a
+  // `- item` line there is real code, not markdown to normalise (they were corrupting
+  // both the rendered block AND the copy-button output). Split the source into
+  // alternating non-fence / fence segments and run the transforms on non-fence only.
+  // An unterminated fence (mid-stream) keeps its tail as a fence segment.
+  function splitFenceSegments(src) {
+    const lines = String(src).split("\n");
+    const segs = [];
+    let buf = [];
+    let fence = false;
+    const flush = () => {
+      if (buf.length) {
+        segs.push({ fence, text: buf.join("\n") });
+        buf = [];
+      }
+    };
+    for (let i = 0; i < lines.length; i += 1) {
+      if (/^\s*```/.test(lines[i])) {
+        if (!fence) {
+          flush();
+          fence = true;
+          buf.push(lines[i]);
+        } else {
+          buf.push(lines[i]);
+          flush();
+          fence = false;
+        }
+      } else {
+        buf.push(lines[i]);
+      }
+    }
+    flush();
+    return segs;
+  }
+
+  function applyOutsideFences(src, fn) {
+    return splitFenceSegments(src)
+      .map((s) => (s.fence ? s.text : fn(s.text)))
+      .join("\n");
+  }
+
   function normalizeMarkdownSrc(src) {
     if (!src) return "";
-    let s = String(src).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-    s = s.replace(/([^\n])\s+(#{1,6}\s+\S)/g, "$1\n\n$2");
-    return s;
+    const s = String(src).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    // Repair a heading glued to preceding text on the same line, but require 2+
+    // hashes: a single '#' in running prose is a number sign ("issue # 5",
+    // "column # 2") and must NOT split the sentence into a spurious <h1>.
+    return applyOutsideFences(s, (seg) =>
+      seg.replace(/([^\n])\s+(#{2,6}\s+\S)/g, "$1\n\n$2"),
+    );
   }
 
   function preprocessMarkdown(src) {
-    let s = normalizeMarkdownSrc(src);
-    s = s.replace(/\t/g, "  ");
-    s = s.replace(/^[ \t]+(#{1,6}\s)/gm, "$1");
-    s = s.replace(/^(\d+)\)\s+/gm, "$1. ");
-    s = s.replace(/([^\n])\n([-*+•]\s)/g, "$1\n\n$2");
-    s = s.replace(/([^\n])\n(\d+\.\s)/g, "$1\n\n$2");
-    s = s.replace(/([:.!?])\n(?!\n)(?=[-*+•]\s)/g, "$1\n\n");
-    s = s.replace(/([:.!?])\n(?!\n)(?=\d+\.\s)/g, "$1\n\n");
+    const s = applyOutsideFences(normalizeMarkdownSrc(src), (seg) => {
+      let x = seg.replace(/\t/g, "  ");
+      x = x.replace(/^[ \t]+(#{1,6}\s)/gm, "$1");
+      x = x.replace(/^(\d+)\)\s+/gm, "$1. ");
+      x = x.replace(/([^\n])\n([-*+•]\s)/g, "$1\n\n$2");
+      x = x.replace(/([^\n])\n(\d+\.\s)/g, "$1\n\n$2");
+      x = x.replace(/([:.!?])\n(?!\n)(?=[-*+•]\s)/g, "$1\n\n");
+      x = x.replace(/([:.!?])\n(?!\n)(?=\d+\.\s)/g, "$1\n\n");
+      return x;
+    });
     const lines = s.split("\n");
     promoteImplicitListItems(lines);
     return lines.join("\n");

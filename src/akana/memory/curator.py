@@ -90,16 +90,25 @@ class Curator:
             # Lost the election (a concurrent reject/promote already decided this row) →
             # write nothing, emit nothing. No orphan durable fact, no trust-ladder divergence.
             return None
-        closed, fact = self._semantic.assert_fact(
-            key=s.key,
-            value=s.value,
-            trust=s.trust,  # type: ignore[arg-type]
-            source_turn_id=s.source_turn_id,
-            quote=s.quote,
-            extractor=s.extractor,
-            supersede=supersede,
-            fact_id=fact_id,
-        )
+        try:
+            closed, fact = self._semantic.assert_fact(
+                key=s.key,
+                value=s.value,
+                trust=s.trust,  # type: ignore[arg-type]
+                source_turn_id=s.source_turn_id,
+                quote=s.quote,
+                extractor=s.extractor,
+                supersede=supersede,
+                fact_id=fact_id,
+            )
+        except BaseException:
+            # The durable write failed AFTER we won the staging claim (claim-first).
+            # Without a revert the row stays 'promoted' with a dangling fact_id that was
+            # never written, and re-approval is impossible (409) — an explicitly
+            # user-approved fact silently lost. Release the claim (row -> pending, clear
+            # the fact_id) so the user can retry, then re-raise so the route reports it.
+            self._staging.revert_promotion(staged_id)
+            raise
         if fact.id != fact_id:
             # assert_fact deduped onto a pre-existing valid fact with a DIFFERENT id
             # (the staged value already existed) → re-point the staging link at the real

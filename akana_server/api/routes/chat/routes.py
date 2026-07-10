@@ -108,6 +108,55 @@ log = logging.getLogger(__name__)
 router = APIRouter(tags=["chat"])
 
 
+async def _persist_command_response(
+    request: Request, body: ChatRequest, resp: ChatResponse
+) -> None:
+    """Persist the user turn + a LIVE gate/command response before returning it.
+
+    Symmetric with the DRAINED command path (_command_turn_gen): a gate response (the
+    _files_gate unsupported-attachment rejection) has NO LLM turn, but the FE re-fetches
+    the conversation log from the server on a chat switch / F5 — a response that is NOT
+    persisted is DELETED on the re-fetch, dropping BOTH the user's message and the reply.
+    The blocking (POST /chat) and streaming (POST /chat/stream) surfaces both funnel here
+    so the three surfaces share one persist contract. A persist failure never breaks the
+    response (best-effort; mirrors _command_turn_gen).
+    """
+    from akana_server.api.routes import chat as _chatpkg
+
+    conv_id = (resp.conversation_id or body.conversation_id or "").strip()
+    if not conv_id:
+        return
+    settings = getattr(request.app.state, "settings", None)
+    try:
+        # _persist_user_turn_start ensures a fresh (not-yet-ensured) conversation before
+        # writing → the usability gate below then sees it as usable (same order as
+        # _command_turn_gen). A tombstoned/soft-deleted conv is intentionally skipped there.
+        user_turn_id = await _persist_user_turn_start(
+            request,
+            conversation_id=conv_id,
+            user_text=body.text,
+            lang=body.lang,
+            file_ids=body.effective_file_ids,
+        )
+        if resp.text and _conversation_chat_usable(request.app, conv_id):
+            await _off_loop(
+                _chatpkg.persist_assistant_turn,
+                conversation_id=conv_id,
+                assistant_text=resp.text,
+                user_turn_id=user_turn_id,
+                assistant_turn_id=resp.turn_id,
+                lang=body.lang,
+                intent=resp.intent,
+                data_dir=getattr(settings, "data_dir", None),
+            )
+    except Exception:
+        log.warning(
+            "live gate/command response could not be persisted (conv=%s); reply delivered anyway",
+            conv_id,
+            exc_info=True,
+        )
+
+
 @router.post("/chat", dependencies=[Depends(require_akana_bearer)])
 @guard_nonstreaming_turn(lambda a: getattr(a.get("body"), "conversation_id", None))
 async def post_chat(
@@ -128,6 +177,10 @@ async def post_chat(
     # check would see its own turn as busy and reject itself with 409 (self-409).
     gates = await _chatpkg._run_turn_gates(request, body)
     if gates.response is not None:
+        # A live gate response (e.g. the _files_gate rejection) has no LLM turn — persist
+        # the user + response turns so they survive the FE's re-fetch (parity with the
+        # drained command path); otherwise both vanish on a chat switch / F5.
+        await _persist_command_response(request, gates.body, gates.response)
         return gates.response
     body = gates.body
     intent = gates.intent
@@ -274,7 +327,12 @@ async def post_chat(
             intent=intent,
             tool_calls=tool_calls,
         )
-        dropped = await async_llm_dropped_turns(request, conv_id)
+        # The recount runs AFTER persist_agent_id stored THIS turn's fresh session id,
+        # which flips bootstrap_needed to False → for a bootstrap turn the recount reads 0
+        # even though this turn actually truncated history to chat_max_turns. Reconcile
+        # against the pre-turn assembled count (mirror the streaming producer's
+        # max(dropped_before, dropped_after)); assembled.dropped_turns is the "before" term.
+        dropped = max(assembled.dropped_turns, await async_llm_dropped_turns(request, conv_id))
 
         resp = ChatResponse(
             turn_id=turn_id,
@@ -421,10 +479,23 @@ async def reset_conversation(
     await cleanup_conversation_chat_state(
         request.app, conversation_id, tombstone=False
     )
+    # Reset must ALSO drop the provider agent session — symmetric with DELETE
+    # /conversations. Otherwise reuse (the default) RESUMES the surviving agent_id on the
+    # next turn (CONTEXT_MODE_RESUME, no history re-send), so the provider-side agent still
+    # holds the entire "cleared" conversation and breaks the "I cleared the history" intent.
+    from akana_server.chat_context import clear_agent_id
+    from akana_server.orchestrator.bridge_pool import (
+        bridge_daemon_enabled,
+        get_bridge_pool,
+    )
+
+    await _off_loop(clear_agent_id, request, conversation_id)
     await _off_loop(
         get_memory_core(services.settings.data_dir).reset_conversation,
         conversation_id,
     )
+    if bridge_daemon_enabled():
+        await get_bridge_pool(services.settings).close_session(conversation_id)
     return None
 
 
@@ -574,6 +645,10 @@ async def post_chat_stream(
     resp = gates.response
     approval_required = gates.approval_required
     if resp is not None:
+        # A live gate response (e.g. the _files_gate rejection) has no LLM turn — persist
+        # the user + response turns BEFORE streaming so they survive the FE's re-fetch
+        # (parity with the drained command path); otherwise both vanish on a switch / F5.
+        await _persist_command_response(request, gates.body, resp)
         return _sse_command_response(resp, approval_required)
 
     body = gates.body

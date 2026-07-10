@@ -473,7 +473,13 @@ const _t = (k, p) => window.AkanaI18n?.t(k, p) ?? k;
   // memory steadily. On eviction (and on pagehide) the URL(s) are revoked; an evicted
   // attachment is simply re-fetched on the next render (cache miss → new URL).
   const _MSG_ATTACH_CACHE_MAX = 100;
-  const _msgAttachUrlCache = new Map(); // id -> {url, type, thumbUrl?}
+  const _msgAttachUrlCache = new Map(); // id -> {url, type, thumbUrl?, thumbUrlResolved?}
+  // In-flight fetch promises keyed by id: concurrent renders of the SAME attachment
+  // (optimistic echo + server sync re-render) share ONE promise → one fetch, one object
+  // URL, one shared entry. Without this both callers miss the (not-yet-populated) cache,
+  // both fetch + createObjectURL, and the loser's URL (and its PDF thumb) become untracked
+  // → unrevokable leak for the page lifetime.
+  const _msgAttachInflight = new Map(); // id -> Promise<entry|null>
 
   function _revokeAttachEntry(entry) {
     if (!entry) return;
@@ -495,50 +501,70 @@ const _t = (k, p) => window.AkanaI18n?.t(k, p) ?? k;
   function _attachEntryInUse(entry) {
     // b29: is this cached object URL still displayed by a CONNECTED <img>? If so, evicting +
     // revoking it would break the visible image. (blob: URLs contain no '"', so the quoted
-    // attribute selector is safe.)
-    if (!entry || !entry.url) return false;
+    // attribute selector is safe.) For a PDF the rendered <img> src is the SEPARATE page-1
+    // thumb URL (thumbUrlResolved), NOT entry.url — so check both, else every PDF reads as
+    // not-in-use and eviction revokes the thumb under the on-screen preview.
+    if (!entry) return false;
     try {
-      return !!document.querySelector(`img[src="${entry.url}"]`);
+      if (entry.url && document.querySelector(`img[src="${entry.url}"]`)) return true;
+      if (entry.thumbUrlResolved && document.querySelector(`img[src="${entry.thumbUrlResolved}"]`)) {
+        return true;
+      }
+      return false;
     } catch {
       return false;
     }
   }
 
-  async function fetchMsgAttachment(id) {
+  function fetchMsgAttachment(id) {
     const cached = _msgAttachUrlCache.get(id);
     if (cached) {
       // LRU touch: re-insert so the most-recently used entry is last (evicted last).
       _msgAttachUrlCache.delete(id);
       _msgAttachUrlCache.set(id, cached);
-      return cached;
+      return Promise.resolve(cached);
     }
+    // Coalesce concurrent renders of the same id onto ONE in-flight promise (no double fetch
+    // / double object URL → no untracked leak; the shared entry also makes the PDF thumb
+    // promise-sharing in renderMessageAttachments actually work).
+    const inflight = _msgAttachInflight.get(id);
+    if (inflight) return inflight;
     const core = window.AkanaCore;
-    if (!core?.baseUrl || !core?.authHeaders) return null;
-    try {
-      const r = await fetch(
-        `${core.baseUrl()}/api/v1/uploads/${encodeURIComponent(id)}/raw`,
-        { headers: core.authHeaders() },
-      );
-      if (!r.ok) return null;
-      const blob = await r.blob();
-      const entry = { url: URL.createObjectURL(blob), type: blob.type || "" };
-      _msgAttachUrlCache.set(id, entry);
-      // Evict + revoke the oldest object URL(s) once over the cap — but NEVER revoke a URL still
-      // referenced by a connected <img> (b29: revoking it would break the visible image). Skip
-      // in-use entries (oldest-first); if all remaining are in use, the cache stays slightly over
-      // cap until one frees (bounded — in-use entries are, by definition, currently rendered).
-      if (_msgAttachUrlCache.size > _MSG_ATTACH_CACHE_MAX) {
-        for (const [key, ent] of [..._msgAttachUrlCache]) {
-          if (_msgAttachUrlCache.size <= _MSG_ATTACH_CACHE_MAX) break;
-          if (key === id || _attachEntryInUse(ent)) continue;
-          _msgAttachUrlCache.delete(key);
-          _revokeAttachEntry(ent);
+    if (!core?.baseUrl || !core?.authHeaders) return Promise.resolve(null);
+    const p = (async () => {
+      try {
+        const r = await fetch(
+          `${core.baseUrl()}/api/v1/uploads/${encodeURIComponent(id)}/raw`,
+          { headers: core.authHeaders() },
+        );
+        if (!r.ok) return null;
+        const blob = await r.blob();
+        const entry = { url: URL.createObjectURL(blob), type: blob.type || "" };
+        _msgAttachUrlCache.set(id, entry);
+        // Evict + revoke the oldest object URL(s) once over the cap — but NEVER revoke a URL still
+        // referenced by a connected <img> (b29: revoking it would break the visible image). Skip
+        // in-use entries (oldest-first); if all remaining are in use, the cache stays slightly over
+        // cap until one frees (bounded — in-use entries are, by definition, currently rendered).
+        if (_msgAttachUrlCache.size > _MSG_ATTACH_CACHE_MAX) {
+          for (const [key, ent] of [..._msgAttachUrlCache]) {
+            if (_msgAttachUrlCache.size <= _MSG_ATTACH_CACHE_MAX) break;
+            if (key === id || _attachEntryInUse(ent)) continue;
+            _msgAttachUrlCache.delete(key);
+            _revokeAttachEntry(ent);
+          }
         }
+        return entry;
+      } catch {
+        return null;
       }
-      return entry;
-    } catch {
-      return null;
-    }
+    })();
+    _msgAttachInflight.set(id, p);
+    // Release the in-flight latch once resolved (ownership check: a later fetch of the same id
+    // after eviction must not be cleared by this one's finally).
+    p.finally(() => {
+      if (_msgAttachInflight.get(id) === p) _msgAttachInflight.delete(id);
+    });
+    return p;
   }
 
   // Revoke ALL cached object URLs when the page is being unloaded/hidden (the strong
@@ -546,6 +572,16 @@ const _t = (k, p) => window.AkanaI18n?.t(k, p) ?? k;
   window.addEventListener("pagehide", () => {
     for (const entry of _msgAttachUrlCache.values()) _revokeAttachEntry(entry);
     _msgAttachUrlCache.clear();
+  });
+
+  // The suggestion chips + time-based hero greeting are JS-rendered without data-i18n,
+  // so the i18n engine's apply() cannot retranslate them. Re-render on the boot-time
+  // language reconcile (or a manual switch) so they don't stay in the boot language.
+  window.addEventListener("akana:languagechange", () => {
+    try { renderPromptSuggestions(); } catch { /* not the chat page */ }
+    // apply(document) has already reset the hero <h2 data-i18n> to the new-language
+    // default; re-run the time-based greeting so it isn't left as the plain default.
+    try { wireGreeting(); } catch { /* no hero on this page */ }
   });
 
   // pdf.js (vendored) is lazy-loaded only when a PDF preview is needed.
@@ -668,6 +704,10 @@ const _t = (k, p) => window.AkanaI18n?.t(k, p) ?? k;
           // render / leak. renderPdfThumb never rejects (error/timeout → null → 📄 badge).
           if (entry.thumbUrl === undefined) entry.thumbUrl = renderPdfThumb(entry.url);
           const thumb = await entry.thumbUrl;
+          // Record the resolved thumb URL on the entry so the LRU in-use guard
+          // (_attachEntryInUse) can see the <img> that actually displays it — the img's
+          // src is this thumb URL, not entry.url.
+          if (thumb) entry.thumbUrlResolved = thumb;
           if (thumb) appendThumbImage(box, thumb, _t("shell.pdf_preview_alt"));
           else appendFileChip(box);
         } else {
@@ -761,15 +801,22 @@ const _t = (k, p) => window.AkanaI18n?.t(k, p) ?? k;
     bulb: '<svg viewBox="0 0 24 24" fill="none"><path stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M9.5 18h5m-4 3h3M12 3a6 6 0 0 0-3.8 10.6c.5.5.8 1.1.8 1.8v.6h6v-.6c0-.7.3-1.3.8-1.8A6 6 0 0 0 12 3Z"/></svg>',
     book: '<svg viewBox="0 0 24 24" fill="none"><path stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" d="M4 5.6A1.8 1.8 0 0 1 5.8 4H11v15H5.8A1.8 1.8 0 0 0 4 20.2V5.6Zm16 0A1.8 1.8 0 0 0 18.2 4H13v15h5.2a1.8 1.8 0 0 1 1.8 1.2V5.6Z"/></svg>',
   };
-  const PROMPT_SUGGESTIONS = [
-    { slot: "morning", icon: "sun",     title: _t("shell.ps_morning_title"), sub: _t("shell.ps_morning_sub"), prompt: _t("shell.ps_morning_prompt") },
-    { slot: "day",     icon: "check",   title: _t("shell.ps_plan_title"),    sub: _t("shell.ps_plan_sub"),    prompt: _t("shell.ps_plan_prompt") },
-    { slot: "day",     icon: "pulse",   title: _t("shell.ps_system_title"),  sub: _t("shell.ps_system_sub"),  prompt: _t("shell.ps_system_prompt") },
-    { slot: "evening", icon: "moon",    title: _t("shell.ps_evening_title"), sub: _t("shell.ps_evening_sub"), prompt: _t("shell.ps_evening_prompt") },
-    { slot: "night",   icon: "sparkle", title: _t("shell.ps_night_title"),   sub: _t("shell.ps_night_sub"),   prompt: _t("shell.ps_night_prompt") },
-    { slot: "any",     icon: "bulb",    title: _t("shell.ps_idea_title"),    sub: _t("shell.ps_idea_sub"),    prompt: _t("shell.ps_idea_prompt") },
-    { slot: "any",     icon: "book",    title: _t("shell.ps_learn_title"),   sub: _t("shell.ps_learn_sub"),   prompt: _t("shell.ps_learn_prompt") },
-  ];
+  // Built LAZILY (each render), NOT at module-eval: akana-i18n's async reconcileWithBackend()
+  // can flip the boot language (fresh device: localStorage empty → boots "en", backend "tr")
+  // AFTER this module loads. The chips carry no data-i18n attributes, so apply() can't
+  // retranslate them — re-read _t() on every render + on akana:languagechange, else the
+  // suggestion cards stay in the boot language for the whole session (mixed-language UI).
+  function buildPromptSuggestions() {
+    return [
+      { slot: "morning", icon: "sun",     title: _t("shell.ps_morning_title"), sub: _t("shell.ps_morning_sub"), prompt: _t("shell.ps_morning_prompt") },
+      { slot: "day",     icon: "check",   title: _t("shell.ps_plan_title"),    sub: _t("shell.ps_plan_sub"),    prompt: _t("shell.ps_plan_prompt") },
+      { slot: "day",     icon: "pulse",   title: _t("shell.ps_system_title"),  sub: _t("shell.ps_system_sub"),  prompt: _t("shell.ps_system_prompt") },
+      { slot: "evening", icon: "moon",    title: _t("shell.ps_evening_title"), sub: _t("shell.ps_evening_sub"), prompt: _t("shell.ps_evening_prompt") },
+      { slot: "night",   icon: "sparkle", title: _t("shell.ps_night_title"),   sub: _t("shell.ps_night_sub"),   prompt: _t("shell.ps_night_prompt") },
+      { slot: "any",     icon: "bulb",    title: _t("shell.ps_idea_title"),    sub: _t("shell.ps_idea_sub"),    prompt: _t("shell.ps_idea_prompt") },
+      { slot: "any",     icon: "book",    title: _t("shell.ps_learn_title"),   sub: _t("shell.ps_learn_sub"),   prompt: _t("shell.ps_learn_prompt") },
+    ];
+  }
   const SLOT_PREF = {
     morning: ["morning", "day", "any"],
     day: ["day", "any", "morning"],
@@ -782,6 +829,7 @@ const _t = (k, p) => window.AkanaI18n?.t(k, p) ?? k;
     const bucket =
       h >= 5 && h < 11 ? "morning" : h >= 11 && h < 17 ? "day" : h >= 17 && h < 22 ? "evening" : "night";
     const pref = SLOT_PREF[bucket] || ["any", "day"];
+    const all = buildPromptSuggestions();
     const out = [];
     const seen = new Set();
     const take = (s) => {
@@ -791,10 +839,10 @@ const _t = (k, p) => window.AkanaI18n?.t(k, p) ?? k;
       }
     };
     for (const slot of pref) {
-      for (const s of PROMPT_SUGGESTIONS) if (s.slot === slot) take(s);
+      for (const s of all) if (s.slot === slot) take(s);
       if (out.length >= n) return out.slice(0, n);
     }
-    for (const s of PROMPT_SUGGESTIONS) take(s);
+    for (const s of all) take(s);
     return out.slice(0, n);
   }
 
@@ -1095,6 +1143,15 @@ const _t = (k, p) => window.AkanaI18n?.t(k, p) ?? k;
     updateEmptyState,
     resizeComposer,
     shortConversationId,
+    // Test-only seam (node-vm contract harness): exercise the message-attachment blob
+    // cache (in-flight promise coalescing + PDF-thumb in-use eviction guard) directly.
+    _test: {
+      fetchMsgAttachment,
+      renderMessageAttachments,
+      attachEntryInUse: _attachEntryInUse,
+      attachCache: _msgAttachUrlCache,
+      attachInflight: _msgAttachInflight,
+    },
     // ── Pane ops (parallel-chat): chat bridge calls these on conversation switch/create/delete;
     //    safe no-op/fallback when PaneManager is absent. ─────────────────────
     paneFor: (id) => (_panes ? _panes.paneFor(id) : hooks.log),

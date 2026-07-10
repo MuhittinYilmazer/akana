@@ -55,7 +55,11 @@ def _key_present(key_env: str) -> bool:
     try:
         from akana_server.secret_store import get_secret, is_real_secret
 
-        if is_real_secret(get_secret(default_data_dir(), key_env)):
+        # The store is keyed by the lowercase ALLOWED_KEYS name (e.g. "cursor_api_key"),
+        # NOT the uppercase env-var name provider_key_envs() hands us. Every registry
+        # key_env lowercases exactly to its store name, so normalise before the lookup —
+        # a verbatim uppercase query always misses and the store-first check is dead.
+        if is_real_secret(get_secret(default_data_dir(), key_env.lower())):
             return True
     except Exception:  # noqa: BLE001
         pass

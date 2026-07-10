@@ -135,16 +135,20 @@
  */
 (() => {
   function handleLaunchParams() {
-    // Read the query string ONCE, then strip params so reloads / shares don't
-    // re-trigger and the URL stays clean (history, not a navigation).
+    // Read the query string ONCE, then strip ONLY the params we consume so reloads /
+    // shares don't re-trigger. akana-core.js is also loaded on /memory, so a blanket
+    // strip would erase Memory Studio's ?view= router param (and the hash) on every
+    // page. Leave unknown params (and the fragment) intact.
+    const CONSUMED = ["action", "text", "url", "title"];
     const params = new URLSearchParams(location.search);
-    if (![...params.keys()].length) return;
-    history.replaceState({}, "", location.pathname);
-
     const action = params.get("action");
     const text = params.get("text");
     const url = params.get("url");
     const title = params.get("title");
+    if (!CONSUMED.some((k) => params.has(k))) return; // nothing for us — don't touch the URL
+    for (const k of CONSUMED) params.delete(k);
+    const rest = params.toString();
+    history.replaceState({}, "", location.pathname + (rest ? `?${rest}` : "") + location.hash);
 
     if (action === "new") {
       document.getElementById("btn-new-conv")?.click();

@@ -203,6 +203,13 @@ class LiveBridge(RealtimeBridge):
         if interrupted:
             await self._send_json({"type": "interrupt"})
             await self._persist_turn()
+            # Gemini does NOT send turn_complete for an interrupted turn, so the one-sided
+            # cleanup below (turn_complete) never runs for it. When the interrupted turn was
+            # one-sided (noise-triggered VAD with no input transcription, or a dropped
+            # input-transcription stream) _persist_turn is an orphan no-op that leaves the
+            # cancelled reply in _out_buf; drop it here (keep _in_buf so an interjecting
+            # user's words survive) so it never merges into the next persisted turn.
+            self._out_buf = ""
         # Audio: do NOT play leftover TTS on an interrupted frame (that is the
         # cancelled response's queued output); for normal frames forward bytes immediately.
         audio = getattr(response, "data", None)

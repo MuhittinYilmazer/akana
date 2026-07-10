@@ -511,7 +511,6 @@
     injectCustomSwatch(row);
     injectThemeStudio(row);
     reorderSwatches(row);
-    watchThemeForCustom();
 
     // Single delegated listener — does not touch any existing listener.
     row.addEventListener('click', function (ev) {
@@ -664,6 +663,57 @@
   }
 
   // ---- boot --------------------------------------------------------------
+  // Injected controls (accent-swatch aria labels, Theme Studio, segmented tweaks)
+  // are built with _t() at injection time and carry no data-i18n attributes, so the
+  // i18n engine's apply() never retranslates them. Re-read every injected label when
+  // the boot-time language reconcile (or the picker) flips the language, otherwise the
+  // Appearance pane stays in the boot language for the session (mixed-language UI).
+  function relabelInjectedControls() {
+    // Extra + custom accent swatches: aria-label + visible text.
+    EXTRA_ACCENTS.forEach(function (a) {
+      var sw = document.querySelector('.accent-swatch[data-accent-choice="' + a.choice + '"]');
+      if (sw) sw.setAttribute('aria-label', _t('ui.aurora_accent_label_prefix') + a.label);
+    });
+    var custom = document.querySelector('.accent-swatch[data-accent-choice="custom"]');
+    if (custom) {
+      custom.setAttribute('aria-label', _t('ui.aurora_custom_swatch_aria'));
+      var ctext = custom.querySelector('span:not(.accent-swatch-dot)');
+      if (ctext) ctext.textContent = _t('ui.aurora_custom_label');
+    }
+    // Theme Studio labels/buttons.
+    if (studioEl) {
+      var setText = function (sel, key) { var e = studioEl.querySelector(sel); if (e) e.textContent = _t(key); };
+      setText('.settings-block-title', 'ui.aurora_studio_title');
+      setText('.ts-preview-title', 'ui.aurora_studio_preview_title');
+      setText('.ts-preview-btn', 'ui.aurora_studio_primary_btn');
+      setText('.ts-surprise', 'ui.aurora_studio_surprise');
+      setText('.ts-reset', 'ui.aurora_studio_reset');
+      var labels = studioEl.querySelectorAll('.ts-field-label');
+      if (labels[0]) labels[0].textContent = _t('ui.aurora_studio_primary_field');
+      if (labels[1]) labels[1].textContent = _t('ui.aurora_studio_secondary_field');
+    }
+    // Segmented tweaks (Atmosphere / Shape / Density): title, option buttons, hint.
+    SEGMENTS.forEach(function (seg) {
+      var btns = document.querySelectorAll('.aur-seg-btn[data-aur-seg="' + seg.key + '"]');
+      if (!btns.length) return;
+      seg.opts.forEach(function (opt) {
+        Array.prototype.forEach.call(btns, function (b) {
+          if (b.getAttribute('data-aur-value') === opt.value) b.textContent = _t(opt.labelKey || opt.value);
+        });
+      });
+      var block = btns[0].closest ? btns[0].closest('.aur-tweak-block') : null;
+      if (!block) return;
+      var title = block.querySelector('.settings-block-title');
+      if (title) title.textContent = _t(seg.titleKey || seg.key);
+      var group = block.querySelector('.aur-seg');
+      if (group) group.setAttribute('aria-label', _t(seg.titleKey || seg.key));
+      if (seg.hintKey) {
+        var hint = block.querySelector('.field-hint');
+        if (hint) hint.textContent = _t(seg.hintKey);
+      }
+    });
+  }
+
   function init() {
     // Persisted appearance tweaks must apply even if the settings pane is
     // absent on this page (e.g. memory studio).
@@ -671,6 +721,12 @@
     wireAccentPicker();
     applyPersistedCustomAccent();
     injectAppearanceTweaks();
+    // App-wide (even on pages without the picker): re-derive the custom accent when the
+    // theme flips. Was previously only wired inside wireAccentPicker() → on memory.html
+    // (no accent picker) a live OS/system theme flip kept the wrong-theme accent family.
+    // watchThemeForCustom is self-guarded on data-accent==='custom'.
+    watchThemeForCustom();
+    window.addEventListener('akana:languagechange', relabelInjectedControls);
   }
 
   if (document.readyState === 'loading') {

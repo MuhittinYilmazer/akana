@@ -1431,8 +1431,10 @@
     if (sub) {
       const ms = doneMeta && typeof doneMeta.latency_ms === "number" ? doneMeta.latency_ms : null;
       const elapsed = ms != null ? ms : Math.max(0, _now() - (streamCtx.processStartedAt || _now()));
+      // Duration unit must match the sibling meta line (formatStreamDuration → "s"),
+      // NOT the Turkish "sn" — English is the default UI language.
       sub.textContent =
-        elapsed < 1000 ? `${Math.round(elapsed)} ms` : `${(elapsed / 1000).toFixed(1)} sn`;
+        elapsed < 1000 ? `${Math.round(elapsed)} ms` : `${(elapsed / 1000).toFixed(1)}s`;
     }
     // Default COLLAPSED; but if the user left this turn's panel OPEN
     // (turn_id preference saved) finalize it open — F5/resume preserves the pref.
@@ -2021,7 +2023,11 @@
       }
       const _mw = payload.memory_writes || [];
       const _mwKeys = (arr) =>
-        arr.map((w) => w.key || "bilgi").filter(Boolean).slice(0, 3).join(", ");
+        arr
+          .map((w) => w.key || window.AkanaI18n.t("transport.toast.memory_key_fallback"))
+          .filter(Boolean)
+          .slice(0, 3)
+          .join(", ");
       const staged = _mw.filter((w) => w && w.kind === "staging");
       if (staged.length) {
         chatCtx.hooks.showToast(window.AkanaI18n.t("transport.toast.memory_staged", { keys: _mwKeys(staged) }), "success");
@@ -2851,8 +2857,14 @@
       }
       // Remove this stream from the per-conv registry (race-safe: only if it still owns the record).
       unregisterStream(streamCtx);
-      const fgRec = foregroundStreamRecord();
-      if (logRoot && (wasForeground || !fgRec)) {
+      // The chat-streaming flag lives on THIS stream's OWN per-conversation pane
+      // (logRoot = paneForConv), NOT on the shared #log, so clear it UNCONDITIONALLY
+      // when the stream ends. The old wasForeground||!fgRec gate guarded the SHARED #log
+      // (there, a background finish would wrongly clear the visible chat's flag); per-pane
+      // there is no cross-clear risk, and gating left a background-finished pane stuck at
+      // "1" forever — permanently skipping code-block decoration for that conversation on
+      // switch-back (panes persist; clear() only wipes children, never this flag).
+      if (logRoot) {
         delete logRoot.dataset.chatStreaming;
       }
       resetSseQueue(streamCtx);
@@ -2940,7 +2952,7 @@
     if (isForegroundConv(convId)) {
       chatCtx.hooks.setStreamingUi?.(true);
     }
-    window.AkanaTurnStatus?.begin();
+    window.AkanaTurnStatus?.begin(convId);
 
     const wrap = document.createElement("div");
     wrap.className = "row row-assistant";
@@ -3000,6 +3012,9 @@
       }
       if (serverError) {
         await maybeRecoverStuckActiveRun(serverError, convId);
+        // Transport-level failure never fires `done`/`error` SSE frames → the live
+        // usage HUD pill would otherwise stay attached with stale token numbers.
+        removeTurnHud(streamCtx);
         flushStreamMarkdownUpdate(streamCtx);
         bubble.classList.remove("bubble-bot-pending");
         bubble.removeAttribute("aria-busy");
@@ -3077,13 +3092,20 @@
 
     await ensureConversationIdReady();
 
+    // Sample THIS stream's conversation id ONCE, synchronously, before the fetch —
+    // conversationIdForMemory() is the global displayed-conv getter and a mid-connect
+    // chat switch (switchChatConversation) mutates it synchronously. Re-reading it after
+    // `await fetch` would route the stream (payload/pane/streamCtx) into whatever chat is
+    // displayed when the headers land, clobbering that chat's live stream registry record.
+    const boundConvId = chatCtx.conversationIdForMemory() || null;
+
     const abort = new AbortController();
     let r;
     try {
       r = await fetch(`${baseUrl()}/api/v1/chat/stream${chatCtx.hooks.streamTtsParam()}`, {
         method: "POST",
         headers: authHeaders(true),
-        body: JSON.stringify(chatPayload(text, opts.voiceTurn, opts)),
+        body: JSON.stringify(chatPayload(text, opts.voiceTurn, { ...opts, conversationId: boundConvId })),
         signal: abort.signal,
       });
     } catch (e) {
@@ -3112,16 +3134,18 @@
       throw new Error(parseApiError(body, r.statusText));
     }
 
-    // This stream's conv (ensureConversationIdReady ran → now known). The record is
-    // registered inside consumeSseResponse with the same abort once streamCtx is built
-    // (no AWAIT between here and consumeSseResponse → STOP cannot race before streamCtx).
-    const streamConvId = chatCtx.conversationIdForMemory() || null;
+    // This stream's conv — the id sampled BEFORE the fetch (boundConvId), NOT re-read
+    // from the global getter here: a chat switch during the connect window must not
+    // reroute this stream's pane/registry. The record is registered inside
+    // consumeSseResponse with the same abort once streamCtx is built (no AWAIT between
+    // here and consumeSseResponse → STOP cannot race before streamCtx).
+    const streamConvId = boundConvId;
     // Open the foreground UI (composer→STOP / "Responding" / orb / scene) ONLY if
     // this stream belongs to the DISPLAYED conversation — a concurrent send to another
     // chat must not flip the visible chat's composer to STOP / trigger the voice scene.
     if (isForegroundConv(streamConvId)) {
       chatCtx.hooks.setStreamingUi?.(true);
-      window.AkanaTurnStatus?.begin();
+      window.AkanaTurnStatus?.begin(streamConvId);
       // Aurora voice scene: turn started (no tokens yet) → "Thinking".
       try {
         window.AkanaBus?.emit?.("chat:stream:start", {});
@@ -3167,7 +3191,7 @@
       insertBeforeOrAppend(msgBody, node, bubble);
     }
 
-    const streamStartConvId = chatCtx.conversationIdForMemory();
+    const streamStartConvId = boundConvId;
     const streamCtx = {
       meta,
       bubble,
@@ -3237,6 +3261,9 @@
       // the visible chat's log.
       const convIdErr = streamCtx.convId || chatCtx.conversationIdForMemory();
       await maybeRecoverStuckActiveRun(serverError, convIdErr);
+      // Transport-level failure (CONN/EMPTY) never fires `done`/`error` SSE frames →
+      // remove the live usage HUD pill so it does not linger with stale token numbers.
+      removeTurnHud(streamCtx);
       flushStreamMarkdownUpdate(streamCtx);
       stopStreamReveal(streamCtx); // prevent a late reveal frame from overwriting the final render
       bubble.classList.remove("bubble-bot-pending");
@@ -3328,7 +3355,13 @@
   }
 
     function chatPayload(text, voice, opts = {}) {
-      const id = chatCtx.conversationIdForMemory();
+      // opts.conversationId (when the caller pre-sampled it before the connect await) is
+      // AUTHORITATIVE — do not re-read the global getter, which a mid-connect chat switch
+      // would have already changed. Falls back to a live read for callers that don't pass it.
+      const id =
+        opts.conversationId !== undefined
+          ? opts.conversationId
+          : chatCtx.conversationIdForMemory();
       const payload = { text, conversation_id: id || null };
       // Voice conversation mode turn → tell the backend to keep the response short
       // (LLM prompt only; the stored user message is unchanged).
@@ -3395,6 +3428,7 @@
         flushStreamScroll,
         adoptStreamConversationId,
         finalizeStreamUi,
+        finalizeThoughtFeed,
         handleChatStreamEvent,
         maybeSignalMemoryWriteTool,
         // ── Per-conv stream record seams (concurrent N-stream contract) ─────────

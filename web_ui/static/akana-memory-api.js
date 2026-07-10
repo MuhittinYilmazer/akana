@@ -62,8 +62,11 @@
     PATHS,
 
     // ─── Staging (Inbox) ───
-    async listStaging(status = "pending") {
-      return asList(await request("GET", PATHS.staging, { params: { status } }));
+    // limit defaults to the server cap (500). Without it the server default (50)
+    // silently truncated the Inbox render, the pending-count badge, and the
+    // Approve-all/Reject-all loop, so bulk actions only touched the first 50.
+    async listStaging(status = "pending", limit = 500) {
+      return asList(await request("GET", PATHS.staging, { params: { status, limit } }));
     },
     approveStaging: (id) => request("POST", fill(PATHS.stagingApprove, id)),
     rejectStaging: (id) => request("POST", fill(PATHS.stagingReject, id)),

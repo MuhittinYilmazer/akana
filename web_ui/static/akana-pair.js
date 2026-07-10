@@ -177,6 +177,17 @@
       return;
     }
 
+    // Token IS set server-side but no pair_url: the only reason the endpoint returns
+    // that is a missing tailnet HTTPS URL (Tailscale Serve not active). Name the real
+    // missing piece (not the misleading 'set a token first'). But do NOT dead-end when a
+    // LOCAL token exists: a self-proxied user can still type a custom host and get a QR
+    // from the manual-host modal below — only abort when there is no local token either.
+    if (info && info.token_set && !info.pair_url) {
+      showToast(window.AkanaI18n.t("pair.toast.serve_inactive"), "err");
+      if (!readToken()) return;
+      // else: fall through to the manual-host modal (buildPairUrl uses the local token).
+    }
+
     // info === null (endpoint unreachable / proxied) → fall back unchanged.
     // No token at all → nothing to pair; abort with a toast (host is irrelevant).
     if (!readToken()) {
@@ -213,6 +224,26 @@
     document.body.classList.add("pair-open");
   }
 
+  // The token the /system/pair endpoint composed into pair_url is the ONLY token a
+  // loopback owner has (their localStorage is empty — see the endpoint docstring), so a
+  // host correction must recompose THAT url onto the new host, not fall back to the
+  // localStorage-only buildPairUrl() (which returns null → wipes the working QR). The
+  // token in pair_url is already percent-encoded (quote(token, safe='')) — reuse it
+  // verbatim; do NOT re-encode. Returns null for a placeholder/empty host.
+  function recomposePairUrl(host) {
+    const h = (host || "").trim();
+    if (isPlaceholderHost(h)) return null;
+    const src = lastPairInfo && lastPairInfo.pair_url;
+    if (!src) return null;
+    const marker = "#token=";
+    const i = src.indexOf(marker);
+    if (i < 0) return null;
+    const token = src.slice(i + marker.length);
+    if (!token) return null;
+    // Match buildPairUrl's shape exactly: https://<host>/#token=<token>.
+    return "https://" + h + "/" + marker + token;
+  }
+
   // Save + refresh QR whenever the host field changes (user can correct a wrong address).
   // If left empty, the saved value is removed → resolution falls back to the default.
   function onHostChange() {
@@ -225,7 +256,9 @@
     } catch (e) {
       /* localStorage inaccessible — ignore */
     }
-    const url = buildPairUrl();
+    // Prefer the server-issued token (a loopback owner has none in localStorage, so
+    // buildPairUrl() alone returns null and would wipe the working QR on any edit).
+    const url = recomposePairUrl(val) || buildPairUrl();
     if (url) {
       lastUrl = url;
       renderQr(url);

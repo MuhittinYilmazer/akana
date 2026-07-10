@@ -361,6 +361,29 @@ class StagingStore:
             finally:
                 conn.close()
 
+    def revert_promotion(self, staged_id: str) -> bool:
+        """Release a won ``mark_promoted`` claim after the durable write FAILED.
+
+        Claim-first promotion (Curator.promote) flips the row to ``promoted`` with a
+        provisional minted fact_id BEFORE calling ``assert_fact``. If that durable write
+        raises (e.g. cross-process ``database is locked`` past the busy_timeout, disk
+        I/O error), the claim must be released — otherwise the row is stuck ``promoted``
+        pointing at a fact that was never written and the user-approved candidate can
+        never be re-approved. Only reverts a row still ``promoted`` (idempotent).
+        """
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    "UPDATE staging SET status = 'pending', promoted_fact_id = NULL "
+                    "WHERE id = ? AND status = 'promoted'",
+                    (staged_id,),
+                )
+                conn.commit()
+                return int(cur.rowcount) > 0
+            finally:
+                conn.close()
+
     def mark_rejected(self, staged_id: str) -> bool:
         return self._set_status(staged_id, "rejected")
 

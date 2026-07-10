@@ -328,6 +328,13 @@ class OpenAIRealtimeBridge(RealtimeBridge):
             self._tool_continuation_pending = False
             await self._send_json({"type": "interrupt"})
             await self._persist_turn()
+            # Input transcription is async: a barge before the interrupted turn's own
+            # completed lands (or a noise-triggered response with no transcript) hits the
+            # orphan guard with _in_buf empty, so _persist_turn is a no-op that leaves the
+            # cancelled reply fragment in _out_buf. Drop that one-sided _out_buf here (keep
+            # _in_buf per the retain-user-side contract) so it never prepends to the next
+            # turn's assistant text — mirrors gemini turn_complete's one-sided cleanup.
+            self._out_buf = ""
         elif etype == "response.done":
             # NOTE: the Realtime API has no separate "response.cancelled" server
             # event — a cancelled response is acknowledged via "response.done"
@@ -475,6 +482,17 @@ class OpenAIRealtimeBridge(RealtimeBridge):
             self._deferred_item_id = self._pending_item_id
             # Leave _turn_t0 untouched: the deferred _persist_turn (fired when the
             # late transcript arrives) measures latency from the real turn start.
+            return
+        if self._in_buf.strip() and not self._out_buf.strip():
+            # A response that produced NO assistant text (response.done status
+            # failed/incomplete, or an empty response) is a dead turn — the question got
+            # no answer. The orphan guard in _persist_turn would return without clearing,
+            # retaining this stale _in_buf; the NEXT turn's late-transcript deferral is
+            # then defeated (its condition needs an empty _in_buf) and the stale question
+            # cross-pairs with the next turn's reply, dropping that turn's real transcript.
+            # Drop the dead turn here instead (no assistant side to pair with anyway).
+            self._in_buf = ""
+            self._pending_item_id = ""
             return
         await self._persist_turn()
         self._pending_item_id = ""

@@ -202,7 +202,11 @@
 
   function looksLikeGrepPattern(raw) {
     const s = String(raw || "").trim();
-    return /\||ToolCall|tool_call|[.+*?^$[\]()]/.test(s) && s.length < 120 && !isFilePathAsToolName(s);
+    // A bare '.' is NOT a grep signal: it is a common separator in canonical tool
+    // names ("memory.search", MCP dotted leaves) — matching it here hijacked those
+    // to the grep family before dot-folding (normalizedToolName) could run. Require
+    // genuinely regex-y metacharacters instead.
+    return /\||ToolCall|tool_call|[+*?^$[\]()]/.test(s) && s.length < 120 && !isFilePathAsToolName(s);
   }
 
   function sanitizeToolArgsObject(args) {
@@ -827,9 +831,20 @@
   function renderTermCard(call, existing) {
     const dc = displayCall(call);
     const args = parseToolArgs(dc) || {};
-    const cmd = pickArg(args, ["command", "cmd"]) || toolCallArgHighlight(dc) || "";
+    const rawName = inferEffectiveToolName(dc);
+    // For the name-is-the-command shape (Cursor/MCP shell-as-toolname) there are no
+    // args and no arg-highlight, so fall back to the raw name — the command itself —
+    // exactly as the sibling paths (formatToolArgsBlocks, toolCallActionSentence) do.
+    const cmd =
+      pickArg(args, ["command", "cmd"]) ||
+      toolCallArgHighlight(dc) ||
+      (isShellAsToolName(rawName) ? rawName : "");
     const running = toolCallStatus(dc) === "running";
-    const startedAt = (existing && Number(existing.dataset.startedAt)) || Date.now();
+    // A card BORN already-done with no persisted start (history/F5 restore) has no
+    // real runtime; a render-time startedAt would fabricate "0ms" (see the elapsed
+    // guard below). Live/running cards and patched existing cards keep a real start.
+    const persistedStart = existing && Number(existing.dataset.startedAt);
+    const startedAt = persistedStart || Date.now();
 
     const card = existing || document.createElement("div");
     if (!existing) {
@@ -899,7 +914,12 @@
     }
 
     const elapsedEl = card.querySelector(".term-card-elapsed");
-    if (elapsedEl) elapsedEl.textContent = termElapsedLabel(startedAt);
+    // Show elapsed only with a genuine start: a running card, or an existing card
+    // with a persisted start. A fresh, already-done card (history/F5 restore) has no
+    // real start → suppress the fabricated "0ms".
+    if (elapsedEl) {
+      elapsedEl.textContent = running || persistedStart ? termElapsedLabel(startedAt) : "";
+    }
 
     const pre = card.querySelector(".term-card-body");
     if (pre) {
@@ -2178,8 +2198,15 @@
    *  TodoWrite calls update the one live checklist in place. */
   function upsertTodoCard(bodyEl, call) {
     if (!bodyEl) return null;
-    const existing = bodyEl.querySelector(':scope > [data-todo-card="1"]')
-      || bodyEl.querySelector('[data-todo-card="1"]');
+    // Prefer a DIRECT-child card; the descendant fallback must SKIP cards nested in a
+    // subagent group's body — otherwise a top-level TodoWrite (targeting the timeline
+    // body) would hijack a subagent's own nested checklist, overwriting it inside the
+    // auto-collapsed group and never rendering a top-level card.
+    const existing =
+      bodyEl.querySelector(':scope > [data-todo-card="1"]') ||
+      Array.from(bodyEl.querySelectorAll('[data-todo-card="1"]')).find(
+        (el) => !(el.closest && el.closest(".aur-subagent-body")),
+      );
     if (existing) return patchTodoCard(existing, call || {});
     const fresh = renderTodoCard(call || {});
     bodyEl.appendChild(fresh);
@@ -2601,6 +2628,7 @@
     } catch {
       return null;
     }
+    const created = !group;
     if (!group) {
       group = renderSubagentGroup(sub);
       timelineBody.appendChild(group);
@@ -2625,6 +2653,10 @@
       }
     }
     const phase = sub.phase || "start";
+    // A group synthesized already-ended (history/F5 reload builds it from a persisted
+    // Task call whose phase is "end") never ran live, so its render-time startedAt
+    // would fabricate a "· 0 ms" in the summary. Drop it → no elapsed segment.
+    if (created && phase === "end") group.dataset.startedAt = "0";
     const wasRunning = group.dataset.status === "running";
     const status =
       phase === "end" ? (sub.status === "error" ? "error" : "done") : "running";
@@ -2939,7 +2971,10 @@
       return q ? window.AkanaI18n.t("msg.mem_recall_chip", { q: truncateLine(q, 28) }) : window.AkanaI18n.t("msg.mem_recall_chip_gen");
     }
     if (kind === "staging") {
-      const key = String(item.key || item.label || "bilgi").trim();
+      // Keyless staging fallback follows the UI language (same key transport's
+      // memory toast uses) — a bare Turkish "bilgi" leaked into English chips.
+      const fallback = window.AkanaI18n.t("transport.toast.memory_key_fallback");
+      const key = String(item.key || item.label || fallback).trim();
       return truncateLine(key, 30);
     }
     const txt = String(item.preview || item.text || item.label || "").trim();
@@ -3898,9 +3933,16 @@
       if (decorateRaf != null) return;
       decorateRaf = requestAnimationFrame(() => {
         decorateRaf = null;
-        const streaming = log.dataset.chatStreaming === "1";
         for (const root of pendingDecorate) {
-          if (streaming) continue;
+          // Skip decoration while the PANE holding this node is still streaming —
+          // setBubbleMarkdown rebuilds that pane's innerHTML each frame, so a header
+          // strip added now is destroyed and re-added → flicker. The chat-streaming
+          // flag lives on the per-conversation pane (a child of #log), not on the
+          // #log container; walk from the mutated node to find it.
+          const streamingHost =
+            (root.closest && root.closest('[data-chat-streaming="1"]')) ||
+            (log.dataset.chatStreaming === "1" ? log : null);
+          if (streamingHost) continue;
           decorateCodeBlocksIn(root);
         }
         pendingDecorate.clear();
