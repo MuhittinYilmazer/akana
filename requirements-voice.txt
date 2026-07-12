@@ -15,7 +15,7 @@ faster-whisper>=1.0
 onnxruntime>=1.10,<2
 scipy>=1.3,<2
 scikit-learn>=1,<2
-requests>=2,<3
+requests>=2.34.2,<3
 tqdm>=4,<5
 # openwakeword itself is installed WITHOUT its declared deps by
 # add_cmd._install_requirements (avoids the tflite-runtime resolve failure).
