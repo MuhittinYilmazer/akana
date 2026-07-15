@@ -35,6 +35,12 @@ cursor_skills: []
 tools_allowed:
   - computer.screen_info
   - computer.screenshot
+  - computer.read_screen
+  - computer.find_element
+  - computer.click_ref
+  - computer.double_click_ref
+  - computer.right_click_ref
+  - computer.type_into_ref
   - computer.left_click
   - computer.double_click
   - computer.right_click

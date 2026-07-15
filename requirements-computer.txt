@@ -17,6 +17,15 @@ mss==10.2.0
 pygetwindow==0.0.9
 pyperclip==1.11.0  # direct: clipboard read/write + paste_text (Unicode-safe typing)
 
+# PERCEPTION (read_screen / click_ref): the OS accessibility tree behind the ref layer.
+#   • Windows → uiautomation (UI Automation over COM). Windows-only wheel.
+#   • Linux   → AT-SPI Python bindings, which are NOT pip-installable as a wheel: install
+#     the distro packages instead (Debian/Ubuntu: `sudo apt install python3-pyatspi
+#     gir1.2-atspi-2.0`) and enable accessibility in the desktop (the at-spi bus must run).
+# Perception degrades gracefully: without a backend, read_screen returns an install hint
+# and the pixel tools (screenshot + click x,y) keep working.
+uiautomation==2.0.20 ; sys_platform == "win32"
+
 # Transitive deps of pyautogui/pygetwindow, pinned for reproducibility:
 pyscreeze==1.0.1
 pytweening==1.2.0
