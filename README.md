@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  A self-hosted AI assistant server: one web UI, six swappable LLM providers, review-gated persistent memory, an encrypted credential vault, custom wake-word voice, reminders and scheduled prompts, detached background tasks, plus capability packs for browser and desktop automation. Packs are a plain-directory format, so writing your own is the intended path. Your vault, memory and files stay on your machine; no accounts, no telemetry, no cloud tenancy.
+  A self-hosted AI assistant server: one web UI, six swappable LLM providers, review-gated persistent memory, an encrypted credential vault, custom wake-word voice, reminders and scheduled prompts, plus capability packs for browser and perception-grounded desktop automation. One command backs up and restores your whole data directory. Packs are a plain-directory format, so writing your own is the intended path. Your vault, memory and files stay on your machine; no accounts, no telemetry, no cloud tenancy.
 </p>
 
 <p align="center">
@@ -89,10 +89,11 @@ The server prints its URL (default `http://127.0.0.1:8766`) and the bearer token
 
 - **Memory you approve before it's remembered.** An LLM auto-capture pass and the model's own remember tool both land in a **staging inbox**. Staged items are visible to the assistant (flagged as pending/unapproved in recall), but nothing becomes durable, trusted memory until you approve it in the Memory Studio.
 - **Six providers, one UI.** Claude, Cursor, Codex, Gemini, OpenAI and Ollama all run through one dispatch hub and one chat surface. Swap the backend without changing your workflow.
-- **Proactive, not just reactive.** Ask for a reminder or a recurring briefing and a schedule engine runs the turn when it's due, delivering to a chat thread and/or Telegram. Long jobs run as detached background tasks in their own thread — with an observability panel in Settings showing tokens, health and the audit trail.
+- **Proactive, not just reactive.** Ask for a reminder or a recurring briefing and a schedule engine runs the turn when it's due, delivering to a chat thread and/or Telegram — with an observability panel in Settings showing tokens, per-provider usage, health and the audit trail.
 - **Encrypted credential vault.** Provider keys and secrets live in a Fernet-encrypted store, with the master key kept **outside** the data directory (owner-only). Every assistant access to a secret is audit-logged.
+- **One-command backup.** `python akana.py backup` snapshots your whole data directory — memory, personas, uploads, settings, encrypted secrets — into a single `.tar.gz` (SQLite via the online backup API; secrets stay ciphertext, the master key is not bundled), and `restore` brings it back.
 - **Voice with a committed wake model.** A custom-trained "Hey Akana" openWakeWord model ships in-repo and is the default. A fully local voice path (local wake, local STT, offline Piper TTS) is one install away.
-- **Browser and desktop automation.** Opt-in capability packs let the assistant drive a headful Playwright browser or control your live desktop (mouse, keyboard, clipboard, windows).
+- **Browser and desktop automation.** Opt-in capability packs let the assistant drive a headful Playwright browser or control your live desktop. Desktop control is **perception-grounded** — it reads a structured accessibility tree and clicks elements by reference, not blind pixels (Windows UI Automation / Linux AT-SPI, with a screenshot fallback) — and can require your **per-action approval** (off by default).
 - **Bilingual (English / Turkish).** UI, persona prompts, wake word, TTS and STT all follow one language toggle. English is the default everywhere.
 
 ## Screenshots
@@ -116,6 +117,7 @@ flowchart TD
     Server --> Orch[Orchestrator<br/>llm_dispatch]
     Orch --> Cursor[Cursor]
     Orch --> Claude[Claude]
+    Orch --> Codex[Codex]
     Orch --> Gemini[Gemini]
     Orch --> OpenAI[OpenAI]
     Orch --> Ollama[Ollama]
@@ -176,7 +178,7 @@ Wake tuning, STT options, voice selection, conversation mode, barge-in and the G
 Capability Packs bundle skills, personas and MCP tool declarations. Each pack is a directory with a `pack.yaml` manifest and, per skill, a `SKILL.md`. Three ship in-repo:
 
 - **browser-pack** — mounts Microsoft's Playwright MCP (`@playwright/mcp`) as a headful, persistent-profile browser: navigate, snapshot, click, fill, type, screenshot, download.
-- **computer-control** — a first-party MCP server built on `pyautogui`, `mss`, `pygetwindow` and `pyperclip`: screenshot, mouse click/drag/scroll, type, hotkeys, clipboard, launch app, plus window list/focus/move/resize/close on the live desktop.
+- **computer-control** — a first-party MCP server for the live desktop. It is **perception-grounded**: `read_screen` returns a structured accessibility tree in which every interactable element ends in a `[ref]`, and `click_ref` / `type_into_ref` act on that reference (Windows UI Automation / Linux AT-SPI), with a screenshot + pixel-coordinate fallback for apps that expose no accessibility layer. Plus mouse click/drag/scroll, type, hotkeys, clipboard, launch app, and window list/focus/move/resize/close. An **opt-in per-action approval** gate (`computer_control_approval`, off by default) can require your confirmation before it acts — `destructive` (app launch, window close, drag) or `all` (every action).
 - **pack-author-pack** — an offline meta-pack for scaffolding and validating new packs. No external tools, no MCP server.
 
 ### Write your own pack
@@ -192,7 +194,7 @@ Packs are the primary extension point. The three bundled packs are examples; the
 pip install -r requirements-computer.txt
 ```
 
-(That pulls `pyautogui`, `mss`, `pygetwindow` and `pyperclip`.) `browser-pack` instead needs Node: it runs `@playwright/mcp` via `npx`.
+(That pulls `pyautogui`, `mss`, `pygetwindow`, `pyperclip`, plus `uiautomation` on Windows for the perception layer. On Linux, perception uses the system AT-SPI bindings — install the distro packages, e.g. `python3-pyatspi gir1.2-atspi-2.0`, and enable accessibility in the desktop; without a perception backend the pixel tools still work.) `browser-pack` instead needs Node: it runs `@playwright/mcp` via `npx`.
 
 **Consent model.** Enabling a pack only registers its skills and persona and probes its declared tools. Mounting an MCP server (writing it into `mcp_servers.yaml` so providers see it) is a separate, bearer-authenticated step (`POST /packs/consent`). It never happens automatically. Revoking (`POST /packs/consent/revoke`) only touches entries stamped with Akana's own `managed_by` marker, so user-authored entries are never overwritten.
 
@@ -258,6 +260,8 @@ The full set (memory toggles, voice paths, Telegram, wake model override and mor
 | `test` | Unit tests (pytest). |
 | `ship` | Pack a portable tarball. |
 | `reset-memory` | Wipe the memory database. Destructive. |
+| `backup` | Snapshot the data directory (`~/.akana`) to a `.tar.gz`. Flags: `--out <file-or-dir>`, `--include-voices`, `--include-vault-key` (bundles the master key for cross-machine restore — sensitive). |
+| `restore <file>` | Restore the data directory from a backup (stop the server first). `--force` moves an existing data dir aside before restoring. |
 
 **`add <component>`** installs an optional component:
 
@@ -282,7 +286,8 @@ The full set (memory toggles, voice paths, Telegram, wake model override and mor
 - Gemini, OpenAI and Ollama reach the same memory (`search`/`remember`/`forget`) and full seven-tool vault surface as Claude and Cursor, capping the tool loop at five rounds per turn. On Ollama, if the local model lacks native tool calls, memory/vault/bridged MCP tools are unavailable that turn.
 - Agent-session reuse is Cursor- and Claude-only; the other providers accept the parameter and ignore it.
 - File-input mechanism differs by provider: Cursor and Claude read images/PDFs/`.docx`/`.xlsx`/text via path reference; Gemini and OpenAI inline images and PDFs only; Ollama has no file input.
-- The Ultra thinking tier is Claude-only; on other providers it caps at that provider's highest tier. Auto-continue is Claude-only and off by default.
+- Thinking/effort control differs by provider: Claude/Gemini use Akana's tiers (the Ultra tier is Claude-only), while Codex and OpenAI show their **own native reasoning levels** (minimal / low / medium / high / xhigh) in the composer and send the chosen level verbatim. Auto-continue is Claude-only and off by default.
+- Desktop perception (`read_screen` / `click_ref`) is **live-verified on Windows (UI Automation)**; the Linux **AT-SPI** path is implemented and unit-tested but not yet verified against a real Linux desktop. The per-action approval prompt needs a desktop dialog backend; if none is available it **denies** (fail-safe), so enable `all`/`destructive` mode only where a confirmation dialog can appear.
 - XTTS-v2 model weights are CPML (non-commercial only); do not use it in commercial deployments.
 - The **default** voice path is cloud: `edge-tts` (Microsoft) for TTS and browser STT (Google). Browser wake fallback and browser STT need a Chromium-based browser.
 - Voice mode over remote requires HTTPS (Tailscale Serve provides it); a raw http tailnet IP works for chat but blocks the mic and PWA install.
