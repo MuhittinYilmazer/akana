@@ -60,4 +60,65 @@ window.AkanaI18nStrings = Object.assign(window.AkanaI18nStrings || {}, {
 
   // ── akana-pair.js ─────────────────────────────────────────────────────────
   // (pair.* keys already defined in akana-i18n-strings-settings.js — no new keys needed)
+
+  // ── Settings: nav tab + pane chrome (Observability) ────────────────────────
+  "settings.nav.observability":      { en: "Observability", tr: "Gözlemlenebilirlik" },
+  "settings.nav.observability_desc": { en: "Usage & health", tr: "Kullanım ve sağlık" },
+  "settings.observability.title": { en: "Observability", tr: "Gözlemlenebilirlik" },
+  "settings.observability.desc": {
+    en: "Provider usage, tool-call counters, breaker health and the audit tail",
+    tr: "Sağlayıcı kullanımı, araç çağrısı sayaçları, devre kesici sağlığı ve denetim kaydı",
+  },
+  "settings.observability.loading": { en: "Loading…", tr: "Yükleniyor…" },
+  "settings.observability.toolbar_desc": {
+    en: "Live server metrics, provider health and the audit tail",
+    tr: "Canlı sunucu metrikleri, sağlayıcı sağlığı ve denetim kaydı",
+  },
+
+  // ── akana-observability.js ──────────────────────────────────────────────────
+  "observability.refresh_btn":  { en: "Refresh", tr: "Yenile" },
+  "observability.status_updated": { en: "Updated {time}", tr: "Güncellendi: {time}" },
+  "observability.load_failed": {
+    en: "Could not load observability data: {error}",
+    tr: "Gözlemlenebilirlik verisi yüklenemedi: {error}",
+  },
+  "observability.stat.turns_total":  { en: "Total turns", tr: "Toplam tur" },
+  "observability.stat.turns_hint":   { en: "last {days}d · {n} conversations", tr: "son {days}g · {n} sohbet" },
+  "observability.stat.prompt_tokens":     { en: "Prompt tokens", tr: "Prompt token" },
+  "observability.stat.completion_tokens": { en: "Completion tokens", tr: "Tamamlama token" },
+  "observability.stat.total_tokens":      { en: "Total tokens", tr: "Toplam token" },
+  "observability.stat.cost":              { en: "Estimated cost", tr: "Tahmini maliyet" },
+  "observability.stat.active_provider":   { en: "Active provider", tr: "Aktif sağlayıcı" },
+  "observability.stat.unconfigured":      { en: "Unconfigured", tr: "Yapılandırılmamış" },
+  "observability.usage_note": {
+    en: "Older turns predate per-provider attribution, so their tokens are counted in the aggregate only. New turns are stamped and break out per provider below.",
+    tr: "Eski turlar sağlayıcı bazlı atıflandırmadan önceki dönemden; token'ları yalnızca toplama sayılır. Yeni turlar damgalanır ve aşağıda sağlayıcı bazında ayrışır.",
+  },
+  "observability.per_provider_title": { en: "Tokens by provider", tr: "Sağlayıcıya göre token" },
+  "observability.provider_unknown":   { en: "unattributed", tr: "atıfsız" },
+  "observability.provider_tokens": {
+    en: "{total} tokens · {turns} turns",
+    tr: "{total} token · {turns} tur",
+  },
+  "observability.health_title":  { en: "Provider health", tr: "Sağlayıcı sağlığı" },
+  "observability.health_active": { en: "Active provider: {provider}", tr: "Aktif sağlayıcı: {provider}" },
+  "observability.breaker_empty": {
+    en: "No circuit breakers have tripped yet.",
+    tr: "Henüz hiçbir devre kesici tetiklenmedi.",
+  },
+  "observability.breaker_state.closed":    { en: "closed", tr: "kapalı" },
+  "observability.breaker_state.open":      { en: "open", tr: "açık" },
+  "observability.breaker_state.half_open": { en: "half-open", tr: "yarı açık" },
+  "observability.breaker_failures": {
+    en: "{failures}/{threshold} failures · retry in {retry}s",
+    tr: "{failures}/{threshold} hata · {retry}sn içinde tekrar",
+  },
+  "observability.metrics_title":       { en: "Metrics", tr: "Metrikler" },
+  "observability.metrics_empty":       { en: "No metrics recorded yet.", tr: "Henüz metrik kaydedilmedi." },
+  "observability.metrics_counter":     { en: "Counters", tr: "Sayaçlar" },
+  "observability.metrics_timer":       { en: "Timers", tr: "Zamanlayıcılar" },
+  "observability.metrics_timer_value": { en: "{avg} avg · {count} samples", tr: "{avg} ort · {count} örnek" },
+  "observability.audit_title": { en: "Audit tail", tr: "Denetim kaydı" },
+  "observability.audit_empty": { en: "No audit events recorded today.", tr: "Bugün için denetim kaydı yok." },
+  "observability.audit_count": { en: "{n} events today", tr: "Bugün {n} olay" },
 });

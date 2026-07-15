@@ -597,6 +597,29 @@ _SPECS: tuple[RuntimeSettingSpec, ...] = (
         max=7_200,
         unit="sn",
     ),
+    # Applied live (no restart): the OpenAI driver is rebuilt per request and reads
+    # this via get_runtime, so a change takes effect on the next message.
+    RuntimeSettingSpec(
+        key="openai_timeout",
+        type="float",
+        label="OpenAI generation timeout (seconds)",
+        description=(
+            "For the OpenAI provider, the maximum seconds to wait for the model to "
+            "produce the NEXT token while streaming a reply (and the per-request "
+            "ceiling on one-shot calls). A deep-reasoning model can be silent for "
+            "minutes before its first token; if it exceeds this, the turn ends with "
+            "«openai request timed out». 0 = no limit (never time out): a slow but "
+            "progressing reply is always allowed to finish. The connection-open "
+            "timeout is separate and always short, so an unreachable endpoint still "
+            "fails fast. Default preserves the historical fixed 300 s."
+        ),
+        category="ag",
+        env_var="AKANA_OPENAI_TIMEOUT",
+        default=300.0,
+        min=0,
+        max=7_200,
+        unit="sn",
+    ),
     # -- network resilience (NetworkEngine F0 — no restart, env-only fallback) ---
     RuntimeSettingSpec(
         key="network_max_retries",
@@ -688,6 +711,28 @@ _SPECS: tuple[RuntimeSettingSpec, ...] = (
         max=3_600,
         unit="sn",
     ),
+    # -- schedule engine (reminders + recurring prompts) --------------------------
+    # The engine's poll cadence: how often the background loop checks for due
+    # schedules and fires them. It does nothing when no schedule is due, so the loop
+    # is always on (per the owner mandate there is NO separate schedule_enabled
+    # kill switch — a proactive feature that is opt-in via CREATING a schedule).
+    RuntimeSettingSpec(
+        key="schedule_poll_seconds",
+        type="float",
+        label="Schedule check interval (seconds)",
+        description=(
+            "How often the schedule engine checks for due reminders / recurring "
+            "prompts and fires them. Lower = more punctual firing but more frequent "
+            "wake-ups; the default (30s) is a good balance. Firing itself is "
+            "unaffected — a due schedule runs on the next check."
+        ),
+        category="ag",
+        env_var="AKANA_SCHEDULE_POLL",
+        default=30.0,
+        min=5,
+        max=600,
+        unit="sn",
+    ),
     # -- tools --------------------------------------------------------------------
     RuntimeSettingSpec(
         key="memory_tools_enabled",
@@ -713,6 +758,21 @@ _SPECS: tuple[RuntimeSettingSpec, ...] = (
         ),
         category="araclar",
         env_var="AKANA_VAULT_TOOLS",
+        default=True,
+        env_parse=_tool_flag_env,
+    ),
+    RuntimeSettingSpec(
+        key="schedule_tools_enabled",
+        type="bool",
+        label="Schedule tools (MCP) enabled",
+        description=(
+            "Exposes the akana_schedule tools (schedule_create/list/cancel/update) "
+            "to the model, so it can set reminders and recurring scheduled prompts "
+            "on your behalf. When disabled, the model cannot create schedules "
+            "(existing ones still fire; you can still manage them yourself)."
+        ),
+        category="araclar",
+        env_var="AKANA_SCHEDULE_TOOLS",
         default=True,
         env_parse=_tool_flag_env,
     ),

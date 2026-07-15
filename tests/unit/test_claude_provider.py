@@ -575,7 +575,15 @@ def test_tool_policy_default_is_full(monkeypatch: pytest.MonkeyPatch, tmp_path) 
         assert "mcp__akana_memory" in allowed
         assert "Read" in allowed and "Grep" in allowed and "Glob" in allowed
         assert argv[argv.index("--permission-mode") + 1] == "bypassPermissions"
-        assert "--disallowedTools" not in argv  # nothing blocked by default
+        # Even at full authority, harness-lifecycle tools are blocked: the CLI's
+        # ScheduleWakeup/Cron* schedule future work into a harness that DIES with
+        # the one-shot -p process — LIVE BUG: "1 dk sonra YouTube'u aç" → the
+        # model used ScheduleWakeup instead of schedule_create, said "kurdum",
+        # and nothing ever fired. Write/shell stay unblocked (full authority).
+        disallowed = argv[argv.index("--disallowedTools") + 1]
+        for blocked in ("ScheduleWakeup", "CronCreate", "CronDelete", "CronList"):
+            assert blocked in disallowed
+        assert "Bash" not in disallowed
 
     asyncio.run(run())
 
@@ -604,7 +612,7 @@ def test_tool_policy_optout_via_setting(
         assert "mcp__akana_memory" in allowed
         assert "Read" in allowed and "Grep" in allowed and "Glob" in allowed
         assert "Bash" not in allowed
-        for blocked in ("Bash", "Write", "Edit"):
+        for blocked in ("Bash", "Write", "Edit", "ScheduleWakeup"):
             assert blocked in disallowed
         assert argv[argv.index("--permission-mode") + 1] == "default"
 

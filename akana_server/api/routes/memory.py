@@ -785,6 +785,15 @@ def _vector_health(request: Request, embeddings: int) -> dict[str, Any]:
     ms = get_memory_settings(request)
     backend = ms.embed_backend
     indexer = getattr(request.app.state, "memory_indexer", None)
+    # The local embedder loads its ONNX model LAZILY on the first embed, so an indexer
+    # is wired (and fastembed imports) even when the configured model is invalid or the
+    # download failed. The first embed then trips the shared breaker permanently-off
+    # (or into rolling cooldowns) and every recall silently degrades to keyword-only.
+    # Fold that breaker state into active/available so /memory/stats stops reporting a
+    # dead vector layer as healthy. (_health has no public reader; access defensively.)
+    health = getattr(indexer, "_health", None) if indexer is not None else None
+    breaker_ok = health.active() if health is not None else True
+    breaker_permanent = bool(getattr(health, "_permanent", False))
     try:
         models = VectorStore.for_data_dir(_data_dir(request)).distinct_models()
     except Exception:
@@ -802,11 +811,25 @@ def _vector_health(request: Request, embeddings: int) -> dict[str, Any]:
         import importlib.util
 
         available = importlib.util.find_spec("fastembed") is not None
+    # A permanent trip (missing/typo'd model, failed first download) means the embedder
+    # is not actually usable, whatever the import check says.
+    available = available and not breaker_permanent
+    if ms.vector == "off" or backend == "off":
+        status = "off"
+    elif breaker_permanent:
+        status = "degraded"  # embedder unusable this process → keyword-only recall
+    elif not breaker_ok:
+        status = "cooldown"  # embedding paused, retrying → keyword-only meanwhile
+    elif not available:
+        status = "unavailable"
+    else:
+        status = "active"
     return {
-        "active": indexer is not None and ms.vector != "off",
+        "active": indexer is not None and ms.vector != "off" and breaker_ok,
         "mode": ms.vector,
         "backend": backend,
         "available": available,
+        "status": status,  # machine token; the UI localizes it
         "embeddings": embeddings,
         "models": models,
     }

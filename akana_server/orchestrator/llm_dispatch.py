@@ -3,7 +3,7 @@
 This module is the common entry point for ALL providers. The public surface
 (``complete_chat`` / ``stream_user_chat`` / ``complete_chat_with_usage`` /
 ``complete_chat_aggregated``) resolves ``_active_provider(settings)`` ONCE and
-branches: ``ollama``/``claude``/``gemini``/``openai`` → the corresponding
+branches: ``ollama``/``claude``/``gemini``/``openai``/``codex`` → the corresponding
 ``*_provider`` module; ``cursor`` → the built-in Cursor provider in
 :mod:`cursor_provider` (direct spawn) or :mod:`bridge_pool` (the default daemon).
 No provider is privileged as a default: with nothing configured
@@ -54,8 +54,8 @@ NO_PROVIDER_CONFIGURED_MSG = (
 def _active_provider(settings: Settings) -> str:
     """Resolve the active LLM provider from persisted settings.
 
-    One of "cursor" | "claude" | "ollama" | "gemini" | "openai", or "" when no
-    provider is configured. No provider is privileged as a default — an
+    One of "cursor" | "claude" | "ollama" | "gemini" | "openai" | "codex", or "" when
+    no provider is configured. No provider is privileged as a default — an
     unset/invalid value resolves to "" and chat refuses with a clear message.
     """
     try:
@@ -114,6 +114,12 @@ def _load_openai() -> base.ChatProvider:
     return openai_provider
 
 
+def _load_codex() -> base.ChatProvider:
+    from akana_server.orchestrator import codex_provider
+
+    return codex_provider
+
+
 def _load_cursor() -> base.ChatProvider:
     return cursor_provider
 
@@ -127,6 +133,7 @@ _PROVIDER_MODULES: dict[str, Callable[[], base.ChatProvider]] = {
     "claude": _load_claude,
     "gemini": _load_gemini,
     "openai": _load_openai,
+    "codex": _load_codex,
     "cursor": _load_cursor,
 }
 
@@ -295,6 +302,9 @@ async def complete_chat_with_usage(
         "prompt_tokens": est,
         "completion_tokens": est,
         "tool_calls": [],
+        # Estimated usage still gets the provider stamp so per-provider
+        # aggregation (observability) covers the one-shot path too.
+        "provider": _active_provider(settings),
     }
     return result.text, usage
 
@@ -429,6 +439,20 @@ async def complete_chat_aggregated(
         )
 
 
+def _stamp_usage_provider(ev: dict[str, Any], provider: str) -> dict[str, Any]:
+    """Stamp the resolved provider into a terminal ``done`` event's usage block.
+
+    The hub is the ONE place that knows which provider served the turn, and the
+    persisted turn usage is what the observability panel aggregates — without
+    this stamp, per-provider token attribution is impossible (turns don't carry
+    a provider anywhere else). ``setdefault`` so a provider that ever starts
+    self-reporting wins; non-done / usage-less events pass through untouched.
+    """
+    if ev.get("done") and isinstance(ev.get("usage"), dict):
+        ev["usage"].setdefault("provider", provider)
+    return ev
+
+
 async def stream_user_chat(
     settings: Settings,
     user_text: str,
@@ -492,7 +516,7 @@ async def stream_user_chat(
             file_ids=file_ids,
             auto_continue=auto_continue,
         ):
-            yield ev
+            yield _stamp_usage_provider(ev, provider)
         return
 
     # Cursor is the implicit dispatch tail. Reaching it with a non-cursor active
@@ -524,7 +548,7 @@ async def stream_user_chat(
     if bridge_daemon_enabled():
         pool = get_bridge_pool(settings)
         async for ev in pool.stream_run(payload):
-            yield ev
+            yield _stamp_usage_provider(ev, "cursor")
         return
 
     # Direct (daemon-less) spawn: delegate to cursor_provider.run_stream with the
@@ -536,4 +560,4 @@ async def stream_user_chat(
         payload=payload,
         model=model,
     ):
-        yield ev
+        yield _stamp_usage_provider(ev, "cursor")

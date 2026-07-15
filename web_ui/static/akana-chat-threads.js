@@ -655,6 +655,14 @@
         void archive.refreshConvActivityFromServer?.(convId);
         void archive.loadChatArchiveList();
         void archive.refreshActiveConversationMeta();
+        // OWN THE RESET (invariant, see staleInFlightSwitch above): this streaming
+        // fast-path supersedes any in-flight switch by bumping _switchGen, so that
+        // switch's gen-guarded finally is SKIPPED. If it already set chatPersistPaused=true
+        // + logEmpty.loading="1" (before its hydrate await), nobody else clears them →
+        // debounced saveChatStore silently drops + the empty-state hero stays hidden.
+        // Clear both latches here before returning (no-op if none were set).
+        try { setChatPersistPaused(false); } catch { /* ignore */ }
+        try { bridge.hooks.setLogLoading?.(false); } catch { /* ignore */ }
         flushChatStore();
         return;
       }
@@ -740,6 +748,7 @@
         void archive.refreshConvActivityFromServer?.(convId);
         void archive.loadChatArchiveList();
         void archive.refreshActiveConversationMeta();
+        window.AkanaChat?.maybeShowBgWorking?.(convId);
         return;
       }
       // Returning from another page: if a turn is running, resume it live; otherwise
@@ -758,6 +767,9 @@
       void archive.refreshConvActivityFromServer?.(convId);
       void archive.loadChatArchiveList();
       void archive.refreshActiveConversationMeta();
+      // Open-late: if a background turn (task/schedule) is live on this conversation,
+      // show the "working…" strip even though we missed its turn_active event.
+      window.AkanaChat?.maybeShowBgWorking?.(convId);
     }
 
     /** Resume a running turn in the opened conversation if one exists — defensive, swallows errors. */

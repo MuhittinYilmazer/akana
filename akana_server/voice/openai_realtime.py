@@ -179,6 +179,14 @@ class OpenAIRealtimeBridge(RealtimeBridge):
         # persist the turn correctly instead of the text leaking into _out_buf and
         # merging with the next turn. See _handle_response_done / _emit_user_completed.
         self._pending_assistant = ""
+        # User transcription deltas that arrive WHILE a prior turn's reply is deferred
+        # (_pending_assistant set) belong to the NEXT turn, not the deferred one. They must
+        # NOT land in _in_buf: _flush_pending_assistant substitutes its "[voice]" placeholder
+        # only when _in_buf is empty, so a non-empty _in_buf here would cross-pair the next
+        # turn's partial question with the deferred reply (VB-4 via the delta path that the
+        # _track_input_item item-id guard does not cover). Buffer them aside; seeded back into
+        # _in_buf after the flush so the next turn keeps its already-transcribed prefix.
+        self._deferred_in_buf = ""
         # Turn identity for the late-transcript path. Input transcription is async and a
         # completed can arrive AFTER its turn was already resolved (persisted with a
         # placeholder by _flush_pending_assistant when the next turn started). Such a
@@ -373,6 +381,12 @@ class OpenAIRealtimeBridge(RealtimeBridge):
             return
         if role == "assistant":
             self._out_buf += text
+        elif self._pending_assistant:
+            # A prior turn's reply is deferred → these user deltas are the NEXT turn's.
+            # Divert them so _flush_pending_assistant still sees an empty _in_buf and uses
+            # its placeholder (mirrors the _track_input_item deferred-turn guard, which
+            # protects only the item-id, not the text buffer). Still shown to the browser.
+            self._deferred_in_buf += text
         else:
             self._in_buf += text
         await self._send_json({"type": "transcript", "role": role, "text": text})
@@ -458,6 +472,10 @@ class OpenAIRealtimeBridge(RealtimeBridge):
             self._pending_assistant = ""
             self._deferred_item_id = ""
             self._pending_item_id = ""
+            # The deferred turn resolved authoritatively via its own completed; any deltas
+            # diverted while it was pending belong to it (subsumed by `full`) → discard them
+            # so they never leak as a later turn's seed.
+            self._deferred_in_buf = ""
             await self._persist_turn()
 
     async def _handle_response_done(self) -> None:
@@ -532,6 +550,10 @@ class OpenAIRealtimeBridge(RealtimeBridge):
         self._deferred_item_id = ""
         self._pending_item_id = ""
         await self._persist_turn()
+        # Deltas diverted during the deferral belong to the now-live next turn: seed them
+        # into the freshly-reset _in_buf so that turn keeps its already-transcribed prefix.
+        self._in_buf = self._deferred_in_buf
+        self._deferred_in_buf = ""
 
     async def _handle_function_call(self, event: dict[str, Any]) -> None:
         """``response.function_call_arguments.done`` → dispatch → function_call_output

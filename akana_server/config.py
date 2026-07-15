@@ -514,7 +514,11 @@ def load_settings() -> Settings:
         # ``score >= 5.0`` never fire. The PUT/runtime path already enforces the same
         # range, so env parsing must not be the one gap that lets it through.
         wake_threshold=_float_env("WAKE_THRESHOLD", DEFAULTS["wake_threshold"], lo=0.01, hi=1.0),
-        wake_min_frames=_int_env("WAKE_MIN_FRAMES", DEFAULTS["wake_min_frames"]),
+        # Bounds mirror SCHEMA["wake_min_frames"] (min=1, max=10): the consumer clamps
+        # only the LOWER bound (wake.py `max(1, ...)`), so an out-of-range HIGH env value
+        # (e.g. WAKE_MIN_FRAMES=50) would require ~4 s of consecutive hot frames and
+        # silently disable wake — the same env-bypass the threshold guard above closes.
+        wake_min_frames=_int_env("WAKE_MIN_FRAMES", DEFAULTS["wake_min_frames"], lo=1, hi=10),
         wake_inference_framework=os.environ.get("WAKE_INFERENCE_FRAMEWORK", "onnx").strip(),
         whisper_model=os.environ.get("WHISPER_MODEL", "small").strip(),
         whisper_compute_type=os.environ.get("WHISPER_COMPUTE_TYPE", "int8").strip(),

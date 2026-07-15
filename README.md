@@ -9,13 +9,13 @@
 </p>
 
 <p align="center">
-  A self-hosted AI assistant server: one web UI, five swappable LLM providers, review-gated persistent memory, an encrypted credential vault, custom wake-word voice, plus capability packs for browser and desktop automation. Packs are a plain-directory format, so writing your own is the intended path. Your vault, memory and files stay on your machine; no accounts, no telemetry, no cloud tenancy.
+  A self-hosted AI assistant server: one web UI, six swappable LLM providers, review-gated persistent memory, an encrypted credential vault, custom wake-word voice, reminders and scheduled prompts, detached background tasks, plus capability packs for browser and desktop automation. Packs are a plain-directory format, so writing your own is the intended path. Your vault, memory and files stay on your machine; no accounts, no telemetry, no cloud tenancy.
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT">
   <img src="https://img.shields.io/badge/python-3.11%2B-blue.svg" alt="Python 3.11+">
-  <img src="https://img.shields.io/badge/providers-claude%20%7C%20cursor%20%7C%20gemini%20%7C%20openai%20%7C%20ollama-lightgrey.svg" alt="Providers: claude / cursor / gemini / openai / ollama">
+  <img src="https://img.shields.io/badge/providers-claude%20%7C%20cursor%20%7C%20codex%20%7C%20gemini%20%7C%20openai%20%7C%20ollama-lightgrey.svg" alt="Providers: claude / cursor / codex / gemini / openai / ollama">
 </p>
 
 <p align="center">
@@ -88,7 +88,8 @@ The server prints its URL (default `http://127.0.0.1:8766`) and the bearer token
 ## Why Akana
 
 - **Memory you approve before it's remembered.** An LLM auto-capture pass and the model's own remember tool both land in a **staging inbox**. Staged items are visible to the assistant (flagged as pending/unapproved in recall), but nothing becomes durable, trusted memory until you approve it in the Memory Studio.
-- **Five providers, one UI.** Claude, Cursor, Gemini, OpenAI and Ollama all run through one dispatch hub and one chat surface. Swap the backend without changing your workflow.
+- **Six providers, one UI.** Claude, Cursor, Codex, Gemini, OpenAI and Ollama all run through one dispatch hub and one chat surface. Swap the backend without changing your workflow.
+- **Proactive, not just reactive.** Ask for a reminder or a recurring briefing and a schedule engine runs the turn when it's due, delivering to a chat thread and/or Telegram. Long jobs run as detached background tasks in their own thread — with an observability panel in Settings showing tokens, health and the audit trail.
 - **Encrypted credential vault.** Provider keys and secrets live in a Fernet-encrypted store, with the master key kept **outside** the data directory (owner-only). Every assistant access to a secret is audit-logged.
 - **Voice with a committed wake model.** A custom-trained "Hey Akana" openWakeWord model ships in-repo and is the default. A fully local voice path (local wake, local STT, offline Piper TTS) is one install away.
 - **Browser and desktop automation.** Opt-in capability packs let the assistant drive a headful Playwright browser or control your live desktop (mouse, keyboard, clipboard, windows).
@@ -129,17 +130,18 @@ Full detail (server, orchestrator, vault internals and the data-directory layout
 
 ## Providers
 
-Akana registers five chat providers under a shared dispatch layer. **There is no default:** with nothing configured, chat calls fail with a `No LLM provider configured` error rather than picking one for you. Every provider uses **your own** key or session; foreign-provider keys are stripped from the environment before the Cursor and Claude bridges spawn.
+Akana registers six chat providers under a shared dispatch layer. **There is no default:** with nothing configured, chat calls fail with a `No LLM provider configured` error rather than picking one for you. Every provider uses **your own** key or session; foreign-provider keys are stripped from the environment before the Cursor and Claude bridges spawn.
 
 | Provider | Install | Model traffic goes to | Memory / vault reach | Agent reuse | Notes |
 | --- | --- | --- | --- | --- | --- |
 | **Claude** | Global `@anthropic-ai/claude-code` CLI | Anthropic | Native MCP | Yes (`--resume`) | MCP-native; only provider with auto-continue (off by default). |
 | **Cursor** | Node bridge (`add cursor` → `npm install`) | Cursor cloud | Native MCP | Yes (stored `agent_id`, SDK `Agent.resume`) | MCP-native; agent reuse. |
+| **Codex** _(beta)_ | Global `@openai/codex` CLI (`add codex`) | OpenAI (ChatGPT plan) | Native MCP | Yes (`exec resume`) | Subscription-billed via `codex login` — no API key; agentic CLI like Claude/Cursor. Untested against a live login yet. |
 | **Gemini** _(beta)_ | `add gemini` (`google-genai`) | Google | Full parity (function-calling) + MCP bridge | No | Image + PDF input (inline); thinking on Gemini 3+. |
 | **OpenAI** _(beta)_ | None (uses core `httpx`) | OpenAI | Full parity (function-calling) + MCP bridge | No | Image + PDF input (inline); `reasoning_effort` on o-series and GPT-5+. |
 | **Ollama** _(beta)_ | External Ollama app | Local Ollama server | Full parity (function-calling) + MCP bridge | No | Fully local, but the **least-tested** path. The tool surface is at parity, but firing depends on the local model's own function-calling ability; small models call unreliably. |
 
-> **Claude and Cursor are the tested path; the other three are beta.** Claude and Cursor each run as their own agent (the `claude` CLI, the Cursor SDK), speak MCP natively, and are what the project is built and used against day to day. **Gemini, OpenAI and Ollama are beta:** they are plain chat providers wired for memory/vault and MCP tool-calling, but exercised only by unit tests against *fake* providers. They have **not** been verified against the live Google / OpenAI / Ollama APIs, and they are not agentic coders (a `claude`/Cursor-style agent that reads, writes and runs in your workspace). Treat them as incomplete and expect rough edges; please open an issue if you hit one.
+> **Claude and Cursor are the tested path; the other four are beta.** Claude and Cursor each run as their own agent (the `claude` CLI, the Cursor SDK), speak MCP natively, and are what the project is built and used against day to day. **Codex is beta for a different reason:** it is a full agentic CLI bridge like Claude/Cursor (subscription auth via `codex login`, session resume, MCP-native), but it has not yet been exercised against a live login — only against protocol fakes. **Gemini, OpenAI and Ollama are beta:** they are plain chat providers wired for memory/vault and MCP tool-calling, but exercised only by unit tests against *fake* providers. They have **not** been verified against the live Google / OpenAI / Ollama APIs, and they are not agentic coders (a `claude`/Cursor-style agent that reads, writes and runs in your workspace). Treat them as incomplete and expect rough edges; please open an issue if you hit one.
 
 Cursor and Claude speak MCP natively and see the built-in `akana_memory` and `akana_vault` servers plus anything in `mcp_servers.yaml`. Gemini, OpenAI and Ollama get the **same** tools re-declared as native function-calling schemas. The memory operations (search / remember / forget, exposed natively as `memory_search` / `save_memory` / `memory_forget`) and the full seven-tool vault surface are at functional parity with what Claude and Cursor reach over MCP, derived single-source from the same schemas so the two surfaces stay in step. These providers also reach external MCP servers through an in-process bridge, with their tool loop capped at five rounds per turn. This path is exercised by unit tests against fake providers. Tool parity and model capability are separate concerns: on local Ollama models, whether the tools actually fire depends on the model's own function-calling ability and has not been verified end-to-end on real hardware. Smaller models call tools unreliably, so treat native tool use there as experimental.
 

@@ -321,7 +321,9 @@ def test_memory_mcp_servers_disabled(monkeypatch, tmp_path):
     from akana_server.orchestrator.memory_tools import memory_mcp_servers
 
     monkeypatch.setenv("AKANA_MEMORY_TOOLS", "0")
-    # The built-in akana_vault must be off too; otherwise the payload is not None
-    # even with memory off alone (each is a separate built-in).
+    # The built-in akana_vault + akana_schedule must be off too;
+    # otherwise the payload is not None even with memory off alone (each is a
+    # separate built-in server).
     monkeypatch.setenv("AKANA_VAULT_TOOLS", "0")
+    monkeypatch.setenv("AKANA_SCHEDULE_TOOLS", "0")
     assert memory_mcp_servers(SimpleNamespace(data_dir=tmp_path)) is None

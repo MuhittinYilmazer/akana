@@ -743,6 +743,14 @@ class PersonasAdapter:
 
     @staticmethod
     def _load(root: Path, persona_id: str) -> dict[str, Any] | None:
+        # Path-traversal guard (untrusted pack content): the persona id is joined as a
+        # FILE NAME under the pack root, so it must be a plain name — an id containing
+        # separators or ".." escapes the pack dir, and an ABSOLUTE id replaces the base
+        # entirely (pathlib join semantics), letting a manifest read any .yaml/.yml on
+        # disk into the system prompt. Mirrors SkillsAdapter's ``_SKILL_ID_RE`` guard.
+        if not _SKILL_ID_RE.match(str(persona_id)):
+            log.warning("skipped invalid persona id (path-traversal guard): %r", persona_id)
+            return None
         # New standard: ``personas/<id>.yaml``. Legacy: ``plugins/personas/<id>.yaml``.
         for base in (root / "personas", root / "plugins" / "personas"):
             for ext in (".yaml", ".yml"):

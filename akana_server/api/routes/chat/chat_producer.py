@@ -306,6 +306,34 @@ async def _emit_empty_response_tail(
     )
 
 
+def _injection_notes_block(settings: Any, conversation_id: str | None) -> str:
+    """Consume pending background-injection notes → a prompt block ('' if none).
+
+    Same-chat schedule results injected while no turn was running left a
+    note (see :mod:`akana_server.chat_injections`); this renders them as a
+    compact marked block prepended to the user text, so agent-resume providers
+    (whose sessions never see the injected turn) still learn about it. Runs
+    off-loop (file I/O); any failure returns '' — a note miss must never break
+    the turn."""
+    try:
+        from akana_server.chat_injections import pop_context_notes
+        from akana_server.runtime_settings import get_runtime
+
+        notes = pop_context_notes(settings, conversation_id or "")
+        if not notes:
+            return ""
+        lang = str(get_runtime("language", settings) or "en").lower()
+        header = (
+            "[Arka plan güncellemeleri — sen yokken bu sohbete eklendi]"
+            if lang.startswith("tr")
+            else "[Background updates — added to this chat while you were away]"
+        )
+        return header + "\n" + "\n".join(f"- {n}" for n in notes)
+    except Exception:  # noqa: BLE001 - the note bridge is best-effort by design
+        log.debug("injection notes block failed (conv=%s)", conversation_id, exc_info=True)
+        return ""
+
+
 def _done_tokens_block(usage: dict[str, Any] | None) -> dict[str, Any]:
     """Normalize the tokens block for the ``done`` SSE (prompt/completion + cost).
 
@@ -325,6 +353,12 @@ def _done_tokens_block(usage: dict[str, Any] | None) -> dict[str, Any]:
         cost = 0.0
     if cost > 0:
         block["cost_usd"] = cost
+    # Provider stamp (set centrally by llm_dispatch on the done event): persisted
+    # with the turn so the observability panel can attribute tokens per provider.
+    # Absent on legacy turns — readers must treat it as optional.
+    prov = str(u.get("provider") or "").strip().lower()
+    if prov:
+        block["provider"] = prov
     return block
 
 
@@ -432,6 +466,15 @@ async def _stream_chat_response(
         skipped_resume=assembled.history_skipped_resume
     )
     user_for_llm = assembled.user_text
+    # Same-chat background injections (schedule fires) leave a CONTEXT NOTE: on
+    # agent-resume providers (claude/cursor/codex) history is NOT re-sent, so the
+    # injected assistant turn is invisible to the model — the note bridges it into
+    # this turn. Popped ONLY here (a real turn), never in /context/preview
+    # (side-effect-free contract). On stateless providers the history already
+    # carries the injected turn; the note is a small redundancy, not a conflict.
+    _bg_block = await _off_loop(_injection_notes_block, settings, conv_id)
+    if _bg_block:
+        user_for_llm = f"{_bg_block}\n\n{user_for_llm}"
     if body.voice:
         # Voice mode: the [mode: voice] directive is appended to the LLM prompt only
         # (the stored/displayed user message stays as body.text → no log pollution).
@@ -660,6 +703,10 @@ async def _stream_chat_response(
                             agent_id = str(ev["agent_id"])
                         timing = ev.get("timing")
                         if isinstance(timing, dict) and timing.get("phase"):
+                            # Timing phases (TTFT, agent_ready_ms) are captured for the
+                            # audit blob (stream_timings) and metrics only — no SSE frame
+                            # is emitted because no FE stream handler consumes a "timing"
+                            # event (it would be dropped as unread wire bytes).
                             stream_timings[str(timing["phase"])] = timing
                             if timing.get("phase") == "agent_ready_ms":
                                 record_agent_timing_metric(timing.get("reused"))
@@ -671,7 +718,6 @@ async def _stream_chat_response(
                                 timing.get("ms"),
                                 timing.get("reused"),
                             )
-                            yield _sse_pack("timing", timing).encode("utf-8")
                         thinking = ev.get("thinking")
                         if isinstance(thinking, dict):
                             yield _sse_pack("thinking", thinking).encode("utf-8")

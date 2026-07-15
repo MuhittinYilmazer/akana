@@ -36,8 +36,13 @@ RUNTIME_DIRS = ("akana_server", "src/akana")
 ENV_NAME_RE = re.compile(r"^AKANA_[A-Z0-9]+(?:_[A-Z0-9]+)*$")
 
 #: Names deliberately NOT placed in .env.example → rationale.
-#: (Empty: AKANA_CONV_ID was removed with the vault MCP's inert conversation-id plumbing.)
-ALLOWLIST: dict[str, str] = {}
+ALLOWLIST: dict[str, str] = {
+    # NOT user-facing config: set PER TURN by the mcp_servers payload builder on
+    # the akana_schedule child's env so a schedule_create made mid-chat can
+    # default to same-chat delivery. A user setting this in .env would do
+    # nothing (the payload builder overwrites it per spawn).
+    "AKANA_CONVERSATION_ID": "internal per-turn MCP-child channel, not a setting",
+}
 
 
 def collect_runtime_env_names() -> dict[str, str]:

@@ -681,7 +681,8 @@ async def _record_tool_calls(
             # this point is a POST-execution record — raising here would make a tool that
             # already ran look "blocked". Pre-execution blocking is elsewhere: the
             # provider tool-allowlist (work_mode), the ReAct toolbox, the task gate, the
-            # sandbox. A deny is still visible via audit + WS policy_update.
+            # sandbox. A deny is recorded in the audit log only — the WS policy_update
+            # channel was removed with the PolicyEngine, so there is no live notification.
             await _off_loop(
                 record_tool_call,
                 settings.data_dir,

@@ -35,6 +35,10 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from akana_server.orchestrator.schedule_tools import (
+    SCHEDULE_TOOL_DECLS,
+    dispatch_schedule_tool,
+)
 from akana_server.orchestrator.vault_tools import VAULT_TOOL_DECLS, dispatch_vault_tool
 
 if TYPE_CHECKING:
@@ -116,6 +120,10 @@ GEMINI_TOOL_DECLS: list[dict[str, Any]] = [
     # derived single-source from the MCP schemas so the in-process surface matches
     # the claude MCP surface exactly.
     *VAULT_TOOL_DECLS,
+    # Schedule tools (schedule_create / schedule_list / schedule_cancel /
+    # schedule_update), derived single-source from the schedule schemas so the
+    # native surface matches the akana_schedule MCP surface exactly.
+    *SCHEDULE_TOOL_DECLS,
 ]
 
 
@@ -220,6 +228,9 @@ def dispatch_gemini_tool(
         vault_out = dispatch_vault_tool(settings, conv_id, name, args)
         if vault_out is not None:
             return vault_out
+        schedule_out = dispatch_schedule_tool(settings, conv_id, name, args)
+        if schedule_out is not None:
+            return schedule_out
         return f"Unknown tool: {name}"
     except Exception:  # pragma: no cover - a tool error must not break the turn/session
         log.warning("gemini tool '%s' dispatch error", name, exc_info=True)

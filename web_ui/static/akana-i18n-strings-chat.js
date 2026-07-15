@@ -3,19 +3,25 @@
  * Same { en, tr } shape as akana-i18n-strings.js; English-first. Keys: chat.* / msg.*
  */
 window.AkanaI18nStrings = Object.assign(window.AkanaI18nStrings || {}, {
-  // ── Thinking-mode labels (composer effort selector) ──
+  // ── Thinking-mode labels: Akana canonical tiers (claude/gemini) ──
   "chat.effort_fast":    { en: "Fast",    tr: "Hızlı"  },
   "chat.effort_normal":  { en: "Normal",  tr: "Normal" },
   "chat.effort_deep":    { en: "Deep",    tr: "Derin"  },
   "chat.effort_intense": { en: "Intense", tr: "Yoğun"  },
   "chat.effort_max":     { en: "Max",     tr: "Azami"  },
   "chat.effort_ultra":   { en: "Ultra",   tr: "Ultra"  },
+  // ── Native reasoning levels shown VERBATIM for codex/openai (minimal…xhigh) ──
+  "chat.effort_minimal": { en: "Minimal", tr: "Minimal" },
+  "chat.effort_low":     { en: "Low",     tr: "Düşük"   },
+  "chat.effort_medium":  { en: "Medium",  tr: "Orta"    },
+  "chat.effort_high":    { en: "High",    tr: "Yüksek"  },
+  "chat.effort_xhigh":   { en: "Extra High", tr: "Ekstra Yüksek" },
 
   // ── Plan-mode button titles ──
 
   // ── Effort/thinking button aria-label and open-title ──
-  "chat.effort_open_title": { en: "Thinking mode — sets the reasoning depth for Claude, Gemini 3+ and OpenAI (o-series/GPT-5+) models; Fast skips planning", tr: "Düşünme modu — Claude, Gemini 3+ ve OpenAI (o-serisi/GPT-5+) modellerinde düşünme/akıl-yürütme kademesini ayarlar; Hızlı planlamayı atlar" },
-  "chat.effort_aria":       { en: "Thinking mode: {label}", tr: "Düşünme modu: {label}" },
+  "chat.effort_open_title": { en: "Reasoning effort — Claude/Gemini use graduated tiers; Codex & OpenAI (o-series/GPT-5+) show their own native levels (minimal…xhigh); Fast skips planning", tr: "Akıl-yürütme eforu — Claude/Gemini kademeli seviyeler kullanır; Codex ve OpenAI (o-serisi/GPT-5+) kendi native seviyelerini gösterir (minimal…xhigh); Hızlı planlamayı atlar" },
+  "chat.effort_aria":       { en: "Reasoning effort: {label}", tr: "Akıl-yürütme eforu: {label}" },
 
   // ── Queue chip ──
   "chat.queue_one":  { en: "1 message queued — press Stop to send immediately", tr: "1 mesaj sırada — hemen göndermek için DUR" },
@@ -324,6 +330,8 @@ window.AkanaI18nStrings = Object.assign(window.AkanaI18nStrings || {}, {
   "msg.ask_hint_one":   { en: "Choose an option or type your own answer.", tr: "Bir seçenek seç veya kendi yanıtını yaz." },
   "msg.ask_submit":     { en: "Send",  tr: "Gönder" },
   "msg.ask_answered":   { en: "Your answer sent: {answer}", tr: "Yanıtın gönderildi: {answer}" },
+  "msg.ask_badge_done": { en: "answered",                   tr: "yanıtlandı" },
+  "msg.ask_answered_generic": { en: "This question was answered.", tr: "Bu soru yanıtlandı." },
 
   // ── renderPlanCard ──
   "msg.plan_title":        { en: "Akana is presenting a plan",      tr: "Akana bir plan sunuyor" },

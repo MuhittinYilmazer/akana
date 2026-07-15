@@ -37,9 +37,11 @@ from akana_server.api.routes import files as files_routes
 from akana_server.api.routes import llm_settings as llm_settings_routes
 from akana_server.api.routes import memory as memory_routes
 from akana_server.api.routes import network as network_routes
+from akana_server.api.routes import observability as observability_routes
 from akana_server.api.routes import packs as packs_routes
 from akana_server.api.routes import personas as personas_routes
 from akana_server.api.routes import runtime_settings as runtime_settings_routes
+from akana_server.api.routes import schedule as schedule_routes
 from akana_server.api.routes import system as system_routes
 from akana_server.api.routes import tailscale as tailscale_routes
 from akana_server.api.routes import skills as skills_routes
@@ -52,6 +54,7 @@ from akana_server.events import EventHub
 from akana_server.llm_settings import (
     load_llm_settings,
     resolve_claude_model_tag,
+    resolve_codex_model_tag,
     resolve_cursor_model_tag,
     resolve_gemini_model_tag,
     resolve_ollama_model_tag,
@@ -276,6 +279,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # if no channel is active an empty registry is bound, and GET /connectors
     # still works.
     await connectors_service.start_connectors(app)
+    # ScheduleEngine: MUST start after the connectors — it reads the live
+    # connector_registry (and conversation_service) off app.state per fire.
+    from akana_server.schedule.engine import start_schedule_engine
+
+    start_schedule_engine(app)
+    # Same-chat injection inbox: deliver anything parked before the last shutdown
+    # (a schedule result that became ready while a turn was streaming and the
+    # server stopped before that turn completed). No active turns exist at boot,
+    # so everything drains immediately; failures only log (never block startup).
+    from akana_server.chat_injections import drain_all_pending
+
+    try:
+        await drain_all_pending(app, settings)
+    except Exception:  # noqa: BLE001 - leftover delivery must never block startup
+        logging.getLogger(__name__).warning(
+            "startup injection drain failed", exc_info=True
+        )
     try:
         yield
     finally:
@@ -287,6 +307,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # "Task destroyed but pending" + partial writes when bridge_pool was
         # torn down). Must be set BEFORE cancel/await.
         app.state.chat_shutting_down = True
+        # Stop the PROACTIVE schedule engine FIRST — before the (possibly
+        # multi-second) chat-turn drain below. Its poll loop would otherwise keep
+        # firing due schedules during the drain window. It still stops BEFORE the
+        # connectors it delivers through (below), so an in-flight fire finishing
+        # here still finds the registry.
+        from akana_server.schedule.engine import stop_schedule_engine
+
+        await stop_schedule_engine(app)
         # Stop the MCP self-check probe if it is still handshaking — otherwise the task (and
         # the MCP subprocess it spawns) is orphaned at shutdown.
         sc_task = getattr(app.state, "mcp_selfcheck_task", None)
@@ -389,6 +417,7 @@ def create_app() -> FastAPI:
         ollama_tag = resolve_ollama_model_tag(settings, llm)
         gemini_tag = resolve_gemini_model_tag(settings, llm)
         openai_tag = resolve_openai_model_tag(settings, llm)
+        codex_tag = resolve_codex_model_tag(settings, llm)
         active_tag = (
             claude_tag
             if provider == "claude"
@@ -398,6 +427,8 @@ def create_app() -> FastAPI:
             if provider == "gemini"
             else openai_tag
             if provider == "openai"
+            else codex_tag
+            if provider == "codex"
             else active_model
         )
         claude_token_set = bool(get_secret(settings.data_dir, "claude_oauth_token"))
@@ -405,6 +436,9 @@ def create_app() -> FastAPI:
         claude_probe = await probe_claude_api(settings)
         gemini_probe = await probe_gemini_api(settings)
         openai_probe = await probe_openai_api(settings)
+        from akana_server.orchestrator.codex_catalog import probe_codex_cli
+
+        codex_probe = await probe_codex_cli(settings)
         return {
             "phase": _PHASE,
             "python": sys.version.split()[0],
@@ -417,6 +451,7 @@ def create_app() -> FastAPI:
                 "ollama_tag": ollama_tag,
                 "gemini_tag": gemini_tag,
                 "openai_tag": openai_tag,
+                "codex_tag": codex_tag,
                 # The single source-of-truth fields: the UI model-pill reads
                 # these. agent_id (=provider) is kept for backward compatibility.
                 "provider": provider,
@@ -446,6 +481,16 @@ def create_app() -> FastAPI:
                 # Live OpenAI API health (symmetric with gemini): is the key set
                 # + can /models reach it (cached, raw httpx).
                 "openai_api": openai_probe,
+                # Codex CLI health (installed on PATH + `codex login status`).
+                # Subscription auth — no API key; mirrors the claude_cli shape.
+                "codex_cli": {
+                    "bin": getattr(settings, "codex_bin", "") or "codex",
+                    "installed": codex_probe.get("installed", False),
+                    "logged_in": codex_probe.get("logged_in", False),
+                    "reachable": codex_probe.get("reachable", False),
+                    "error": codex_probe.get("error"),
+                    "error_code": codex_probe.get("error_code"),
+                },
             },
             "memory": {
                 "episodic_db": str(settings.data_dir / "db" / "episodic.db"),
@@ -530,6 +575,8 @@ def create_app() -> FastAPI:
     app.include_router(personas_routes.router, prefix="/api/v1")
     app.include_router(packs_routes.router, prefix="/api/v1")
     app.include_router(memory_routes.router, prefix="/api/v1")
+    app.include_router(schedule_routes.router, prefix="/api/v1")
+    app.include_router(observability_routes.router, prefix="/api/v1")
     app.include_router(ws_routes.router)
     app.include_router(voice_live_routes.router)
     app.include_router(voice_realtime_routes.router)

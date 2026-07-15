@@ -301,12 +301,32 @@
         }
         break;
       case "interrupt":
+        // The server interrupt frame IS a turn boundary: the bridge sends it AFTER it
+        // stopped forwarding the old (barged) turn's audio, and no turn_complete follows
+        // a cancelled turn — so bytes after this frame belong to the NEXT turn. Clear the
+        // barge latch here too, otherwise a client Stop then a new question would drop the
+        // whole next reply's audio (it stays latched until that turn's own turn_complete).
+        _interruptedUntilTurn = false;
         _flushPlayback();
         _setState("interrupt");
         break;
       case "turn_complete":
         _interruptedUntilTurn = false; // the interrupted turn ended → clear the barge latch
         _setState("turn_complete");
+        break;
+      case "tool":
+        // Both realtime bridges send {type:"tool",name} after dispatching a model tool
+        // call, purely for UI feedback. Emit the same voice:tool bus event the classic
+        // (SSE) path emits so Live mode shows the aurora tool chip too — otherwise the
+        // scene sits silent through a multi-second tool dispatch. Shape matches the
+        // aurora consumer (upsertVoiceTool reads call.name).
+        try {
+          if (typeof window !== "undefined" && window.AkanaBus) {
+            window.AkanaBus.emit("voice:tool", { call: { name: msg.name || "" } });
+          }
+        } catch (_e) {
+          /* UI feedback only — never let a bus hiccup break the message loop */
+        }
         break;
       default:
         break;

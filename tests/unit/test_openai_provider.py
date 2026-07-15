@@ -247,6 +247,20 @@ def test_reasoning_effort_gated_by_model_and_mode(tmp_path, monkeypatch) -> None
     assert "reasoning_effort" not in bodies3[0]
 
 
+def test_native_effort_levels_pass_through_verbatim(tmp_path, monkeypatch) -> None:
+    """The composer sends OpenAI's own level names (minimal…xhigh) when openai is active;
+    they reach ``reasoning_effort`` VERBATIM (no Akana-tier mapping). ``minimal`` is a real
+    GPT-5 level (not collapsed to low) and ``xhigh`` (extra-high) is reachable."""
+    for level in ("minimal", "low", "medium", "high", "xhigh"):
+        bodies: list = []
+        handler = _stream_rounds_handler([[_delta(content="ok", finish_reason="stop")]], bodies)
+        _mock_driver(monkeypatch, handler, model="gpt-5.4")
+        asyncio.run(
+            _drain(openai_provider.stream_user_chat(_settings(tmp_path), "x", thinking_mode=level))
+        )
+        assert bodies[0]["reasoning_effort"] == level
+
+
 def test_thinking_deltas_surface_as_thinking_events(tmp_path, monkeypatch) -> None:
     """A ``reasoning_content`` delta becomes a separate ``thinking`` wire event; it does NOT
     mix into the answer (gemini/ollama shape). The wire contract requires a DICT
@@ -907,3 +921,37 @@ def test_bridge_complete_chat_routes_mcp_tool(tmp_path, monkeypatch) -> None:
     assert tool_msg["content"] == "MCP-VERI"
     end = next(t for t in usage["tool_calls"] if t["phase"] == "end")
     assert end["result"] == "MCP-VERI"
+
+
+# -- generation-timeout knob (the ollama _driver timeout twin; openai's _driver
+#    takes ONLY settings + requires a key, so the key/model resolvers are patched) --
+
+
+def _timeout_settings(tmp_path):
+    return SimpleNamespace(data_dir=tmp_path, cursor_model="composer-2")
+
+
+def _patch_key_and_model(monkeypatch) -> None:
+    monkeypatch.setattr(openai_provider, "resolve_openai_key", lambda s: "sk-test")
+    monkeypatch.setattr(openai_provider, "_resolve_openai_model", lambda s: "gpt-5.4")
+
+
+def test_driver_timeout_defaults_to_historical_ceiling(tmp_path, monkeypatch) -> None:
+    """Default (env unset, no store): the OpenAI driver keeps the historical 300 s
+    generation ceiling (openai's default is NOT the 0-sentinel ollama uses)."""
+    monkeypatch.delenv("AKANA_OPENAI_TIMEOUT", raising=False)
+    _patch_key_and_model(monkeypatch)
+    drv = openai_provider._driver(_timeout_settings(tmp_path))
+    assert drv._timeout == 300.0
+
+
+def test_driver_timeout_reads_runtime_openai_timeout(tmp_path, monkeypatch) -> None:
+    """A configured AKANA_OPENAI_TIMEOUT flows into the driver (resolved live per call);
+    0 disables the generation ceiling."""
+    _patch_key_and_model(monkeypatch)
+    monkeypatch.setenv("AKANA_OPENAI_TIMEOUT", "45")
+    drv = openai_provider._driver(_timeout_settings(tmp_path))
+    assert drv._timeout == 45.0
+    monkeypatch.setenv("AKANA_OPENAI_TIMEOUT", "0")
+    drv0 = openai_provider._driver(_timeout_settings(tmp_path))
+    assert drv0._timeout == 0.0

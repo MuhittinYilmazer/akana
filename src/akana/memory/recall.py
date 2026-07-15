@@ -189,8 +189,14 @@ class Recall:
         seen: set[str] = set()
         labels = _ROLE_LABELS.get(language, _ROLE_LABELS[_DEFAULT_LANGUAGE])
         for term in terms:
+            # Push the role window into SQL (BEFORE the LIMIT): otherwise the top-`limit`
+            # bm25 rows can be all-assistant and get discarded below, starving eligible
+            # user turns ranked just past the cutoff (they'd never be fetched at all).
             for turn in self._episodic.search_keyword(
-                term, conversation_id=conversation_id, limit=limit
+                term,
+                conversation_id=conversation_id,
+                limit=limit,
+                roles=tuple(_EPISODIC_RECALL_ROLES),
             ):
                 if not episodic_turn_eligible(turn.role):
                     continue

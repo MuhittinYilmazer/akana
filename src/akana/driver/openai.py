@@ -33,6 +33,28 @@ from akana.driver.base import (
 _SSE_DATA_PREFIX = "data:"
 _SSE_DONE = "[DONE]"
 
+#: Connect/write/pool ceiling used when the generation (read) timeout is disabled.
+#: Only the READ (inter-token) timeout is unbounded in that mode — the handshake
+#: still fails fast so an unreachable server raises promptly instead of hanging.
+_CONNECT_TIMEOUT_S = 30.0
+
+
+def _chat_timeout(timeout: float) -> Any:
+    """Build the httpx timeout for a chat call (the ollama ``_chat_timeout`` twin).
+
+    ``timeout > 0`` → a uniform ceiling (connect/read/write/pool all = ``timeout``),
+    the historical behavior. ``timeout <= 0`` → the generation (read / inter-token)
+    ceiling is DISABLED (``read=None``) so a deep-reasoning model that is silent for
+    a long time before the next token is NEVER cut off, while connect/write/pool
+    keep a finite :data:`_CONNECT_TIMEOUT_S` so an unreachable endpoint still fails
+    fast. The non-positive = "no ceiling" convention mirrors the orchestrator's
+    idle/total timeout knobs (``combine_cap`` → 0 = disabled)."""
+    import httpx
+
+    if timeout and timeout > 0:
+        return httpx.Timeout(timeout)
+    return httpx.Timeout(_CONNECT_TIMEOUT_S, read=None)
+
 
 def _parse_openai_sse_line(line: str) -> dict[str, Any] | None:
     """One SSE line → a raw ``delta`` dict, or ``None`` to skip.
@@ -208,7 +230,7 @@ class OpenAIDriver(Driver):
         DriverError taxonomy (the mirror of ollama's ``_post_stream``)."""
         import httpx
 
-        client_kwargs: dict[str, Any] = {"timeout": self._timeout}
+        client_kwargs: dict[str, Any] = {"timeout": _chat_timeout(self._timeout)}
         if self._transport is not None:
             client_kwargs["transport"] = self._transport
         try:
@@ -258,7 +280,7 @@ class OpenAIDriver(Driver):
         it reads ``choices[0].message`` directly (including tool_calls)."""
         import httpx
 
-        client_kwargs: dict[str, Any] = {"timeout": self._timeout}
+        client_kwargs: dict[str, Any] = {"timeout": _chat_timeout(self._timeout)}
         if self._transport is not None:
             client_kwargs["transport"] = self._transport
         try:

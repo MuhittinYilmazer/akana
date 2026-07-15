@@ -197,6 +197,20 @@ async def reload_connectors(app: FastAPI) -> None:
         # reply. Draining lets those already-accepted messages finish first, then the
         # normal stop/start swaps the registry. If the drain times out (a genuinely
         # stuck turn) we fall through to the hard stop rather than blocking the reload.
+        # Stop the inbound PRODUCERS (pollers) BEFORE draining. A running Telegram
+        # poller keeps calling getUpdates during the drain window, and each getUpdates
+        # advances/confirms the offset (Telegram never redelivers). Any message it
+        # enqueues AFTER drain's one-time sweep is neither processed nor redelivered —
+        # it is silently lost when start_connectors swaps in a fresh queue. Halting the
+        # pollers first freezes the offset so the drain sees a stable, complete queue.
+        # (connector.stop is idempotent, so the stop_connectors call below is a no-op
+        # for the already-stopped pollers.)
+        registry = getattr(app.state, _REGISTRY_ATTR, None)
+        if registry is not None:
+            try:
+                await registry.stop_all()
+            except Exception as e:  # a producer-stop failure must not block the reload
+                log.warning("connector reload: stopping pollers failed: %s", e)
         router = getattr(app.state, _ROUTER_ATTR, None)
         if router is not None:
             try:
