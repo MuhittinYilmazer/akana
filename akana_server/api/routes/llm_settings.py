@@ -32,6 +32,7 @@ _ALLOWED_KEYS = frozenset(
         "ollama_model",
         "gemini_model",
         "openai_model",
+        "codex_model",
         "claude_full_tools",
     }
 )
@@ -154,6 +155,25 @@ async def get_openai_models(
     from akana_server.orchestrator.openai_catalog import fetch_openai_models
 
     return await fetch_openai_models(services.settings, force_refresh=refresh)
+
+
+@router.get("/system/codex/models", dependencies=[Depends(require_akana_bearer)])
+async def get_codex_models(
+    request: Request,
+    services: AppServices = Depends(get_services),
+    refresh: bool = Query(False, description="No-op for codex (static catalog); accepted for symmetry"),
+) -> dict[str, Any]:
+    """Codex-family models (a CURATED STATIC list) + the active selection.
+
+    Unlike the other providers, the Codex CLI has no key-authorized ``/v1/models``
+    endpoint (it authenticates via the ChatGPT OAuth session ``codex login`` writes), so
+    the list is always static (``source="static"``). ``reachable`` reflects whether the
+    CLI is installed AND logged in (``codex login status``) so the UI can surface a
+    "run `codex login`" affordance; the model list is returned either way (NEVER 500).
+    """
+    from akana_server.orchestrator.codex_catalog import fetch_codex_models
+
+    return await fetch_codex_models(services.settings, force_refresh=refresh)
 
 
 @router.put("/system/llm-settings", dependencies=[Depends(require_akana_bearer)])

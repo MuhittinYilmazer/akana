@@ -109,6 +109,8 @@
       tk: "onboard.prov_openai_t", dk: "onboard.prov_openai_d", ph: "onboard.prov_openai_ph" },
     { id: "claude", kind: "cli", label: "Claude", ic: "✸",
       tk: "onboard.prov_claude_t", dk: "onboard.prov_claude_d", hk: "onboard.prov_claude_hint" },
+    { id: "codex", kind: "cli", label: "Codex", ic: "⌁",
+      tk: "onboard.prov_codex_t", dk: "onboard.prov_codex_d", hk: "onboard.prov_codex_hint" },
     { id: "ollama", kind: "local", label: "Ollama", ic: "◍",
       tk: "onboard.prov_ollama_t", dk: "onboard.prov_ollama_d", hk: "onboard.prov_ollama_hint" },
   ];
@@ -128,7 +130,7 @@
   var LS_NAME = "akana.userName";
   var LS_WAKE = "akana.wakeAutostart";
 
-  var PROV_LABEL = { cursor: "Cursor", claude: "Claude", ollama: "Ollama", gemini: "Gemini", openai: "OpenAI" };
+  var PROV_LABEL = { cursor: "Cursor", claude: "Claude", codex: "Codex", ollama: "Ollama", gemini: "Gemini", openai: "OpenAI" };
 
   var root = document.documentElement;
   var STEPS = [];
@@ -289,6 +291,17 @@
         return { ready: false, live: false, reason: od.error || _t("onboard.connect_ollama_unreachable"), unverifiable: true };
       }
       return { ready: false, live: false, reason: _t("onboard.connect_ollama_unverifiable"), unverifiable: true };
+    }
+    if (provider === "codex") {
+      // Codex authenticates via `codex login` (ChatGPT plan) — like ollama there is
+      // no /system/status probe yet, so report a NEUTRAL "can't verify" instead of
+      // a false green. If a future payload adds dependencies.codex_cli, honor it.
+      var cx = deps.codex_cli || {};
+      if (Object.prototype.hasOwnProperty.call(cx, "reachable")) {
+        if (cx.reachable) return { ready: true, live: true, reason: null };
+        return { ready: false, live: false, reason: cx.error || _t("onboard.connect_codex_unverifiable"), unverifiable: true };
+      }
+      return { ready: false, live: false, reason: _t("onboard.connect_codex_unverifiable"), unverifiable: true };
     }
     if (provider === "claude") {
       var c = deps.claude_cli || {};

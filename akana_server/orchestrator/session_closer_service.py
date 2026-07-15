@@ -144,6 +144,23 @@ def start_session_closer(app: FastAPI) -> None:
     """The loop is always set up; the active gate checks the runtime setting
     (can be enabled from settings without a restart even if disabled in the env)."""
     settings: Settings = app.state.settings
+
+    # The poll loop must resolve against the LIVE app.state.settings, not the
+    # snapshot captured here at lifespan. apply_runtime_overrides stamps every
+    # stored override onto the startup snapshot's settings_attr fields, so after a
+    # POST /settings/runtime/reset removes a key, get_runtime falls back to that
+    # stamped attr (the OLD override) — the cron would keep the stale cadence until
+    # the next process restart. rebuild_app_settings only refreshes app.state.settings,
+    # so these callbacks re-read it fresh each turn (ignoring the loop's captured arg).
+    def is_active(_captured: Settings) -> bool:
+        return session_closer_active(app.state.settings)
+
+    def interval_seconds(_captured: Settings) -> float:
+        return _interval_seconds(app.state.settings)
+
+    async def run_once_live(_captured: Settings) -> int:
+        return await run_once(app.state.settings)
+
     _start_task(
         app,
         _TASK_ATTR,
@@ -151,10 +168,10 @@ def start_session_closer(app: FastAPI) -> None:
             settings,
             log=log,
             name="session_closer",
-            is_active=session_closer_active,
-            interval_seconds=_interval_seconds,
+            is_active=is_active,
+            interval_seconds=interval_seconds,
             disabled_check_seconds=_DISABLED_CHECK_SECONDS,
-            run_once=run_once,
+            run_once=run_once_live,
         ),
     )
 

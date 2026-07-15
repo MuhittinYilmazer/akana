@@ -44,6 +44,7 @@ def test_get_returns_env_defaults(client: TestClient) -> None:
         "ollama_model": "",
         "gemini_model": "",
         "openai_model": "",
+        "codex_model": "",
         "claude_full_tools": True,
     }
     assert body["active_cursor_model_tag"] == "composer-2"
@@ -76,8 +77,14 @@ def test_get_returns_env_defaults(client: TestClient) -> None:
     # NATIVE OpenAI name (gpt-* / o-series) — not a cursor-routed alias.
     assert all(v.startswith("gpt-") or v.startswith("o") for v in openai_values)
     assert all(set(opt) == {"value", "label"} for opt in body["openai_models"])
+    # Codex (ChatGPT-subscription CLI) is a curated static catalog; default = first option.
+    assert body["active_codex_model_tag"] == "gpt-5-codex"
+    codex_values = [opt["value"] for opt in body["codex_models"]]
+    assert "gpt-5-codex" in codex_values
+    assert all("codex" in v for v in codex_values)
+    assert all(set(opt) == {"value", "label"} for opt in body["codex_models"])
     provider_values = [opt["value"] for opt in body["providers"]]
-    assert provider_values == ["cursor", "claude", "ollama", "gemini", "openai"]
+    assert provider_values == ["cursor", "claude", "ollama", "gemini", "openai", "codex"]
     assert body["defaults"]["chat_max_turns"] == 12
     assert body["defaults"]["cursor_model"] == "composer-2"
 

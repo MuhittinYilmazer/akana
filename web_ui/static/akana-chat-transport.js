@@ -2245,6 +2245,12 @@
     if (!row) return false;
     const bubble = row.querySelector(".bubble-assistant, .bubble-bot");
     if (!bubble) return false;
+    // A row finalized by the transport-ERROR path (disconnect mid-answer) also has its
+    // pending/aria-busy markers stripped, yet the turn keeps running DETACHED on the
+    // server (unbreakable-response design). It carries `data-turn-error` → treat it as
+    // NOT finalized so a late WS turn_completed rebuilds the full persisted answer
+    // instead of leaving the truncated "⚠ Disconnected" text on screen forever.
+    if (row.dataset.turnError === "1") return false;
     return (
       !bubble.classList.contains("bubble-bot-pending") &&
       bubble.getAttribute("aria-busy") !== "true"
@@ -2713,7 +2719,8 @@
     try {
     const body = await r.json().catch(() => ({}));
     if (!r.ok) {
-      throw new Error(parseApiError(body, r.statusText));
+      // Numeric status, NOT statusText (empty over HTTP/2) — see streamChat.
+      throw new Error(parseApiError(body, r.status));
     }
     if (body.action) await chatCtx.applyChatServerAction(body.action, body);
     else if (body.conversation_id) chatCtx.setConversationId(body.conversation_id);
@@ -2884,7 +2891,10 @@
         streamCtx.bubble &&
         (streamCtx.acc || "").length
       ) {
-        setBubbleMarkdown(streamCtx.bubble, streamCtx.acc);
+        // Strip the sealed preamble: acc holds the FULL turn text (sealBubbleAndAppendCard
+        // never resets acc) but streamCtx.bubble is the post-card bubble — writing the full
+        // acc here would re-draw the preamble below the card (no-op when no card sealed).
+        setBubbleMarkdown(streamCtx.bubble, stripSealedPrefix(streamCtx.acc, streamCtx.sealedText));
       }
       try {
         reader.releaseLock?.();
@@ -3010,15 +3020,32 @@
         chatCtx.hooks.updateEmptyState?.();
         return false;
       }
+      // CLEAN CLOSE, NO done/error/abort = the turn was cancelled server-side by ANOTHER
+      // client (STOP in a second tab, tool-cancel from another device). The follower's
+      // SSE closes cleanly with neither `done` nor `error`, and cancelled turns broadcast
+      // NO turn_completed → nothing else will ever heal this row. Un-pend + drop the empty
+      // resumed bubble (keep any partial replayed text) instead of returning a silent
+      // success that strands an empty shimmering aria-busy bubble forever.
+      if (!aborted && !serverError && !doneMeta) {
+        cleanupStreamRow(streamCtx);
+        if (!acc) {
+          wrap.remove();
+          chatCtx.hooks.updateEmptyState?.();
+        }
+        return false;
+      }
       if (serverError) {
         await maybeRecoverStuckActiveRun(serverError, convId);
         // Transport-level failure never fires `done`/`error` SSE frames → the live
         // usage HUD pill would otherwise stay attached with stale token numbers.
         removeTurnHud(streamCtx);
         flushStreamMarkdownUpdate(streamCtx);
-        bubble.classList.remove("bubble-bot-pending");
-        bubble.removeAttribute("aria-busy");
-        if (acc) setBubbleMarkdown(bubble, acc);
+        // Finalize the CURRENT live bubble (post-card swap), not the closure `bubble`.
+        const errBubble = streamCtx.bubble;
+        errBubble.classList.remove("bubble-bot-pending");
+        errBubble.removeAttribute("aria-busy");
+        if (wrap) wrap.dataset.turnError = "1";
+        if (acc) setBubbleMarkdown(errBubble, stripSealedPrefix(acc, streamCtx.sealedText));
         const warn = document.createElement("div");
         warn.className = "history-warn";
         warn.textContent = window.AkanaI18n.t("transport.stream.disconnected", { msg: serverError.message || serverError.code || "stream error" });
@@ -3131,7 +3158,9 @@
 
     if (!r.ok || !r.body) {
       const body = await r.json().catch(() => ({}));
-      throw new Error(parseApiError(body, r.statusText));
+      // parseApiError's fallback is `HTTP ${status}` — pass the numeric status, NOT
+      // statusText (empty over HTTP/2, e.g. Tailscale Serve → a bare "HTTP " message).
+      throw new Error(parseApiError(body, r.status));
     }
 
     // This stream's conv — the id sampled BEFORE the fetch (boundConvId), NOT re-read
@@ -3266,15 +3295,27 @@
       removeTurnHud(streamCtx);
       flushStreamMarkdownUpdate(streamCtx);
       stopStreamReveal(streamCtx); // prevent a late reveal frame from overwriting the final render
-      bubble.classList.remove("bubble-bot-pending");
-      bubble.removeAttribute("aria-busy");
+      // POST-INLINE-CARD BUBBLE: sealBubbleAndAppendCard may have swapped streamCtx.bubble
+      // to a fresh post-card bubble (and removed the empty pre-card one). Finalize the
+      // CURRENT live bubble, not the closure `bubble` captured at row creation — else the
+      // live bubble shimmers (aria-busy) forever and the error text lands on the sealed /
+      // detached node. Symmetric with the done handler's `liveBubble` (see 'POST-INLINE-CARD').
+      const errBubble = streamCtx.bubble;
+      errBubble.classList.remove("bubble-bot-pending");
+      errBubble.removeAttribute("aria-busy");
+      // Error-finalized marker: distinguishes a disconnect-truncated row from a
+      // done-finalized one so a late WS turn_completed repaints it (isForegroundTurnFinalized).
+      if (wrap) wrap.dataset.turnError = "1";
       // Append-only (do not clobber whatever segments the meta line already has):
       // guard against double-chip if a `done` event slipped in just before the error.
       if (meta && !meta.querySelector(".turn-status-chip")) {
         meta.appendChild(buildStreamStatusChip("err"));
       }
       if (acc) {
-        setBubbleMarkdown(bubble, acc);
+        // Write ONLY the post-seal remainder to the live (post-card) bubble — the sealed
+        // preamble already lives in its own sealed bubble above the card (stripSealedPrefix
+        // is a no-op when no card sealed, so this is safe on the common path).
+        setBubbleMarkdown(errBubble, stripSealedPrefix(acc, streamCtx.sealedText));
         if (convIdErr) void chatCtx.syncConversationLogFromServer(convIdErr);
         const warn = document.createElement("div");
         warn.className = "history-warn";
@@ -3286,11 +3327,11 @@
         // The error card (maybeRenderErrorCard) already shows this turn's error with a
         // Retry action → drop the empty pending bubble instead of duplicating the error
         // text as a second red bubble.
-        bubble.remove();
+        errBubble.remove();
         streamCtx.bubbleRemoved = true;
       } else {
-        bubble.classList.add("bubble-bot-err");
-        bubble.textContent = `${serverError.code || "ERR"}: ${serverError.message || "stream error"}`;
+        errBubble.classList.add("bubble-bot-err");
+        errBubble.textContent = `${serverError.code || "ERR"}: ${serverError.message || "stream error"}`;
       }
       // Aurora voice scene: when the turn ends with an error before producing any text,
       // it used to freeze on "Thinking" forever (chat:stream:done is NOT emitted on
@@ -3323,14 +3364,20 @@
     // B is displayed.
     const convIdAfter = streamCtx.convId || chatCtx.conversationIdForMemory();
     if (convIdAfter && (acc || doneMeta)) {
-      // Reached only on success (the serverError branch above always throws/returns
-      // first) → "ok". Redundant with the `done` SSE handler's own write (belt-and-
-      // suspenders); DOM tool count is recomputed the same way for consistency.
+      // Redundant with the `done` SSE handler's own write (belt-and-suspenders); DOM
+      // tool count is recomputed the same way for consistency.
       const doneToolCount = msgBody.querySelectorAll(".tool-call").length;
+      // A `done` frame present → the turn finalized cleanly ("ok"/done chip). A CLEAN
+      // close WITHOUT `done` (server-side cancel from another tab, or a proxy that closed
+      // the response gracefully) leaves doneMeta null and the text possibly truncated
+      // mid-sentence → do NOT stamp the green "done" chip on a partial answer, and fold
+      // away the live usage HUD pill (no done/error frame fired to remove it on this path,
+      // so it would otherwise linger with frozen mid-turn token numbers).
+      if (!doneMeta) removeTurnHud(streamCtx);
       setStreamMetaText(
         meta,
         formatAssistantStreamMeta(turnId, doneMeta, doneToolCount),
-        "ok",
+        doneMeta ? "ok" : undefined,
       );
       // DOM already reflects the streamed turn — sync store in background only.
       void chatCtx.syncConversationLogFromServer(convIdAfter);

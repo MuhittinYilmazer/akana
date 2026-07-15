@@ -77,12 +77,16 @@ _MAX_TOOL_ROUNDS = 5
 #: has no OpenAI level so it maps to the lowest (low). An unknown value → medium (safe;
 #: symmetric with gemini). "ultra" is claude/fable-only; on openai it tops out at high.
 _REASONING_EFFORTS: dict[str, str] = {
-    # OpenAI native level names (direct pass-through).
+    # OpenAI native level names (direct pass-through) — the composer sends these VERBATIM
+    # when openai is the active provider (no Akana-tier mapping). GPT-5 exposes the full
+    # minimal…xhigh ladder; ``xhigh`` (extra-high) is native-only (no Akana tier maps to it).
+    "minimal": "minimal",
     "low": "low",
     "medium": "medium",
     "high": "high",
-    "minimal": "low",  # OpenAI has no 'minimal' level → lowest (low)
-    # Akana canonical level names, derived from the shared tier table.
+    "xhigh": "xhigh",
+    # Akana canonical level names, derived from the shared tier table (drift-guarded);
+    # accepted so a non-native sender still resolves — they top out at high.
     **modes.tier_map(low="low", medium="medium", high="high"),
 }
 
@@ -111,6 +115,8 @@ def _driver(settings: Settings) -> OpenAIDriver:
     dependency, so there is ONLY a key gate (only the key is required). If the key is
     absent, a user-facing Settings hint is raised (same tone as gemini's key-missing
     message)."""
+    from akana_server.runtime_settings import get_runtime
+
     key = resolve_openai_key(settings)
     if not key:
         raise LLMCallError(
@@ -118,10 +124,14 @@ def _driver(settings: Settings) -> OpenAIDriver:
             "Settings → Identity (or the OPENAI_API_KEY environment variable).",
             status_code=503,
         )
+    # Runtime-tunable generation ceiling (0 = no timeout; default keeps the
+    # historical 300 s). Resolved live per request so a change in the settings
+    # panel applies to the next message (the ollama_timeout pattern).
     return OpenAIDriver(
         base_url=resolve_openai_base_url(settings),
         api_key=key,
         model=_resolve_openai_model(settings),
+        timeout=float(get_runtime("openai_timeout", settings)),
     )
 
 

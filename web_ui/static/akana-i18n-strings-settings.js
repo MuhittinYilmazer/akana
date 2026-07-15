@@ -143,6 +143,14 @@ window.AkanaI18nStrings = Object.assign(window.AkanaI18nStrings || {}, {
   "settings.model.openai_unreachable_default": { en: "OpenAI API unreachable", tr: "OpenAI API erişilemiyor" },
   "settings.model.openai_failed": { en: "OpenAI models unavailable: {error}", tr: "OpenAI modelleri alınamadı: {error}" },
 
+  "settings.model.codex_loading": { en: "Loading Codex models…", tr: "Codex modelleri yükleniyor…" },
+  "settings.model.codex_unreachable_fallback": {
+    en: "{error} — fallback list.",
+    tr: "{error} — yedek liste.",
+  },
+  "settings.model.codex_unreachable_default": { en: "Codex CLI unreachable", tr: "Codex CLI erişilemiyor" },
+  "settings.model.codex_failed": { en: "Codex models unavailable: {error}", tr: "Codex modelleri alınamadı: {error}" },
+
   // ── Tab labels (SETTINGS_TAB_LABELS) ─────────────────────────────────────
   "settings.tab.overview":    { en: "General",       tr: "Genel" },
   "settings.tab.llm":         { en: "Provider",      tr: "Sağlayıcı" },
@@ -208,6 +216,11 @@ window.AkanaI18nStrings = Object.assign(window.AkanaI18nStrings || {}, {
   "settings.stat.openai_desc":       { en: "openai_api_key (direct OpenAI API) — entered in Credentials tab", tr: "openai_api_key (doğrudan OpenAI API) — Kimlik sekmesinden girilir" },
   "settings.stat.cursor_auth":       { en: "Cursor API",          tr: "Cursor API" },
   "settings.stat.cursor_desc":       { en: "CURSOR_API_KEY on the server — required for chat and tools", tr: "Sunucudaki CURSOR_API_KEY — sohbet ve araçlar için gerekli" },
+  "settings.stat.codex_auth":        { en: "Codex CLI",           tr: "Codex CLI" },
+  "settings.stat.codex_logged_in":   { en: "Logged in",           tr: "Giriş yapılmış" },
+  "settings.stat.codex_no_login":    { en: "Not logged in",       tr: "Giriş yapılmamış" },
+  "settings.stat.codex_not_installed": { en: "CLI not installed", tr: "CLI kurulu değil" },
+  "settings.stat.codex_desc":        { en: "ChatGPT subscription (codex login) — no API key; status in Credentials tab", tr: "ChatGPT aboneliği (codex login) — API anahtarı yok; durum Kimlik sekmesinde" },
   "settings.stat.active_model":      { en: "Active model",        tr: "Aktif model" },
   "settings.stat.change_provider":   { en: "Change from the Provider tab", tr: "Sağlayıcı sekmesinden değiştirebilirsiniz" },
   "settings.stat.chat_history":      { en: "Chat history",        tr: "Sohbet geçmişi" },

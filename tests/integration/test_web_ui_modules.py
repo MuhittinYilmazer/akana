@@ -116,6 +116,7 @@ EXPECTED_BY_PAGE = {
         "akana-vault.js",
         "akana-personas.js",
         "akana-packs.js",
+        "akana-observability.js",
         "akana-memory-api.js",
         "akana-memory-render.js",
         "akana-memory-studio.js",

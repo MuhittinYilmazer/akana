@@ -1,6 +1,6 @@
 """Installable components — the single source of truth for what `setup`/`add` offer.
 
-Both providers (cursor, claude, gemini, openai, ollama) and optional extras (voice,
+Both providers (cursor, claude, gemini, openai, codex, ollama) and optional extras (voice,
 embeddings) live here, so the interactive menus in `setup` and the standalone `add`
 command never drift, and a user who switches providers later can install the new
 provider's requirements the same way they installed the first.
@@ -88,6 +88,17 @@ REGISTRY: dict[str, Component] = {
         installer="none",
         key_env="OPENAI_API_KEY",
         key_url="https://platform.openai.com/api-keys",
+    ),
+    "codex": Component(
+        id="codex",
+        label="Codex — OpenAI codex CLI + ChatGPT subscription",
+        kind="provider",
+        installer="npm_global",
+        npm_package="@openai/codex",
+        probe_bin="codex",
+        # No API key — auth is `codex login` (ChatGPT sign-in). Mirrors claude's
+        # npm_global + login-hint flow; the login step is guided after install.
+        install_hint="After install, run `codex login` once to sign in with ChatGPT.",
     ),
     "ollama": Component(
         id="ollama",

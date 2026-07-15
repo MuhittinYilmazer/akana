@@ -38,12 +38,18 @@ async def get_skills(
         reload_skills()
     reg = _registry(services)
     if q:
+        # ``reg.search`` has no type/source parameters, so the top_k cap is applied to
+        # the UNFILTERED fused ranking. Filtering AFTER the cap makes a matching skill
+        # of the requested type/source unreachable whenever it ranks below top_k (the
+        # response can be empty while matches exist). Over-fetch the full ranking when a
+        # filter is present, then filter, then slice to top_k.
+        fetch = max(top_k, len(reg.list())) if (type_filter or source_filter) else top_k
         results = [
             s.to_dict()
-            for s in reg.search(q, top_k=top_k)
+            for s in reg.search(q, top_k=fetch)
             if (not type_filter or s.entry.type == type_filter)
             and (not source_filter or s.entry.source == source_filter)
-        ]
+        ][:top_k]
         return {"count": len(results), "skills": results, "query": q}
     items = [e.to_dict() for e in reg.list(type_filter=type_filter, source_filter=source_filter)]
     payload: dict[str, Any] = {"count": len(items), "skills": items}

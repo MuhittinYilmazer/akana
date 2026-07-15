@@ -78,6 +78,24 @@ _OPENAI_MODEL_OPTIONS: list[dict[str, str]] = [
 ]
 
 
+# Codex (OpenAI Codex CLI — ChatGPT subscription auth via `codex login`, NOT an API
+# key). These are the Codex-family model tags passed to the CLI via ``-m``; they are
+# a CURATED STATIC list (the Codex CLI has no key-authorized ``/v1/models`` catalog
+# endpoint like OpenAI's platform API — it authenticates through the ChatGPT OAuth
+# session in ``~/.codex/auth.json``). SOURCE: OpenAI Codex model docs
+# (developers.openai.com/codex/models), captured 2026-07. The first option is the
+# default (``resolve_codex_model_tag`` falls back to it). The value is passed
+# verbatim to ``codex exec -m <value>``; a plan that lacks a given model returns a
+# clear CLI error, so the user can pick another from this list.
+_CODEX_MODEL_OPTIONS: list[dict[str, str]] = [
+    {"value": "gpt-5-codex", "label": "GPT-5 Codex (default)"},
+    {"value": "gpt-5-codex-mini", "label": "GPT-5 Codex Mini (fast/cheap)"},
+    {"value": "gpt-5.2-codex", "label": "GPT-5.2 Codex"},
+    {"value": "gpt-5.4-codex", "label": "GPT-5.4 Codex (powerful)"},
+    {"value": "gpt-5.3-codex-spark", "label": "GPT-5.3 Codex Spark (real-time)"},
+]
+
+
 # Stable defaults: cursor + claude (no badge). gemini/ollama/openai are not yet
 # mature → the "badge" field is drawn in the UI as an "in development" marker (the
 # single source of truth is here; the frontend produces the badge from this field).
@@ -87,6 +105,10 @@ _PROVIDER_OPTIONS: list[dict[str, str]] = [
     {"value": "ollama", "label": "Ollama (local model)", "badge": "in development"},
     {"value": "gemini", "label": "Gemini (direct API)", "badge": "in development"},
     {"value": "openai", "label": "OpenAI (direct API)", "badge": "in development"},
+    # Codex CLI: ChatGPT-subscription-billed (via `codex login`), NOT the API-key
+    # openai provider above. The two are independent — openai uses OPENAI_API_KEY +
+    # the platform API; codex bridges the `codex exec` CLI onto the ChatGPT session.
+    {"value": "codex", "label": "Codex CLI (subscription)", "badge": "in development"},
 ]
 
 _VALID_PROVIDERS = {opt["value"] for opt in _PROVIDER_OPTIONS}
@@ -127,6 +149,10 @@ def openai_model_options() -> list[dict[str, str]]:
     return list(_OPENAI_MODEL_OPTIONS)
 
 
+def codex_model_options() -> list[dict[str, str]]:
+    return list(_CODEX_MODEL_OPTIONS)
+
+
 def provider_options() -> list[dict[str, str]]:
     return list(_PROVIDER_OPTIONS)
 
@@ -153,6 +179,10 @@ class LlmSettings:
     # _OPENAI_MODEL_OPTIONS option); else a NATIVE OpenAI model id (gpt-* / o*).
     # Independent: cursor_model "gpt-5.4-mini" (OpenAI via Cursor) does NOT mix with this.
     openai_model: str = ""
+    # "" = follow env (CODEX_MODEL) / default (resolve_codex_model_tag → the first
+    # _CODEX_MODEL_OPTIONS option); else a Codex-family model tag passed to `codex exec
+    # -m`. Independent from openai_model (that is the platform API; this is the CLI).
+    codex_model: str = ""
     # claude provider full permissions (bypassPermissions). On by default; if turned
     # off, Bash/Edit/Write are blocked and the permission-mode falls back to "default".
     claude_full_tools: bool = _FULL_TOOLS_DEFAULT
@@ -249,6 +279,15 @@ def _merge(base: LlmSettings, raw: dict[str, Any]) -> LlmSettings:
         openai_model.startswith("gpt-") or re.match(r"o\d", openai_model)
     ):
         openai_model = base.openai_model
+    # The Codex model accepts only a Codex-family tag (gpt-*-codex / gpt-*codex-* /
+    # anything containing "codex"); a foreign tag (composer-2/claude-*/gemini-*) leaking
+    # in falls back to base. Codex tags collide syntactically with the openai gpt-*
+    # family, so the guard requires the "codex" substring — the native OpenAI gpt-5.4
+    # (openai_model) must NOT be accepted here (and vice-versa), keeping the two
+    # ChatGPT-family providers independent.
+    codex_model = str(raw.get("codex_model") or base.codex_model).strip()
+    if codex_model and "codex" not in codex_model.lower():
+        codex_model = base.codex_model
     return LlmSettings(
         cursor_model=cursor_model,
         chat_max_turns=_clamp_int(
@@ -260,6 +299,7 @@ def _merge(base: LlmSettings, raw: dict[str, Any]) -> LlmSettings:
         ollama_model=ollama_model,
         gemini_model=gemini_model,
         openai_model=openai_model,
+        codex_model=codex_model,
         claude_full_tools=_coerce_bool(
             raw.get("claude_full_tools"), default=base.claude_full_tools
         ),
@@ -369,6 +409,30 @@ def resolve_openai_model_tag(settings: Settings, llm: LlmSettings) -> str:
     ).strip()
 
 
+#: ``resolve_codex_model_tag`` default = the first catalog option (single source;
+#: changing the head of the list also changes the default). The env fallback
+#: CODEX_MODEL is the Codex CLI's own canonical env name (NOT AKANA_*; the same
+#: logic as openai's OPENAI_MODEL env fallback — the canonical source is still the
+#: dashboard setting).
+_CODEX_MODEL_DEFAULT = _CODEX_MODEL_OPTIONS[0]["value"]
+
+
+def resolve_codex_model_tag(settings: Settings, llm: LlmSettings) -> str:
+    """Active codex model: persisted setting wins, else env (CODEX_MODEL), else default.
+
+    A Codex-family model tag handed to ``codex exec -m``. The dispatch ``model``
+    argument (the provider-agnostic cursor tag) does NOT reach here — codex always
+    uses this resolution (the same foreign-tag guard as gemini/openai). There is NO
+    ``codex_model`` field in ``Settings`` → the env CODEX_MODEL is read directly (a
+    settings.codex_model test-double is still preferred via getattr)."""
+    return (
+        llm.codex_model
+        or getattr(settings, "codex_model", "")
+        or os.environ.get("CODEX_MODEL", "").strip()
+        or _CODEX_MODEL_DEFAULT
+    ).strip()
+
+
 def resolve_claude_full_tools(settings: Settings, llm: LlmSettings) -> bool:
     """Is the claude provider at full permissions? The persisted setting is the
     single source; if there is no settings file, ``defaults_from_env`` has already
@@ -386,12 +450,14 @@ def public_llm_payload(
         "active_ollama_model_tag": resolve_ollama_model_tag(settings, llm),
         "active_gemini_model_tag": resolve_gemini_model_tag(settings, llm),
         "active_openai_model_tag": resolve_openai_model_tag(settings, llm),
+        "active_codex_model_tag": resolve_codex_model_tag(settings, llm),
         "active_claude_full_tools": resolve_claude_full_tools(settings, llm),
         "active_provider": resolve_provider(settings, llm),
         "cursor_models": cursor_model_options(),
         "claude_models": claude_model_options(),
         "gemini_models": gemini_model_options(),
         "openai_models": openai_model_options(),
+        "codex_models": codex_model_options(),
         "providers": provider_options(),
         "defaults": defaults_from_env(settings).to_dict(),
     }
@@ -406,6 +472,7 @@ _CONV_LLM_FIELDS = (
     ("ollama_model", "llm_ollama_model"),
     ("gemini_model", "llm_gemini_model"),
     ("openai_model", "llm_openai_model"),
+    ("codex_model", "llm_codex_model"),
 )
 
 
@@ -473,5 +540,6 @@ def llm_settings_to_conversation_patch(
             "ollama_model": llm.ollama_model,
             "gemini_model": llm.gemini_model,
             "openai_model": llm.openai_model,
+            "codex_model": llm.codex_model,
         }
     )

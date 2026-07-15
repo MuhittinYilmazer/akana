@@ -514,12 +514,22 @@ class EpisodicStore:
         *,
         conversation_id: str | None = None,
         limit: int = 20,
+        roles: tuple[str, ...] | None = None,
     ) -> list[EpisodicTurn]:
         q = query.strip()
         if not q:
             return []
         lim = max(1, min(limit, 100))
         fts_q = self._fts_match_query(q)
+        # audit C24 (mirrors list_conversation_recent): window by role IN SQL —
+        # BEFORE the LIMIT — so a caller wanting only user turns isn't starved by
+        # a top-bm25 window filled entirely with assistant/tool turns it will then
+        # discard. NULL/empty roles keeps the historic all-roles behaviour.
+        role_list = tuple(r for r in roles if r) if roles else ()
+        role_ph = ",".join("?" * len(role_list))
+        role_fts = f" AND t.role IN ({role_ph})" if role_list else ""
+        role_like = f" AND role IN ({role_ph})" if role_list else ""
+        role_params = list(role_list)
         with self._lock:
             conn = self._connect()
             try:
@@ -533,30 +543,30 @@ class EpisodicStore:
                     try:
                         if conversation_id:
                             rows = conn.execute(
-                                """
+                                f"""
                                 SELECT t.id, t.conversation_id, t.ts, t.role, t.text,
                                        t.lang, t.importance
                                 FROM turns_fts f
                                 INNER JOIN turns t ON t.id = f.turn_id
                                 WHERE turns_fts MATCH ?
-                                  AND f.conversation_id = ?
+                                  AND f.conversation_id = ?{role_fts}
                                 ORDER BY bm25(turns_fts)
                                 LIMIT ?
-                                """,
-                                (fts_q, conversation_id, lim),
+                                """,  # noqa: S608 - role_fts is a static ?-placeholder clause
+                                (fts_q, conversation_id, *role_params, lim),
                             ).fetchall()
                         else:
                             rows = conn.execute(
-                                """
+                                f"""
                                 SELECT t.id, t.conversation_id, t.ts, t.role, t.text,
                                        t.lang, t.importance
                                 FROM turns_fts f
                                 INNER JOIN turns t ON t.id = f.turn_id
-                                WHERE turns_fts MATCH ?
+                                WHERE turns_fts MATCH ?{role_fts}
                                 ORDER BY bm25(turns_fts)
                                 LIMIT ?
-                                """,
-                                (fts_q, lim),
+                                """,  # noqa: S608 - role_fts is a static ?-placeholder clause
+                                (fts_q, *role_params, lim),
                             ).fetchall()
                     except sqlite3.OperationalError as e:
                         log.debug("FTS search failed, falling back to LIKE: %s", e)
@@ -567,25 +577,25 @@ class EpisodicStore:
                     pattern = f"%{escaped}%"
                     if conversation_id:
                         rows = conn.execute(
-                            """
+                            f"""
                             SELECT id, conversation_id, ts, role, text, lang, importance
                             FROM turns
-                            WHERE conversation_id = ? AND text LIKE ? ESCAPE '\\'
+                            WHERE conversation_id = ? AND text LIKE ? ESCAPE '\\'{role_like}
                             ORDER BY ts DESC
                             LIMIT ?
-                            """,
-                            (conversation_id, pattern, lim),
+                            """,  # noqa: S608 - role_like is a static ?-placeholder clause
+                            (conversation_id, pattern, *role_params, lim),
                         ).fetchall()
                     else:
                         rows = conn.execute(
-                            """
+                            f"""
                             SELECT id, conversation_id, ts, role, text, lang, importance
                             FROM turns
-                            WHERE text LIKE ? ESCAPE '\\'
+                            WHERE text LIKE ? ESCAPE '\\'{role_like}
                             ORDER BY ts DESC
                             LIMIT ?
-                            """,
-                            (pattern, lim),
+                            """,  # noqa: S608 - role_like is a static ?-placeholder clause
+                            (pattern, *role_params, lim),
                         ).fetchall()
             finally:
                 conn.close()

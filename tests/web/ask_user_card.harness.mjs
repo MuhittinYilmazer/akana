@@ -311,6 +311,33 @@ assert.ok(
     ]);
     assert.ok(!thread[0].askUser, "a normal assistant turn has no askUser");
   }
+  // (c2) LIVE BUG regression: a background same-chat injection (⏰ reminder — a plain
+  // assistant turn) lands AFTER the question card. Only a USER message answers a
+  // question; the injected assistant turn must NOT demote the pending card (the old
+  // "pending only when last" rule made the card vanish and F5 didn't bring it back).
+  {
+    const thread = Render.mapServerMessagesToThread([
+      { role: "user", content: "diskte ne çok yer tutuyor?", created_at: "t0" },
+      { role: "assistant", id: "a1", content: "Çay mı kahve mi?", created_at: "t1", ask_user: askPayload },
+      { role: "assistant", id: "a2", content: "⏰ Hatırlatma: «YouTube aç»", created_at: "t2" },
+    ]);
+    const ask = thread.find((m) => m.kind === "assistant" && m.askUser);
+    assert.ok(ask, "the ask turn is still mapped");
+    assert.equal(ask.askUserPending, true,
+      "an injected assistant turn after the question must NOT consume the pending card");
+    const injected = thread[thread.length - 1];
+    assert.ok(!injected.askUserPending, "the injected turn itself is not an ask card");
+  }
+  // (c3) …but a USER message after the injection still counts as the answer.
+  {
+    const thread = Render.mapServerMessagesToThread([
+      { role: "assistant", id: "a1", content: "Çay mı kahve mi?", created_at: "t1", ask_user: askPayload },
+      { role: "assistant", id: "a2", content: "⏰ Hatırlatma: «YouTube aç»", created_at: "t2" },
+      { role: "user", content: "Kahve", created_at: "t3" },
+    ]);
+    const ask = thread.find((m) => m.kind === "assistant" && m.askUser);
+    assert.ok(!ask.askUserPending, "a user answer after the injection resolves the question");
+  }
 
   // (d) createRenderer + chatRenderMessage on a PENDING ask message → the interactive
   //     .aur-ask card is rendered into the appended row, and its submit routes to
@@ -342,6 +369,41 @@ assert.ok(
     opt.click();
     findOne(card, ".aur-ask-submit").click();
     assert.equal(sentAnswer, "Kahve", "card submit routes to AkanaChat.submitAnswerText");
+  }
+
+  // (e) OWNER REQUEST — the card is shown in EVERY case: an ANSWERED ask turn
+  //     (askUserPending false) still renders the .aur-ask card, but LOCKED —
+  //     state=answered, options disabled, submit dead, the recorded answer shown.
+  {
+    let sentAnswer = null;
+    ctx.window.AkanaChat.submitAnswerText = (a) => { sentAnswer = a; };
+    const log = makeEl("div");
+    const renderer = Render.createRenderer({
+      log,
+      appendUserMessage: () => makeEl("div"),
+      appendSystemNotice: () => {},
+    });
+    renderer.chatRenderMessage({
+      kind: "assistant",
+      turnId: "a1",
+      text: "Çay mı kahve mi?",
+      askUser: askPayload,
+      askUserPending: false,
+      askUserAnswerText: "Kahve",
+    });
+    const card = findOne(log.children[0], ".aur-ask");
+    assert.ok(card, "an ANSWERED ask turn still renders the card (never summary text)");
+    assert.equal(card.dataset.state, "answered", "the card mounts pre-locked");
+    const opts_ = findAll(card, ".aur-ask-opt");
+    assert.ok(opts_.every((b) => b.disabled), "all option buttons are disabled");
+    assert.equal(findOne(card, ".aur-ask-submit").disabled, true, "submit is disabled");
+    const result = findOne(card, ".aur-ask-result-text");
+    assert.ok(result && result.textContent.includes("Kahve"),
+      "the recorded answer is shown in the result line");
+    // Locked = inert: clicking an option + submit must send nothing.
+    opts_[0].click();
+    findOne(card, ".aur-ask-submit").click();
+    assert.equal(sentAnswer, null, "a locked card never re-submits");
   }
 }
 

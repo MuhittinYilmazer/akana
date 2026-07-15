@@ -163,7 +163,10 @@ def _install_npm_global(comp: Component, *, interactive: bool) -> None:
     if ok:
         io.ok(i18n.t("tool.claude_installed"))
         # Guide the one remaining manual step so "install everything easily" holds true.
-        print(f"      {i18n.t('tool.claude_login_hint')}")
+        # Per-component login hint (claude → `claude login`, codex → `codex login`);
+        # with comp.id="claude" this resolves to the historical tool.claude_login_hint
+        # key unchanged, so existing behaviour is preserved.
+        print(f"      {i18n.t('tool.' + comp.id + '_login_hint', default=i18n.t('tool.claude_login_hint'))}")
     else:
         io.warn(i18n.t("tool.claude_install_failed", pkg=comp.npm_package))
         if out:

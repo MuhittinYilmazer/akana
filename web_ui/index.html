@@ -359,14 +359,10 @@
               </svg>
               <span class="btn-effort-label" id="effort-btn-label">Normal</span>
             </button>
-            <div class="effort-popover" id="thinking-mode" role="listbox" aria-label="Thinking mode" data-i18n-aria-label="composer.effort_menu_aria" hidden>
-              <button type="button" class="effort-opt" data-mode="hizli" role="option" data-i18n="composer.effort_fast">Fast</button>
-              <button type="button" class="effort-opt is-active" data-mode="normal" role="option" aria-selected="true" data-i18n="composer.effort_normal">Normal</button>
-              <button type="button" class="effort-opt" data-mode="derin" role="option" data-i18n="composer.effort_deep">Deep</button>
-              <button type="button" class="effort-opt" data-mode="yogun" role="option" data-i18n="composer.effort_intense">Intense</button>
-              <button type="button" class="effort-opt" data-mode="azami" role="option" data-i18n="composer.effort_max">Max</button>
-              <button type="button" class="effort-opt" data-mode="ultra" role="option" data-i18n="composer.effort_ultra" hidden>Ultra</button>
-            </div>
+            <!-- Options are rendered in JS (akana-chat.js renderEffortOptions): the option SET
+                 is provider-aware — Akana tiers for claude/gemini, native reasoning levels
+                 (minimal…xhigh) for codex/openai — so a fixed HTML list would be wrong. -->
+            <div class="effort-popover" id="thinking-mode" role="listbox" aria-label="Thinking mode" data-i18n-aria-label="composer.effort_menu_aria" hidden></div>
           </div>
           <button type="button" id="btn-voice-stop" class="btn-voice-stop" aria-label="Cancel voice action (Esc)" title="Cancel — Esc" data-i18n-aria-label="composer.voice_cancel_aria" data-i18n-title="composer.voice_cancel_title" hidden>
             <svg class="btn-voice-stop-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -474,6 +470,11 @@
           <span class="settings-tab-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect width="20" height="8" x="2" y="14" rx="2" ry="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/></svg></span>
           <span class="settings-tab-text"><span class="settings-tab-label" data-i18n="settings.nav.connection">Connection</span><span class="settings-tab-desc" data-i18n="settings.nav.connection_desc">Server address</span></span>
           <span class="settings-tab-badge" data-nav-badge="connection" hidden></span>
+        </button>
+        <button type="button" class="settings-tab" role="tab" aria-selected="false" data-tab="observability" data-search="gözlemlenebilirlik izleme metrik kullanım denetim sağlık breaker audit observability metrics usage health token">
+          <span class="settings-tab-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span>
+          <span class="settings-tab-text"><span class="settings-tab-label" data-i18n="settings.nav.observability">Observability</span><span class="settings-tab-desc" data-i18n="settings.nav.observability_desc">Usage & health</span></span>
+          <span class="settings-tab-badge" data-nav-badge="observability" hidden></span>
         </button>
         <a href="/memory" class="settings-tab settings-tab-link" data-search="hafıza bilgi inbox staging arama memory studio">
           <span class="settings-tab-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></svg></span>
@@ -634,6 +635,14 @@
             </div>
             <p class="field-hint" data-i18n-html="settings.cred.openai_hint_html">For the OpenAI provider (direct API) — get the key from <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com/api-keys</a>. Use <code>OPENAI_BASE_URL</code> for a compatible/custom endpoint.</p>
           </div>
+          <div class="settings-block">
+            <h3 class="settings-block-title" data-i18n="settings.cred.codex_title">Codex CLI (ChatGPT subscription)</h3>
+            <p class="field-hint cred-state" id="cred-codex-state" data-i18n="settings.cred.codex_checking">Checking status…</p>
+            <div class="input-row">
+              <button type="button" id="btn-check-cred-codex" class="btn-ghost btn-sm" data-i18n="settings.cred.codex_check_btn">Check again</button>
+            </div>
+            <p class="field-hint" data-i18n-html="settings.cred.codex_hint_html">No API key here <strong>by design</strong> — Codex bills through your ChatGPT plan, not a key. Install with <code>npm install -g @openai/codex</code>, then run <code>codex login</code> in a terminal and sign in with your ChatGPT account. (Pasting an OpenAI API key would switch billing to the platform API — that is the separate <em>OpenAI</em> provider above.)</p>
+          </div>
           <div class="settings-row-actions">
             <button type="button" id="cred-save" class="btn-primary" data-i18n="settings.cred.save">Save keys</button>
             <p class="field-hint" id="cred-status" role="status"></p>
@@ -729,6 +738,14 @@
               </button>
             </div>
           </div>
+        </section>
+
+        <section class="settings-pane" id="settings-pane-observability" data-pane="observability" data-toolbar-desc-key="settings.observability.toolbar_desc" role="tabpanel" hidden>
+          <header class="settings-pane-header settings-pane-header-compact">
+            <h3 data-i18n="settings.observability.title">Observability</h3>
+            <p class="settings-pane-desc" data-i18n="settings.observability.desc">Provider usage, tool-call counters, breaker health and the audit tail</p>
+          </header>
+          <div id="observability-root" aria-live="polite"><p class="field-hint" data-i18n="settings.observability.loading">Loading…</p></div>
         </section>
 
         <section class="settings-pane" id="settings-pane-appearance" data-pane="appearance" data-toolbar-desc-key="settings.appearance.toolbar_desc" role="tabpanel" hidden>
@@ -1036,6 +1053,7 @@
   <script src="/static/akana-vault.js?v=auto" defer></script>
   <script src="/static/akana-personas.js?v=auto" defer></script>
   <script src="/static/akana-packs.js?v=auto" defer></script>
+  <script src="/static/akana-observability.js?v=auto" defer></script>
   <script src="/static/akana-memory-api.js?v=auto" defer></script>
   <script src="/static/akana-memory-render.js?v=auto" defer></script>
   <script src="/static/akana-memory-studio.js?v=auto" defer></script>

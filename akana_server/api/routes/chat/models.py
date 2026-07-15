@@ -29,16 +29,22 @@ class ChatRequest(BaseModel):
     #: limit is enforced on the frontend (PROVIDER_ATTACH_LIMITS); claude is 20 images +
     #: 10 files per message.
     file_ids: list[str] = Field(default_factory=list, max_length=30)
-    #: Thinking mode (increasing effort): "hizli" forces the fast-path (planner.route
-    #: skipped), "normal" = the current behavior (auto fast-path on short+simple
-    #: messages), "derin"/"yogun"/"azami"/"ultra" always run the gates in full.
-    #: On the claude provider it's mapped to the native ``--effort`` level
-    #: (hizli→low, normal→medium, derin→high, yogun→xhigh, azami/ultra→max).
-    #: "ultra" additionally appends the "ultracode" prompt keyword when the
-    #: active model is a "fable" persona model (see claude_provider); on a
-    #: non-fable model it behaves exactly like "azami". Cursor ignores the
-    #: effort mapping but still receives the field (future-proof passthrough).
-    thinking_mode: Literal["hizli", "normal", "derin", "yogun", "azami", "ultra"] = "normal"
+    #: Thinking mode (increasing effort). TWO vocabularies share this field:
+    #:  • Akana canonical tiers (hizli/normal/derin/yogun/azami/ultra) — used by the
+    #:    claude/gemini providers, which map them onto their native knob. "hizli" forces
+    #:    the fast-path (planner.route skipped), "normal" = auto fast-path on short+simple
+    #:    messages, "derin" and up always run the gates in full. "ultra" additionally
+    #:    appends the "ultracode" keyword on fable models (claude only).
+    #:  • Provider-NATIVE effort levels (minimal/low/medium/high/xhigh) — codex and openai
+    #:    expose their own reasoning-effort names directly in the composer and send the
+    #:    chosen level VERBATIM (no Akana-tier mapping); the provider passes it straight
+    #:    to ``model_reasoning_effort`` / ``reasoning_effort``.
+    #: The union is accepted here; each provider's table interprets the value and defaults
+    #: safely on one it does not recognise. Cursor/Ollama receive the field but ignore it.
+    thinking_mode: Literal[
+        "hizli", "normal", "derin", "yogun", "azami", "ultra",
+        "minimal", "low", "medium", "high", "xhigh",
+    ] = "normal"
     #: Plan-mode turn (claude only): runs with ``--permission-mode plan`` — before
     #: writing/applying, the model produces a plan and presents it via ``ExitPlanMode``,
     #: and Akana converts it to a structured ``plan`` event. When the user says "Apply",

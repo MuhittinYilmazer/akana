@@ -57,7 +57,7 @@ __all__ = ["CONFIG_FILENAME", "RESERVED_SERVER_NAMES", "load_external_mcp_server
 CONFIG_FILENAME = "mcp_servers.yaml"
 
 #: Names Akana claims for built-in servers — colliding user entries are skipped.
-RESERVED_SERVER_NAMES = frozenset({"akana_memory", "akana_vault"})
+RESERVED_SERVER_NAMES = frozenset({"akana_memory", "akana_vault", "akana_schedule"})
 
 _NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 _REMOTE_TYPES = ("http", "sse")

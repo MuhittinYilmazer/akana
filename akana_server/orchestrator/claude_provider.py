@@ -91,6 +91,24 @@ _BASE_DISALLOWED = [
 ]
 _READONLY_TOOLS = ["Read", "Grep", "Glob"]
 
+#: Harness-lifecycle tools disallowed in EVERY mode (including bypassPermissions
+#: and plan). These schedule FUTURE work inside the Claude Code harness itself —
+#: but Akana runs the CLI as a one-shot ``-p`` bridge whose process EXITS when
+#: the turn ends, so nothing ever fires. LIVE BUG this guards against: the user
+#: said "1 dk sonra YouTube'u aç"; the model picked the CLI's own
+#: ``ScheduleWakeup`` over Akana's ``schedule_create``, replied "kurdum,
+#: hallederim", the process exited, and the wakeup silently died — the reminder
+#: never happened. Blocking these makes the model's ONLY scheduling surface the
+#: akana_schedule tools, whose fires run server-side and actually happen. The
+#: Cron* trio is blocked for the same reason (it would register recurring runs
+#: in the dead harness context, invisible to Akana).
+_HARNESS_LIFECYCLE_DISALLOWED = [
+    "ScheduleWakeup",
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+]
+
 #: The built-in tool with which Claude asks the user a multiple-choice question.
 #: It is INTERACTIVE-ONLY: in headless (``-p``) mode it is absent from the init
 #: ``tools`` list, so the model's call is rejected with ``tool_result is_error:
@@ -420,12 +438,17 @@ def _tool_flags(
     ``plan_mode`` (per-turn, user-triggered) overrides BOTH: the mode becomes
     ``plan`` — the CLI only researches/reads, performs no write/shell, and calls
     ``ExitPlanMode`` to present the plan. In plan mode the CLI itself blocks
-    writes, so ``--disallowedTools`` is unnecessary (not added).
+    writes, so ``--disallowedTools`` for the WRITE set is unnecessary.
+
+    ``_HARNESS_LIFECYCLE_DISALLOWED`` (ScheduleWakeup/Cron*) is appended in EVERY
+    mode — those tools schedule future harness work that dies with the one-shot
+    ``-p`` process (see the constant's docstring for the live bug).
     """
     allowed: list[str] = [f"mcp__{name}" for name in (mcp_servers or {})]
     allowed.extend(_READONLY_TOOLS)
 
     disallowed = [] if (full_tools or plan_mode) else list(_BASE_DISALLOWED)
+    disallowed += _HARNESS_LIFECYCLE_DISALLOWED
 
     if plan_mode:
         mode = "plan"

@@ -437,6 +437,29 @@ async def _maybe_drain_queue(app: Any, conversation_id: str) -> None:
     await _broadcast_queue_updated(app, conv_id)
 
 
+async def _drain_injections_then_queue(app: Any, conversation_id: str) -> None:
+    """Post-turn drain, in ORDER: parked background injections FIRST, then the
+    next queued user message.
+
+    A background result (task/schedule) that became ready while this turn was
+    streaming was parked in the injection inbox (see
+    :mod:`akana_server.chat_injections`). It must land BEFORE the next queued
+    user turn starts, so that turn's history (and an agent-resume context note)
+    already contains the result the user may be asking about. A drain failure
+    must never stall the queue — the queue drain always runs."""
+    try:
+        from akana_server.chat_injections import drain_pending
+
+        settings = getattr(app.state, "settings", None)
+        if settings is not None:
+            await drain_pending(app, settings, conversation_id)
+    except Exception:  # noqa: BLE001 - injections must never stall the user's queue
+        log.warning(
+            "post-turn injection drain failed (conv=%s)", conversation_id, exc_info=True
+        )
+    await _maybe_drain_queue(app, conversation_id)
+
+
 async def _run_turn_detached(app: Any, gen: AsyncIterator[bytes], turn: _ActiveTurn) -> None:
     """The turn producer — writes SSE chunks to the buffer, runs independent of the client.
 
@@ -499,7 +522,9 @@ async def _run_turn_detached(app: Any, gen: AsyncIterator[bytes], turn: _ActiveT
             # a new turn during shutdown. Skip if the flag is set (shutdown_background_tasks
             # already cancels in-flight ones; the queue is recovered at server startup).
             if not getattr(app.state, "chat_shutting_down", False):
-                _spawn_background(app, _maybe_drain_queue(app, turn.conversation_id))
+                _spawn_background(
+                    app, _drain_injections_then_queue(app, turn.conversation_id)
+                )
         else:
             await _broadcast_queue_updated(app, turn.conversation_id)
 

@@ -3359,6 +3359,24 @@
       }
     });
 
+    // ALREADY-ANSWERED mode (reload/history): the card is ALWAYS shown — an
+    // answered question renders as the same card, locked (options visible,
+    // nothing clickable), with the user's answer in the result line when known.
+    // Owner request: the card must never demote to plain summary text.
+    if (opts.answered) {
+      card.dataset.state = "answered";
+      submit.disabled = true;
+      blocks.forEach((b) => {
+        b.optBtns.forEach((x) => (x.disabled = true));
+        b.free.disabled = true;
+      });
+      badge.textContent = window.AkanaI18n.t("msg.ask_badge_done");
+      const answeredText = String(opts.answeredText || "").trim();
+      resultText.textContent = answeredText
+        ? window.AkanaI18n.t("msg.ask_answered", { answer: answeredText.replace(/\n/g, " · ") })
+        : window.AkanaI18n.t("msg.ask_answered_generic");
+    }
+
     return card;
   }
 
@@ -3745,11 +3763,37 @@
         out.push({ kind: "error", text, userText, ts });
       }
     }
-    // Pending-ask detection: the interactive card is shown ONLY when the ask turn is
-    // the final entry — any following entry (a user answer, a later assistant turn)
-    // means the question was already answered, so it renders as summary text only.
-    const last = out.length ? out[out.length - 1] : null;
-    if (last && last.kind === "assistant" && last.askUser) last.askUserPending = true;
+    // Pending-ask detection: a question is ANSWERED only by a following USER
+    // message — a later assistant message does NOT consume it. This matters for
+    // background same-chat injections (⏰ reminder / schedule results): one can
+    // land AFTER the question card, becoming the final entry. The old rule
+    // ("pending only when the ask turn is last") then demoted the still-unanswered
+    // card to summary text — live bug: a reminder fired while a question was on
+    // screen, the card vanished, and F5 didn't bring it back. Walk from the end:
+    // the first user entry means answered (nothing pending); the first
+    // ask-carrying assistant entry before any user entry is still awaiting input.
+    for (let i = out.length - 1; i >= 0; i--) {
+      const e = out[i];
+      if (e.kind === "user") break;
+      if (e.kind === "assistant" && e.askUser) {
+        e.askUserPending = true;
+        break;
+      }
+    }
+    // ANSWERED ask turns: capture the answering user message (the first user
+    // entry after the ask turn) so the locked card can show WHAT was answered
+    // ("Yanıtın gönderildi: …") after a reload — the live card shows it via its
+    // own submit handler, this is the persistence-path equivalent.
+    for (let i = 0; i < out.length; i++) {
+      const e = out[i];
+      if (e.kind !== "assistant" || !e.askUser || e.askUserPending) continue;
+      for (let j = i + 1; j < out.length; j++) {
+        if (out[j].kind === "user") {
+          e.askUserAnswerText = out[j].text || "";
+          break;
+        }
+      }
+    }
     return out;
   }
 
@@ -4098,13 +4142,18 @@
         warn.textContent = window.AkanaI18n.t("msg.dropped_turns", { n: m.droppedTurns });
         msgBody.appendChild(warn);
       }
-      // A PENDING question turn: re-render the interactive AskUser card (options/
-      // submit), not just the summary text. The card's answer routes through
-      // submitAnswerText → the next user message (--resume), same as the live turn.
+      // A question turn ALWAYS re-renders as a card (owner request): PENDING →
+      // the interactive card (options/submit; the answer routes through
+      // submitAnswerText → the next user message via --resume, same as the live
+      // turn); ANSWERED → the same card locked, showing the recorded answer.
+      // It must never demote to plain summary text (that read as "the card
+      // vanished" whenever anything — e.g. a ⏰ same-chat injection — followed it).
       let askCard = null;
-      if (m.askUser && m.askUserPending) {
+      if (m.askUser) {
         askCard = renderAskUserCard({
           question: m.askUser,
+          answered: !m.askUserPending,
+          answeredText: m.askUserAnswerText || "",
           onSubmit: (answer) => {
             try {
               window.AkanaChat?.submitAnswerText?.(answer);

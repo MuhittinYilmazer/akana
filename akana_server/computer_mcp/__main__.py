@@ -62,6 +62,44 @@ def _shots_dir() -> Path:
     return d
 
 
+#: Cap on retained screenshot PNGs. Every screenshot() writes a full-desktop capture
+#: (1-10 MB) and the operating loop screenshots before AND after each action, so the
+#: dir grows unbounded — GBs of stale, privacy-sensitive desktop images that nothing
+#: ever reclaims. Prune to the most-recent N (ULID basenames sort by creation time) so
+#: the model can still Read the just-written shot and the last few for comparison.
+_SHOT_RETENTION = 40
+
+
+def _prune_shots(d: Path, keep: int = _SHOT_RETENTION) -> None:
+    """Delete all but the newest ``keep`` ``*.png`` in ``d`` (best-effort)."""
+    try:
+        shots = sorted(d.glob("*.png"))
+    except OSError:
+        return
+    for stale in shots[:-keep] if keep > 0 else shots:
+        try:
+            stale.unlink()
+        except OSError:
+            # A concurrent reader (the model still holds the path) or a Windows lock
+            # must not fail the screenshot — leave the file; the next prune retries.
+            pass
+
+
+#: Virtual-desktop origin (left, top) of the LAST captured monitor. Screenshot pixel
+#: coordinates are relative to the captured monitor's top-left (0,0), but pyautogui
+#: clicks in virtual-desktop coordinates whose origin is the PRIMARY monitor's
+#: top-left. For any monitor not at the virtual origin (a secondary display, or
+#: monitor 0 when a screen sits left/above primary) the two differ by this offset, so
+#: it MUST be added back before clicking or the click lands on the wrong screen.
+#: Reset per build_server(); updated by screenshot().
+_LAST_ORIGIN: list[int] = [0, 0]
+
+
+def _abs_xy(x: int, y: int) -> tuple[int, int]:
+    """Rebase a screenshot-relative (x, y) onto the last captured monitor's origin."""
+    return int(x) + _LAST_ORIGIN[0], int(y) + _LAST_ORIGIN[1]
+
+
 def _shot_name() -> str:
     """A sortable, collision-free basename for a screenshot PNG."""
     try:
@@ -110,6 +148,9 @@ def _pyperclip() -> Any:
 def build_server() -> FastMCP:
     """Construct the ``computer`` FastMCP server with all tools registered."""
     mcp = FastMCP("computer")
+    # No screenshot has been taken yet on this server: clicks default to the untranslated
+    # virtual-desktop origin until screenshot() records the captured monitor's offset.
+    _LAST_ORIGIN[:] = [0, 0]
 
     def _resolve_window(title_contains: str):
         """Find the first window whose title CONTAINS ``title_contains`` (case-insensitive).
@@ -196,13 +237,19 @@ def build_server() -> FastMCP:
             from PIL import Image
         except Exception as exc:  # Pillow ships with the pack, but be defensive
             raise _BackendMissing(f"{_INSTALL_HINT} (Pillow: {exc})") from exc
-        out = _shots_dir() / f"{_shot_name()}.png"
+        shots = _shots_dir()
+        out = shots / f"{_shot_name()}.png"
         with mss.MSS() as sct:
             mons = sct.monitors
             idx = monitor if 0 <= monitor < len(mons) else 0
-            raw = sct.grab(mons[idx])
+            mon = mons[idx]
+            raw = sct.grab(mon)
+        # Record the captured monitor's virtual-desktop origin so click/move/drag can
+        # rebase this screenshot's pixel coordinates back onto the physical screen.
+        _LAST_ORIGIN[:] = [int(mon["left"]), int(mon["top"])]
         img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
         img.save(str(out), format="PNG")
+        _prune_shots(shots)
         return {
             "path": str(out.resolve()),
             "width": int(raw.width),
@@ -218,7 +265,8 @@ def build_server() -> FastMCP:
         """Left-click at physical pixel (x, y). Screenshot + Read first to locate the target."""
         pg = _pyautogui()
         try:
-            pg.click(x=int(x), y=int(y), button="left")
+            ax, ay = _abs_xy(x, y)
+            pg.click(x=ax, y=ay, button="left")
         except pg.FailSafeException:
             return {"ok": False, "action": "left_click", "error": _FAILSAFE_MSG}
         except Exception as exc:
@@ -230,7 +278,8 @@ def build_server() -> FastMCP:
         """Double-click at physical pixel (x, y) — e.g. to open an item."""
         pg = _pyautogui()
         try:
-            pg.doubleClick(x=int(x), y=int(y))
+            ax, ay = _abs_xy(x, y)
+            pg.doubleClick(x=ax, y=ay)
         except pg.FailSafeException:
             return {"ok": False, "action": "double_click", "error": _FAILSAFE_MSG}
         except Exception as exc:
@@ -242,7 +291,8 @@ def build_server() -> FastMCP:
         """Right-click at physical pixel (x, y) — opens the context menu there."""
         pg = _pyautogui()
         try:
-            pg.click(x=int(x), y=int(y), button="right")
+            ax, ay = _abs_xy(x, y)
+            pg.click(x=ax, y=ay, button="right")
         except pg.FailSafeException:
             return {"ok": False, "action": "right_click", "error": _FAILSAFE_MSG}
         except Exception as exc:
@@ -254,7 +304,7 @@ def build_server() -> FastMCP:
         """Move the cursor to physical pixel (x, y) WITHOUT clicking (e.g. to hover)."""
         pg = _pyautogui()
         try:
-            pg.moveTo(int(x), int(y))
+            pg.moveTo(*_abs_xy(x, y))
         except pg.FailSafeException:
             return {"ok": False, "action": "mouse_move", "error": _FAILSAFE_MSG}
         except Exception as exc:
@@ -270,8 +320,8 @@ def build_server() -> FastMCP:
         """
         pg = _pyautogui()
         try:
-            pg.moveTo(int(x1), int(y1))
-            pg.dragTo(int(x2), int(y2), button="left")
+            pg.moveTo(*_abs_xy(x1, y1))
+            pg.dragTo(*_abs_xy(x2, y2), button="left")
         except pg.FailSafeException:
             return {"ok": False, "action": "drag", "error": _FAILSAFE_MSG}
         except Exception as exc:
@@ -293,7 +343,7 @@ def build_server() -> FastMCP:
         pg = _pyautogui()
         try:
             if x is not None and y is not None:
-                pg.moveTo(int(x), int(y))
+                pg.moveTo(*_abs_xy(x, y))
             pg.scroll(int(amount))
         except pg.FailSafeException:
             return {"ok": False, "action": "scroll", "error": _FAILSAFE_MSG}
@@ -391,7 +441,8 @@ def build_server() -> FastMCP:
         """
         pg = _pyautogui()
         try:
-            pg.click(x=int(x), y=int(y), clicks=3, interval=0.05)
+            ax, ay = _abs_xy(x, y)
+            pg.click(x=ax, y=ay, clicks=3, interval=0.05)
         except pg.FailSafeException:
             return {"ok": False, "action": "triple_click", "error": _FAILSAFE_MSG}
         except Exception as exc:
@@ -403,7 +454,8 @@ def build_server() -> FastMCP:
         """Middle-click at (x, y) — e.g. open a link in a new tab, or close a browser tab."""
         pg = _pyautogui()
         try:
-            pg.click(x=int(x), y=int(y), button="middle")
+            ax, ay = _abs_xy(x, y)
+            pg.click(x=ax, y=ay, button="middle")
         except pg.FailSafeException:
             return {"ok": False, "action": "middle_click", "error": _FAILSAFE_MSG}
         except Exception as exc:
@@ -420,7 +472,8 @@ def build_server() -> FastMCP:
         """
         pg = _pyautogui()
         try:
-            pg.mouseDown(x=int(x), y=int(y), button=str(button))
+            ax, ay = _abs_xy(x, y)
+            pg.mouseDown(x=ax, y=ay, button=str(button))
         except pg.FailSafeException:
             return {"ok": False, "action": "mouse_down", "error": _FAILSAFE_MSG}
         except Exception as exc:
@@ -432,7 +485,8 @@ def build_server() -> FastMCP:
         """Release a held mouse button at (x, y) — the other half of ``mouse_down``."""
         pg = _pyautogui()
         try:
-            pg.mouseUp(x=int(x), y=int(y), button=str(button))
+            ax, ay = _abs_xy(x, y)
+            pg.mouseUp(x=ax, y=ay, button=str(button))
         except pg.FailSafeException:
             return {"ok": False, "action": "mouse_up", "error": _FAILSAFE_MSG}
         except Exception as exc:
@@ -449,7 +503,7 @@ def build_server() -> FastMCP:
         pg = _pyautogui()
         try:
             if x is not None and y is not None:
-                pg.moveTo(int(x), int(y))
+                pg.moveTo(*_abs_xy(x, y))
             pg.hscroll(int(amount))
         except pg.FailSafeException:
             return {"ok": False, "action": "hscroll", "error": _FAILSAFE_MSG}
@@ -585,9 +639,13 @@ def build_server() -> FastMCP:
             return {"ok": False, "error": "name must be non-empty"}
         try:
             if sys.platform == "win32":
-                # `start "" <name>` resolves PATH apps AND documents; list form (no
-                # shell=True) avoids shell-metacharacter injection from the name.
-                subprocess.Popen(["cmd", "/c", "start", "", app])
+                # os.startfile (ShellExecute "open") resolves PATH apps AND documents by
+                # name with NO cmd.exe involvement, so shell metacharacters (& | ^ < >)
+                # in the name are never re-parsed as command separators. Routing through
+                # ``cmd /c start`` re-introduced exactly that: list2cmdline quotes an arg
+                # only when it contains whitespace, and cmd re-parses everything after /c,
+                # so ``open_application("a&calc")`` chained a second command.
+                os.startfile(app)  # noqa: S606  (name is a launch target, not a shell line)
             elif sys.platform == "darwin":
                 subprocess.Popen(["open", "-a", app])
             else:

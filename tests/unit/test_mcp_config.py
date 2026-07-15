@@ -50,10 +50,11 @@ def settings(tmp_path):
 @pytest.fixture(autouse=True)
 def _memory_tools_on(monkeypatch):
     monkeypatch.delenv("AKANA_MEMORY_TOOLS", raising=False)
-    # This file tests the memory + external yaml MERGE behavior; the built-in
-    # akana_vault server is orthogonal (its own test file) → disabled here so the
-    # payload sets stay clean.
+    # This file tests the memory + external yaml MERGE behavior; the OTHER built-in
+    # servers (akana_vault, akana_schedule) are orthogonal (their own
+    # test files) → disabled here so the payload sets stay clean.
     monkeypatch.setenv("AKANA_VAULT_TOOLS", "0")
+    monkeypatch.setenv("AKANA_SCHEDULE_TOOLS", "0")
 
 
 # -- load_external_mcp_servers ------------------------------------------------------

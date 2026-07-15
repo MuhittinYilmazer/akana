@@ -551,8 +551,8 @@ class SemanticStore:
         # STORED value keeps its original casing; only the MATCH is folded.
         row = conn.execute(
             """
-            SELECT id, ts_first, valid_from, trust, source_origin, source_detail, confidence,
-                   source_turn_id, quote, extractor
+            SELECT id, key, value, ts_first, valid_from, trust, source_origin,
+                   source_detail, confidence, source_turn_id, quote, extractor
             FROM facts
             WHERE IFNULL(key_norm, key) = ? AND IFNULL(value_norm, value) = ?
               AND invalidated_at IS NULL
@@ -561,6 +561,14 @@ class SemanticStore:
         ).fetchone()
         if row:
             fact_id = str(row["id"])
+            # A dedup-hit leaves value/value_norm (and key) untouched in the UPDATEs
+            # below ("the STORED value keeps its original casing"), so the returned
+            # fact — and every downstream consumer (_emit_fact → graph relink, the
+            # vector sidecar hash, the API/timeline record) — must echo the STORED
+            # spelling, not the fold-equal INCOMING one ('İstanbul' vs 'istanbul'),
+            # or sqlite and the projections diverge.
+            key_eff = str(row["key"])
+            value_eff = str(row["value"])
             ts_first = str(row["ts_first"])
             existing_vf = str(row["valid_from"]) if row["valid_from"] else ts_first
             # Upgrade-only trust ladder (P6): a re-assertion that dedups onto an existing
@@ -629,6 +637,8 @@ class SemanticStore:
                     ),
                 )
         else:
+            key_eff = key_n
+            value_eff = val_n
             ts_first = ts
             # C6: canonicalized valid_from, clamped so a FUTURE valid_from can never
             # push the window past 'now' (which would hide the fact from facts_as_of(now)).
@@ -673,8 +683,8 @@ class SemanticStore:
             )
         return SemanticFact(
             id=fact_id,
-            key=key_n,
-            value=val_n,
+            key=key_eff,
+            value=value_eff,
             ts_first=ts_first,
             ts_last=ts,
             confidence=confidence,

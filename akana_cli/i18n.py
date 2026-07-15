@@ -184,9 +184,9 @@ _STRINGS: dict[str, dict[str, str]] = {
     # ── setup: summary ───────────────────────────────────────────────────────
     "setup.no_provider_callout": {
         "en": "No model provider configured — chat will not work. Pick one in the web "
-        "onboarding, or run: python akana.py add cursor|claude|gemini|openai|ollama",
+        "onboarding, or run: python akana.py add cursor|claude|gemini|openai|codex|ollama",
         "tr": "Model sağlayıcı yapılandırılmadı — sohbet çalışmaz. Web kurulumundan birini "
-        "seç ya da çalıştır: python akana.py add cursor|claude|gemini|openai|ollama",
+        "seç ya da çalıştır: python akana.py add cursor|claude|gemini|openai|codex|ollama",
     },
     "setup.install_errored": {
         "en": "{id} installed with errors — re-run: python akana.py add {id}",
@@ -225,6 +225,10 @@ _STRINGS: dict[str, dict[str, str]] = {
     "comp.openai": {
         "en": "OpenAI — API key (no extra package)",
         "tr": "OpenAI — API anahtarı (ek paket yok)",
+    },
+    "comp.codex": {
+        "en": "Codex — OpenAI codex CLI + ChatGPT subscription",
+        "tr": "Codex — OpenAI codex CLI + ChatGPT aboneliği",
     },
     "comp.ollama": {"en": "Ollama — local models, no key", "tr": "Ollama — yerel modeller, anahtar yok"},
     "comp.embeddings": {
@@ -272,6 +276,10 @@ _STRINGS: dict[str, dict[str, str]] = {
     "tool.claude_login_hint": {
         "en": "Then log in once — run:  claude  (or:  claude setup-token)",
         "tr": "Sonra bir kez giriş yap — çalıştır:  claude  (ya da:  claude setup-token)",
+    },
+    "tool.codex_login_hint": {
+        "en": "Then log in once — run:  codex login  (ChatGPT sign-in, no API key)",
+        "tr": "Sonra bir kez giriş yap — çalıştır:  codex login  (ChatGPT girişi, API anahtarı yok)",
     },
     "tool.claude_installing": {
         "en": "Installing the Claude CLI ({pkg})",

@@ -239,6 +239,7 @@
       ollama: m.ollama_tag,
       gemini: m.gemini_tag,
       openai: m.openai_tag,
+      codex: m.codex_tag,
     };
     const PROV_LABELS = {
       cursor: "Cursor",
@@ -246,6 +247,7 @@
       ollama: "Ollama",
       gemini: "Gemini",
       openai: "OpenAI",
+      codex: "Codex",
     };
     const provider = PROV_LABELS[raw] ? raw : "cursor";
     const tag = m.active_tag || PROV_TAGS[provider] || "?";
@@ -315,6 +317,7 @@
   let claudeModelsCache = null;
   let geminiModelsCache = null;
   let openaiModelsCache = null;
+  let codexModelsCache = null;
   let onModelSwitcherDocClick = null;
   let onModelSwitcherKey = null;
   let _conversationLlmRestore = false;
@@ -330,6 +333,7 @@
       "ollama_model",
       "gemini_model",
       "openai_model",
+      "codex_model",
     ]) {
       if (safe[k] !== undefined && safe[k] !== null && String(safe[k]).trim()) {
         body[k] = String(safe[k]).trim();
@@ -364,6 +368,7 @@
       if (s.ollama_model) patch.ollama_model = s.ollama_model;
       if (s.gemini_model) patch.gemini_model = s.gemini_model;
       if (s.openai_model) patch.openai_model = s.openai_model;
+      if (s.codex_model) patch.codex_model = s.codex_model;
       if (!Object.keys(patch).length) return;
       _conversationLlmRestore = true;
       try {
@@ -579,6 +584,15 @@
       // and PUT the wrong models + claude_model (bug).
       const activeOpenai = String(s.openai_model || data.active_openai_model_tag || "").trim();
       void _loadOpenaiModels(list, activeOpenai);
+      return;
+    }
+    if (provider === "codex") {
+      // Codex models come from the curated backend catalog (/system/codex/models —
+      // the CLI has no model-list command). field=codex_model. Without this branch
+      // codex would fall to "unknown → Claude list" and PUT claude_model (the same
+      // family of bug the gemini/openai branches fixed).
+      const activeCodex = String(s.codex_model || data.active_codex_model_tag || "").trim();
+      void _loadCodexModels(list, activeCodex);
       return;
     }
     if (provider === "cursor") {
@@ -800,6 +814,16 @@
     cache: { get: () => openaiModelsCache, set: (v) => { openaiModelsCache = v; } },
   });
 
+  /** Codex: curated backend catalog (/system/codex/models — the CLI has no live
+   *  model-list command). Same loader machinery; field=codex_model. */
+  const _loadCodexModels = _makeCatalogModelLoader({
+    endpoint: "codex",
+    prefix: "codex",
+    field: "codex_model",
+    style: "always",
+    cache: { get: () => codexModelsCache, set: (v) => { codexModelsCache = v; } },
+  });
+
   async function openModelSwitcher() {
     ensureModelSwitcher();
     modelSwitcherOpen = true;
@@ -888,6 +912,7 @@
     claude: "claude_model",
     gemini: "gemini_model",
     openai: "openai_model",
+    codex: "codex_model",
     ollama: "ollama_model",
   };
 
@@ -1117,6 +1142,11 @@
     connection: t("settings.tab.connection"),
     vault: t("settings.nav.vault"),
     persona: t("settings.nav.persona"),
+    // Self-contained module (akana-observability.js) mounts/refreshes itself via
+    // a MutationObserver on its own pane's `hidden` attribute — same pattern as
+    // vault/persona/packs above, so no branch is needed in switchSettingsTab().
+    // This entry only feeds the breadcrumb label.
+    observability: t("settings.nav.observability"),
   });
 
   function setSettingsNavBadge(tabId, text, kind) {
@@ -1148,6 +1178,7 @@
       ollama: "Ollama (local)",
       gemini: "Gemini (API)",
       openai: "OpenAI (API)",
+      codex: "Codex CLI",
     };
     const heroProvider = HERO_LABELS[rawHero] ? rawHero : "cursor";
     const HERO_TAGS = {
@@ -1156,6 +1187,7 @@
       ollama: (meta && meta.active_ollama_model_tag) || (s && s.ollama_model),
       gemini: (meta && meta.active_gemini_model_tag) || (s && s.gemini_model),
       openai: (meta && meta.active_openai_model_tag) || (s && s.openai_model),
+      codex: (meta && meta.active_codex_model_tag) || (s && s.codex_model),
     };
     if (hm) hm.textContent = HERO_TAGS[heroProvider] || "—";
     if (hp) hp.textContent = HERO_LABELS[heroProvider];
@@ -1287,6 +1319,18 @@
         authTitle = t("settings.stat.openai_auth");
         authVal = openaiReachable ? t("settings.stat.key_loaded") : t("settings.stat.key_missing");
         authDesc = t("settings.stat.openai_desc");
+      } else if (active.provider === "codex") {
+        // Subscription auth like claude — no key; green only when the CLI is
+        // actually installed AND logged in (`codex login status`).
+        const cx = deps.codex_cli || {};
+        authOk = !!(cx.installed && cx.logged_in);
+        authTitle = t("settings.stat.codex_auth");
+        authVal = authOk
+          ? t("settings.stat.codex_logged_in")
+          : cx.installed
+            ? t("settings.stat.codex_no_login")
+            : t("settings.stat.codex_not_installed");
+        authDesc = t("settings.stat.codex_desc");
       } else {
         authOk = cursorOk;
         authTitle = t("settings.stat.cursor_auth");
@@ -1611,17 +1655,10 @@
   }
 
   // ─── Live events (/ws/events) — server broadcast → bus + minimal visible response ──
-  // Server emits task_update / policy_update / reminder_fire
-  // (see tasks/runner.py, policy/live.py, schedule/service.py). Each event is
-  // forwarded to AkanaBus as `ws:<type>` (unknown types forwarded silently too);
-  // a small set of status-affecting events are surfaced via toast.
-  const WS_TASK_NOTIFY_STATUSES = {
-    paused:    () => t("settings.ws.task_paused"),
-    cancelled: () => t("settings.ws.task_cancelled"),
-    aborted:   () => t("settings.ws.task_aborted"),
-    failed:    () => t("settings.ws.task_failed"),
-  };
-  const _wsTaskNotified = new Map(); // task id → last notified status (prevents duplicate toasts)
+  // Server emits turn_active / turn_completed / queue_updated (see
+  // chat/chat_detached.py + chat/chat_state.py). Each event is forwarded to
+  // AkanaBus as `ws:<type>` (unknown types forwarded silently too); the turn/queue
+  // events also drive the chat surface directly.
 
   function handleWsEvent(raw) {
     let evt;
@@ -1641,38 +1678,23 @@
           window.AkanaChat?.setQueueDepth?.(evt.depth);
         } else if (type === "turn_completed") {
           void window.AkanaChat?.onTurnCompletedRemote?.(cid, evt);
+        } else if (type === "turn_active") {
+          // A background turn (schedule fire / task) started in the conversation the
+          // user is viewing → show the "working…" indicator.
+          void window.AkanaChat?.onTurnActiveRemote?.(cid, evt);
         }
-      } else if (type === "turn_completed" && cid) {
-        void window.AkanaChat?.onBackgroundTurnCompleted?.(cid, evt);
-      }
-    } else if (type === "reminder_fire") {
-      hooks.showToast(t("settings.ws.reminder_toast", { text: String(evt.text || "").trim() || "—" }), "info");
-    } else if (type === "policy_update") {
-      const p = evt.policy || {};
-      if (p.decision === "deny" && p.enforced) {
-        hooks.showToast(
-          t("settings.ws.policy_blocked", {
-            action: p.action_type || "action",
-            rationale: p.rationale ? ` — ${p.rationale}` : "",
-          }),
-          "err",
-        );
-      }
-    } else if (type === "task_update") {
-      const tk = evt.task || {};
-      const statusKey = String(tk.status || "");
-      const labelFn = WS_TASK_NOTIFY_STATUSES[statusKey];
-      const label = labelFn ? labelFn() : null;
-      if (label && tk.id && _wsTaskNotified.get(tk.id) !== tk.status) {
-        if (_wsTaskNotified.size > 200) _wsTaskNotified.clear();
-        _wsTaskNotified.set(tk.id, tk.status);
-        hooks.showToast(
-          t("settings.ws.task_toast", { status: label, title: tk.title || tk.id }),
-          tk.status === "paused" ? "info" : "err",
-        );
+      } else if (cid) {
+        if (type === "turn_completed") {
+          void window.AkanaChat?.onBackgroundTurnCompleted?.(cid, evt);
+        } else if (type === "turn_active") {
+          // A background thread just started elsewhere → surface it in the sidebar
+          // (so a running task/reminder is clickable while it works, not only after).
+          void window.AkanaChat?.onBackgroundTurnActive?.(cid, evt);
+        }
       }
     }
-    // plan_update: the chat surface already shows the plan text — bus is sufficient.
+    // Any other event type (e.g. plan_update) reaches subscribers via the
+    // `ws:<type>` bus emit above; no toast branch is needed here.
   }
 
   function connectWs(force) {
@@ -1734,6 +1756,10 @@
     openaiRevealed: document.getElementById("cred-openai-revealed"),
     save: document.getElementById("cred-save"),
     status: document.getElementById("cred-status"),
+    // Codex has NO secret by design (ChatGPT-subscription auth via `codex login`);
+    // its card is a live CLI/login status line + a re-check button, claude-style.
+    codexState: document.getElementById("cred-codex-state"),
+    codexCheck: document.getElementById("btn-check-cred-codex"),
   };
 
   function setCredStatus(msg, kind) {
@@ -1801,8 +1827,56 @@
     setSettingsNavBadge("credentials", anySet ? "✓" : "!", anySet ? "is-ok" : "is-warn");
   }
 
+  /** Codex credential-state line — driven by /system/status dependencies.codex_cli,
+   *  NOT the secret store (codex deliberately has no key: ChatGPT-subscription auth
+   *  via `codex login`). Mirrors the claude card's honest three states: logged in ✓ /
+   *  installed-but-no-login / not installed — plus the probe's own error text. */
+  function renderCodexCredState(dep) {
+    const el = credEls.codexState;
+    if (!el) return;
+    const d = dep && typeof dep === "object" ? dep : {};
+    let text;
+    let ok = false;
+    if (d.installed && d.logged_in) {
+      text = t("settings.cred.codex_state_ok");
+      ok = true;
+    } else if (d.installed) {
+      text = t("settings.cred.codex_state_no_login");
+    } else {
+      text = t("settings.cred.codex_state_not_installed");
+    }
+    // Surface the probe's concrete error (version mismatch, PATH issue…) ONLY when
+    // it adds information beyond the canned state line — the not-installed/no-login
+    // codes are already fully expressed by the localized text above (appending the
+    // backend's English message would just say the same thing twice).
+    const canned = new Set(["not_installed", "no_login", "not_logged_in"]);
+    if (!ok && d.error && !canned.has(String(d.error_code || ""))) {
+      text += ` · ${String(d.error)}`;
+    }
+    el.textContent = text;
+    el.classList.toggle("is-set", ok);
+  }
+
+  async function loadCodexCredState() {
+    if (!credEls.codexState) return;
+    try {
+      const r = await fetch(`${baseUrl()}/api/v1/system/status`, {
+        headers: authHeaders(),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = await r.json();
+      renderCodexCredState(j && j.dependencies && j.dependencies.codex_cli);
+    } catch {
+      credEls.codexState.textContent = t("settings.cred.status_unavailable");
+      credEls.codexState.classList.remove("is-set");
+    }
+  }
+
   async function loadCredentials() {
     if (!credEls.cursorState && !credEls.claudeState) return;
+    // Codex rides the same load cycle but from /system/status (no secret to mask);
+    // fire-and-forget so a slow CLI probe never delays the masked-keys render.
+    void loadCodexCredState();
     try {
       const r = await fetch(`${baseUrl()}/api/v1/system/credentials`, {
         headers: authHeaders(),
@@ -3211,6 +3285,14 @@
     wireCredReveal(credEls.geminiReveal, "gemini_api_key", credEls.geminiRevealed);
     wireCredReveal(credEls.openaiReveal, "openai_api_key", credEls.openaiRevealed);
     if (credEls.save) credEls.save.addEventListener("click", () => void saveCredentials());
+    // Codex card: re-probe the CLI/login status on demand (e.g. right after the
+    // user runs `codex login` in a terminal — no page reload needed).
+    if (credEls.codexCheck) {
+      credEls.codexCheck.addEventListener("click", () => {
+        if (credEls.codexState) credEls.codexState.textContent = t("settings.cred.codex_checking");
+        void loadCodexCredState();
+      });
+    }
 
     const btnConnectorsRefresh = document.getElementById("connectors-refresh");
     if (btnConnectorsRefresh) {
@@ -3348,6 +3430,7 @@
             claude: deps.claude_cli,
             gemini: deps.gemini_api,
             openai: deps.openai_api,
+            codex: deps.codex_cli,
           };
           const providerReachable =
             active.provider === "ollama"

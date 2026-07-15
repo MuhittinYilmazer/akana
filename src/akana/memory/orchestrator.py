@@ -38,6 +38,7 @@ from akana.memory.mutate import forget as run_forget
 from akana.memory.mutate import remember as run_remember
 from akana.memory.recall import (
     _DEFAULT_LANGUAGE,
+    _EPISODIC_RECALL_ROLES,  # single source for the recall-eligible role window
     _EPISODIC_SCORE,  # single source for the episodic block score/labels
     _ROLE_LABELS,
     Recall,
@@ -90,6 +91,16 @@ INTENT_PROFILES: dict[str, IntentProfile] = {
     "concept_lookup": IntentProfile("rrf", 0.4, 0.4, 0.2, 600),
 }
 _DEFAULT_PROFILE = IntentProfile("rrf", 0.2, 0.3, 0.5, 800)
+
+# time_range / observed_* / types are applied as Python post-filters AFTER the
+# strategy has already truncated its candidate set by limit (top-k recency/
+# importance) AND by token budget. An in-window match ranking below that window
+# is cut before the filter ever sees it, so a time-scoped search returns [] despite
+# matching records. When such a filter is active we widen BOTH knobs so the filter
+# runs over a fuller candidate set, then re-cap the survivors to req.k (correctness
+# over the token budget for an explicit window query). _SEARCH_LIMIT_MAX is 500.
+_FILTER_RETRIEVAL_LIMIT = 200
+_FILTER_RETRIEVAL_BUDGET = 4000
 
 
 @dataclass(slots=True)
@@ -310,6 +321,15 @@ class MemoryOrchestrator:
         if req.rerank != "off":
             warnings.append("rerank=cross_encoder unavailable until the vector milestone")
 
+        # A window/type post-filter (below) truncates AFTER retrieval → widen the
+        # candidate set the strategy pulls so in-window matches ranking past the top-k
+        # window survive to the filter; the result is re-capped to req.k afterwards.
+        _windowed = bool(
+            req.types or time_from or time_to or observed_from or observed_to
+        )
+        retrieval_limit = max(req.k, _FILTER_RETRIEVAL_LIMIT) if _windowed else req.k
+        retrieval_budget = max(budget, _FILTER_RETRIEVAL_BUDGET) if _windowed else budget
+
         q0 = time.perf_counter()
         if as_of is not None:
             # Time-travel (D): the keyword strategy is skipped — the semantic
@@ -321,8 +341,8 @@ class MemoryOrchestrator:
                 as_of=as_of,
                 conversation_id=conv,
                 min_trust=req.min_trust,
-                limit=req.k,
-                budget_tokens=budget,
+                limit=retrieval_limit,
+                budget_tokens=retrieval_budget,
             )
         else:
             executed, strategy_fn, fell_back = self._resolve_strategy(profile.strategy)
@@ -334,8 +354,8 @@ class MemoryOrchestrator:
                 query=query,
                 conversation_id=conv,
                 min_trust=req.min_trust,
-                limit=req.k,
-                budget_tokens=budget,
+                limit=retrieval_limit,
+                budget_tokens=retrieval_budget,
             )
         fts_ms = int((time.perf_counter() - q0) * 1000)
         rt = result.trace
@@ -368,6 +388,10 @@ class MemoryOrchestrator:
         # Bi-temporal observation filter (one place): the same post-filter on both the
         # normal and the as_of path — observed_at on facts, ts on turns.
         kept, observed_dropped = filter_observed(kept, observed_from, observed_to)
+        # Re-cap to the requested k: retrieval was widened above only so the window
+        # filter could see past the top-k window; the caller still asked for k items.
+        if _windowed:
+            kept = kept[: req.k]
         items = [item for item, _fact in kept]
 
         # B (user decision: everything goes through the inbox, no auto-promote): in
@@ -526,10 +550,17 @@ class MemoryOrchestrator:
                     source_ids=(fact.id,),
                 )
             )
+        # Role window pushed into SQL (like the live path) so assistant/tool turns
+        # can't fill the bm25 window and starve eligible user turns; a widened limit
+        # keeps the ts<=as_of post-filter (search has no time ceiling) from losing
+        # every hit to newer rows on a time-travel query over an old topic.
         turns = [
             t
-            for t in self._memory.search_turns(
-                query, conversation_id=conversation_id, limit=limit
+            for t in self._memory.episodic.search_keyword(
+                query,
+                conversation_id=conversation_id,
+                limit=max(limit, _FILTER_RETRIEVAL_LIMIT),
+                roles=tuple(_EPISODIC_RECALL_ROLES),
             )
             if t.ts <= as_of and episodic_turn_eligible(t.role)
         ]

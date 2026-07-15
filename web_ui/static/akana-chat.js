@@ -45,58 +45,110 @@
   // existing conversation is caught during the upload/provider await window and does not run twice.
   const _submitSetupConvs = new Set();
 
-  // Thinking mode (ascending effort: hizli/normal/derin/yogun/azami/ultra) — per-turn
-  // composer selection; last choice persisted in localStorage. Sent as `thinking_mode`
-  // in chatPayload; maps to native --effort on claude. "ultra" is a 6th, claude-only
-  // tier (appends the "ultracode" keyword server-side on fable models) — it is only
-  // ever shown in the menu when the active provider is claude (see
-  // setThinkingProvider/syncThinkingModeUi below).
-  const THINKING_MODE_KEY = "akana:thinking-mode";
-  const THINKING_MODES = ["hizli", "normal", "derin", "yogun", "azami", "ultra"];
-  const THINKING_MODE_LABELS = {
-    hizli: window.AkanaI18n.t("chat.effort_fast"),
-    normal: window.AkanaI18n.t("chat.effort_normal"),
-    derin: window.AkanaI18n.t("chat.effort_deep"),
-    yogun: window.AkanaI18n.t("chat.effort_intense"),
-    azami: window.AkanaI18n.t("chat.effort_max"),
-    ultra: window.AkanaI18n.t("chat.effort_ultra"),
+  // ── Reasoning-effort control (provider-aware, two vocabularies) ─────────────
+  // The composer's effort menu speaks ONE of two vocabularies, chosen by the active
+  // provider; each keeps its OWN persisted selection so switching providers never sends
+  // a level the target can't use:
+  //   • "akana"  — canonical tiers (hizli/normal/derin/yogun/azami/ultra). claude & gemini
+  //     map these to their native knob server-side. "hizli" forces the fast-path; "ultra"
+  //     is a 6th, claude-only tier (appends the "ultracode" keyword on fable models).
+  //   • "native" — the provider's OWN reasoning levels (minimal/low/medium/high/xhigh).
+  //     codex & openai show these directly and send the chosen level VERBATIM (no mapping),
+  //     so the user sees and selects the REAL effort level. "xhigh" (extra-high) is the
+  //     native-only top level — no Akana tier reaches it.
+  // Providers without a reasoning knob (cursor/ollama) hide the whole #effort-menu.
+  const EFFORT_VOCABS = {
+    akana: {
+      storageKey: "akana:thinking-mode",
+      def: "normal",
+      modes: ["hizli", "normal", "derin", "yogun", "azami", "ultra"],
+    },
+    native: {
+      storageKey: "akana:thinking-mode-native",
+      def: "medium",
+      modes: ["minimal", "low", "medium", "high", "xhigh"],
+    },
   };
-  let thinkingMode = (() => {
-    try {
-      const v = localStorage.getItem(THINKING_MODE_KEY);
-      return THINKING_MODES.includes(v) ? v : "normal";
-    } catch {
-      return "normal";
-    }
-  })();
+  const _EFFORT_LABEL_KEYS = {
+    hizli: "chat.effort_fast", normal: "chat.effort_normal", derin: "chat.effort_deep",
+    yogun: "chat.effort_intense", azami: "chat.effort_max", ultra: "chat.effort_ultra",
+    minimal: "chat.effort_minimal", low: "chat.effort_low", medium: "chat.effort_medium",
+    high: "chat.effort_high", xhigh: "chat.effort_xhigh",
+  };
+  // Resolved LIVE (not cached at load) so a language flip relabels the menu.
+  const effortLabel = (mode) =>
+    window.AkanaI18n.t(_EFFORT_LABEL_KEYS[mode] || "chat.effort_normal");
 
-  // Active provider. Thinking/effort is a reasoning-depth knob that only the Claude
-  // family, Gemini 3+ and OpenAI (o-series/GPT-5+) expose; providers without it
-  // (cursor, ollama) hide the whole #effort-menu rather than show a dead/greyed one.
-  // (thinking_mode may still be read in the chat layer for skill fast-paths etc.)
-  const THINKING_OPEN_TITLE =
-    window.AkanaI18n.t("chat.effort_open_title");
   let thinkingProvider = "";
 
-  function thinkingEnabled() {
-    return (
-      thinkingProvider === "claude" ||
-      thinkingProvider === "gemini" ||
-      thinkingProvider === "openai"
-    );
+  // provider → vocabulary key (null = provider has no reasoning knob → menu hidden).
+  function vocabKeyForProvider(p) {
+    if (p === "claude" || p === "gemini") return "akana";
+    if (p === "codex" || p === "openai") return "native";
+    return null;
   }
-
+  function currentVocabKey() {
+    return vocabKeyForProvider(thinkingProvider);
+  }
+  function thinkingEnabled() {
+    return currentVocabKey() != null;
+  }
   function thinkingLocked() {
     return !thinkingEnabled();
   }
 
-  // "ultra" (6th tier) is claude-only: it appends the server-side "ultracode"
-  // keyword on fable models and behaves like "azami" otherwise, but on
-  // gemini/openai/cursor/ollama it has no distinct meaning — so the option is
-  // hidden outside the claude provider rather than offered and silently
-  // downgraded server-side.
+  // Per-vocabulary persisted selection, loaded lazily + validated against the mode list
+  // (a stale/invalid stored value falls back to the vocab default).
+  const _effortSelected = {};
+  function selectedFor(vk) {
+    if (_effortSelected[vk] != null) return _effortSelected[vk];
+    const v = EFFORT_VOCABS[vk];
+    let stored = null;
+    try {
+      stored = localStorage.getItem(v.storageKey);
+    } catch {
+      /* storage unavailable — in-memory selection still valid */
+    }
+    _effortSelected[vk] = v.modes.includes(stored) ? stored : v.def;
+    return _effortSelected[vk];
+  }
+
+  // "ultra" (6th akana tier) is claude-only. On gemini it is hidden and a persisted "ultra"
+  // collapses to "azami" so the composer never shows/sends it on a non-claude provider.
   function ultraVisible() {
     return thinkingProvider === "claude";
+  }
+  function effectiveMode(vk) {
+    const m = selectedFor(vk);
+    if (vk === "akana" && m === "ultra" && !ultraVisible()) return "azami";
+    return m;
+  }
+
+  // The value SENT for the active provider — its vocabulary's current selection. When no
+  // provider knob is active, "normal" (a harmless no-op for cursor/ollama).
+  function currentEffortMode() {
+    const vk = currentVocabKey();
+    return vk ? effectiveMode(vk) : "normal";
+  }
+
+  // (Re)build the popover option buttons for the active vocabulary. "ultra" is filtered
+  // out for non-claude providers. Options are rendered in JS (not fixed HTML) precisely
+  // because the option SET now depends on the provider.
+  function renderEffortOptions() {
+    const group = document.getElementById("thinking-mode");
+    const vk = currentVocabKey();
+    if (!group || !vk) return;
+    const modes = EFFORT_VOCABS[vk].modes.filter((m) => m !== "ultra" || ultraVisible());
+    group.textContent = "";
+    for (const m of modes) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "effort-opt";
+      b.dataset.mode = m;
+      b.setAttribute("role", "option");
+      b.textContent = effortLabel(m);
+      group.appendChild(b);
+    }
   }
 
   function syncThinkingModeUi() {
@@ -113,21 +165,16 @@
       closeEffortMenu();
       return;
     }
-    const ultraOpt = group.querySelector('.effort-opt[data-mode="ultra"]');
-    if (ultraOpt) ultraOpt.hidden = !ultraVisible();
+    renderEffortOptions();
+    const mode = currentEffortMode();
     if (trigger) {
-      trigger.title = THINKING_OPEN_TITLE;
-      trigger.setAttribute(
-        "aria-label",
-        window.AkanaI18n.t("chat.effort_aria", { label: THINKING_MODE_LABELS[thinkingMode] || window.AkanaI18n.t("chat.effort_normal") }),
-      );
-      trigger.setAttribute("data-mode", thinkingMode);
+      trigger.title = window.AkanaI18n.t("chat.effort_open_title");
+      trigger.setAttribute("aria-label", window.AkanaI18n.t("chat.effort_aria", { label: effortLabel(mode) }));
+      trigger.setAttribute("data-mode", mode);
     }
-    if (label) {
-      label.textContent = THINKING_MODE_LABELS[thinkingMode] || window.AkanaI18n.t("chat.effort_normal");
-    }
+    if (label) label.textContent = effortLabel(mode);
     group.querySelectorAll(".effort-opt").forEach((b) => {
-      const on = b.dataset.mode === thinkingMode;
+      const on = b.dataset.mode === mode;
       b.classList.toggle("is-active", on);
       b.setAttribute("aria-selected", on ? "true" : "false");
     });
@@ -156,10 +203,12 @@
   }
 
   function setThinkingMode(mode, { closeMenu = true } = {}) {
-    if (!THINKING_MODES.includes(mode) || mode === thinkingMode) return;
-    thinkingMode = mode;
+    const vk = currentVocabKey();
+    if (!vk || !EFFORT_VOCABS[vk].modes.includes(mode)) return;
+    if (mode === selectedFor(vk)) return;
+    _effortSelected[vk] = mode;
     try {
-      localStorage.setItem(THINKING_MODE_KEY, mode);
+      localStorage.setItem(EFFORT_VOCABS[vk].storageKey, mode);
     } catch {
       /* storage unavailable — in-memory selection still valid */
     }
@@ -167,7 +216,9 @@
     if (closeMenu) closeEffortMenu();
   }
 
-  // Called when the provider changes (settings → loadModelPill); shows/hides the segment.
+  // Called when the provider changes (settings → loadModelPill); switches the vocabulary
+  // (and re-renders the menu options). Each vocabulary keeps its own selection, so no
+  // cross-provider "mode rides along" fixup is needed here.
   function setThinkingProvider(provider) {
     const p = String(provider || "").trim().toLowerCase();
     const next =
@@ -177,21 +228,15 @@
           ? "gemini"
           : p === "openai"
             ? "openai"
-            : p === "cursor"
-              ? "cursor"
-              : p === "ollama"
-                ? "ollama"
-                : "";
+            : p === "codex"
+              ? "codex"
+              : p === "cursor"
+                ? "cursor"
+                : p === "ollama"
+                  ? "ollama"
+                  : "";
     if (next === thinkingProvider) return;
     thinkingProvider = next;
-    // A persisted "ultra" choice (localStorage, claude-only tier) must not silently
-    // ride along on a non-claude provider — fall back to "normal" so the composer
-    // never shows/sends a mode the current provider doesn't expose. setThinkingMode
-    // already calls syncThinkingModeUi() itself, so skip the extra call below.
-    if (thinkingMode === "ultra" && next !== "claude") {
-      setThinkingMode("normal", { closeMenu: false });
-      return;
-    }
     syncThinkingModeUi();
   }
 
@@ -332,7 +377,59 @@
     }
   }
 
+  // Conversations with a LIVE background turn (schedule fire / task) running on the
+  // server. Populated by turn_active, cleared by turn_completed. Lets a thread opened
+  // AFTER the turn started still show the "working…" strip (open-late case).
+  const bgActiveTurns = new Set();
+
+  /** Show the composer "working…" strip for the displayed conversation if a
+   *  background turn is live on it and the user isn't already streaming a turn. */
+  function maybeShowBgWorking(convId) {
+    const id = (convId || "").trim();
+    if (!id || !bgActiveTurns.has(id)) return;
+    if (chatInFlight) return; // a foreground turn already owns the strip
+    if (conversationIdForMemory() !== id) return;
+    try {
+      window.AkanaTurnStatus?.begin?.(id);
+      window.AkanaTurnStatus?.setPhase?.("preparing");
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // A background turn STARTED in the conversation currently on screen → working strip.
+  async function onTurnActiveRemote(convId, evt) {
+    void evt;
+    const id = (convId || "").trim();
+    if (!id) return;
+    bgActiveTurns.add(id);
+    maybeShowBgWorking(id);
+  }
+
+  // A background turn started in a NON-displayed conversation → make its (possibly
+  // brand-new) thread appear in the sidebar so the user can open it while it works.
+  async function onBackgroundTurnActive(convId, evt) {
+    void evt;
+    const id = (convId || "").trim();
+    if (!id) return;
+    bgActiveTurns.add(id);
+    void loadChatArchiveList();
+  }
+
   async function onTurnCompletedRemote(convId, evt) {
+    // A live background turn on this conversation just ended → drop the working strip.
+    const _cid = (convId || "").trim();
+    if (_cid && bgActiveTurns.delete(_cid) && !chatInFlight) {
+      try {
+        window.AkanaTurnStatus?.end?.();
+      } catch {
+        /* ignore */
+      }
+    }
+    return onTurnCompletedRemoteInner(convId, evt);
+  }
+
+  async function onTurnCompletedRemoteInner(convId, evt) {
     await refreshQueueState(convId);
     if (conversationIdForMemory() !== convId) return;
     // BUG (root of corruption): `getChatInFlight()` is UNDEFINED in this scope — it is
@@ -407,6 +504,7 @@
   async function onBackgroundTurnCompleted(convId, evt) {
     const id = (convId || "").trim();
     if (!id || conversationIdForMemory() === id) return;
+    bgActiveTurns.delete(id); // the background turn finished
     void ensureThreads().refreshArchiveActivity?.(id);
     const items = ensureThreads().getChatArchiveItems?.() || [];
     const meta = items.find((c) => c.id === id);
@@ -1110,7 +1208,7 @@
       applyChatServerAction: (a, p, o) => t.applyChatServerAction(a, p, o),
       purgeConversationFromChatStore: (id) => t.purgeConversationFromChatStore(id),
       consumePendingFileIds: () => consumePendingFileIds(),
-      thinkingMode: () => (thinkingEnabled() ? thinkingMode : "normal"),
+      thinkingMode: () => currentEffortMode(),
       // Plan mode: the composer toggle was removed (ExitPlanMode is interactive-only
       // in current headless `claude -p`, so plan mode can't run) → normal turns never
       // request it. A plan card's Apply/Revise still passes a per-turn override.
@@ -1630,6 +1728,9 @@
     refreshQueueState,
     onTurnCompletedRemote,
     onBackgroundTurnCompleted,
+    onTurnActiveRemote,
+    onBackgroundTurnActive,
+    maybeShowBgWorking,
     setQueueDepth,
     setThinkingProvider,
     // Test-only seam (node-vm contract harness): seed/read the composer's pending

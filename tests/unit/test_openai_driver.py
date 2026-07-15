@@ -223,3 +223,28 @@ def test_connect_error_maps_to_unavailable():
     drv = OpenAIDriver(api_key="k", transport=httpx.MockTransport(handler))
     with pytest.raises(DriverUnavailable):
         asyncio.run(_drain(drv.stream_chat([Message("user", "x")])))
+
+
+# -- generation-timeout knob (the ollama _chat_timeout twin) --------------------
+
+
+def test_chat_timeout_positive_is_a_uniform_ceiling():
+    """timeout > 0 → the historical behavior: connect/read/write/pool all bounded."""
+    from akana.driver.openai import _chat_timeout
+
+    t = _chat_timeout(45.0)
+    assert t.connect == 45.0
+    assert t.read == 45.0
+    assert t.write == 45.0
+    assert t.pool == 45.0
+
+
+def test_chat_timeout_zero_disables_read_but_keeps_connect_finite():
+    """timeout <= 0 → the inter-token (read) ceiling is disabled so a slow reply is
+    never cut off, while the handshake still fails fast (an unreachable endpoint must
+    not hang forever)."""
+    from akana.driver.openai import _CONNECT_TIMEOUT_S, _chat_timeout
+
+    t = _chat_timeout(0.0)
+    assert t.read is None
+    assert t.connect == _CONNECT_TIMEOUT_S
