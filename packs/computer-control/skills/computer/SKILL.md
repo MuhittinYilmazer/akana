@@ -17,9 +17,28 @@ or changes their windows. It requires approval and you must stay conservative.
 - On a venv install, `AKANA_PYTHON` should point at the venv interpreter (see the pack's
   `pack.yaml` note) so the MCP child uses the interpreter that has the packages.
 
-## The operating loop (SEE, then ACT, then SEE again)
+## The operating loop — PREFER perception (read_screen → click_ref), fall back to pixels
 
-You are blind between screenshots. NEVER click, type, or drag from memory or a guess.
+There are two ways to see. Always TRY the structured one first:
+
+**Preferred — structured perception (works on every model, no image Read step):**
+
+1. **Read**: call `computer_read_screen` (optionally `window="<title substring>"`). It returns
+   an indented element TREE where each interactable control ends in `[ref=wNeM]`, e.g.
+   `- Button "Save" [ref=w1e7]`, `- Edit "Search" [ref=w1e3]`. No Read step — the tree IS the
+   view. Use `computer_find_element("Save")` to locate a control in a large tree.
+2. **Act by ref**: `click_ref("w1e7")`, `double_click_ref`, `right_click_ref`, or
+   `type_into_ref("w1e3", "text")` (focuses then Unicode-safe pastes). Pass `element="the Save
+   button"` describing the target. Refs target the element's CENTER by identity, so a small
+   layout shift can't make you miss.
+3. **Re-read**: after any action that changes the UI, call `computer_read_screen` AGAIN — refs
+   are only valid for the current snapshot. A stale ref returns an error asking you to re-read;
+   NEVER fall back to a remembered coordinate.
+
+If `read_screen` returns an error (`fallback: screenshot`) — no accessibility layer (a game, a
+canvas, a custom-drawn app) — switch to the pixel loop below.
+
+**Fallback — pixel loop (you are blind between screenshots; never act from a guess):**
 
 1. **See**: call `computer_screenshot` (or `computer_screen_info` first on a multi-monitor
    setup to pick a `monitor`). It saves a PNG and returns `{path, width, height}`.

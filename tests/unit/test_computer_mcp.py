@@ -24,6 +24,14 @@ _PACK = _REPO / "packs" / "computer-control"
 _EXPECTED_TOOLS = {
     "screen_info",
     "screenshot",
+    # Perception (a11y tree + refs) — the structured, provider-agnostic alternative to
+    # screenshot+pixel-eyeballing (Phase 1 desktop intelligence).
+    "read_screen",
+    "find_element",
+    "click_ref",
+    "double_click_ref",
+    "right_click_ref",
+    "type_into_ref",
     "left_click",
     "double_click",
     "right_click",
