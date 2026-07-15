@@ -20,6 +20,7 @@ Run::
 
 from __future__ import annotations
 
+import functools
 import logging
 import os
 import subprocess
@@ -100,6 +101,32 @@ def _abs_xy(x: int, y: int) -> tuple[int, int]:
     return int(x) + _LAST_ORIGIN[0], int(y) + _LAST_ORIGIN[1]
 
 
+def _summarize(tool: str, kwargs: dict[str, Any]) -> str:
+    """One-line, owner-readable description of an action for the approval dialog."""
+    def s(v: Any, n: int = 60) -> str:
+        v = str(v)
+        return v if len(v) <= n else v[: n - 1] + "…"
+
+    ref_desc = kwargs.get("element") or (f"ref {kwargs.get('ref', '')}")
+    if tool == "open_application":
+        return f"Open application: {s(kwargs.get('name', ''))}"
+    if tool == "close_window":
+        return f"Close window matching: {s(kwargs.get('title_contains', ''))}"
+    if tool in ("click_ref", "double_click_ref", "right_click_ref"):
+        return f"{tool.replace('_', ' ')}: {s(ref_desc)}"
+    if tool == "type_into_ref":
+        return f"Type into {s(ref_desc)}: {s(kwargs.get('text', ''))}"
+    if tool in ("type_text", "paste_text", "write_clipboard"):
+        return f"{tool.replace('_', ' ')}: {s(kwargs.get('text', ''))}"
+    if tool == "drag":
+        return f"Drag ({kwargs.get('x1')},{kwargs.get('y1')}) → ({kwargs.get('x2')},{kwargs.get('y2')})"
+    if "x" in kwargs and "y" in kwargs:
+        return f"{tool.replace('_', ' ')} at ({kwargs.get('x')},{kwargs.get('y')})"
+    if tool in ("focus_window", "maximize_window", "minimize_window", "move_window", "resize_window"):
+        return f"{tool.replace('_', ' ')}: {s(kwargs.get('title_contains', ''))}"
+    return f"{tool.replace('_', ' ')} {s(kwargs, 80)}"
+
+
 def _shot_name() -> str:
     """A sortable, collision-free basename for a screenshot PNG."""
     try:
@@ -147,12 +174,36 @@ def _pyperclip() -> Any:
 
 def build_server() -> FastMCP:
     """Construct the ``computer`` FastMCP server with all tools registered."""
-    # Deferred import (not module-level) so ``computer_mcp.__init__`` → ``__main__`` →
+    # Deferred imports (not module-level) so ``computer_mcp.__init__`` → ``__main__`` →
     # ``computer_mcp`` does not close a module-level import cycle (test_repo_boundaries);
-    # perception is stdlib-only, so importing it here is cheap.
-    from akana_server.computer_mcp import perception
+    # both are stdlib-only, so importing them here is cheap.
+    from akana_server.computer_mcp import approval, perception
 
     mcp = FastMCP("computer")
+
+    # PER-ACTION APPROVAL (Phase 2, opt-in, default OFF): wrap tool registration so EVERY
+    # @mcp.tool() below is auto-gated by the approval mode — no per-tool edits, and a
+    # provider-neutral gate (all providers execute computer.* tools in THIS child). The
+    # gate is a no-op for read-only tools and for the default ``off`` mode; when a mode
+    # requires it, a denied action returns an error instead of running. See approval.py.
+    _orig_tool = mcp.tool
+
+    def _gated_tool(*targs: Any, **tkw: Any):
+        register = _orig_tool(*targs, **tkw)
+
+        def deco(fn):
+            @functools.wraps(fn)
+            def wrapper(*args: Any, **kwargs: Any):
+                denial = approval.gate(fn.__name__, _data_dir(), _summarize(fn.__name__, kwargs))
+                if denial is not None:
+                    return {"ok": False, "action": fn.__name__, "error": denial, "denied": True}
+                return fn(*args, **kwargs)
+
+            return register(wrapper)
+
+        return deco
+
+    mcp.tool = _gated_tool
     # No screenshot has been taken yet on this server: clicks default to the untranslated
     # virtual-desktop origin until screenshot() records the captured monitor's offset.
     _LAST_ORIGIN[:] = [0, 0]

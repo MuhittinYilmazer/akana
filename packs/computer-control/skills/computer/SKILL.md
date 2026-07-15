@@ -89,6 +89,11 @@ canvas, a custom-drawn app) — switch to the pixel loop below.
 - pyautogui FAILSAFE is on: slamming the cursor to a screen corner aborts the action —
   that is the owner's emergency stop, not an error to work around.
 - When unsure where something is, take another screenshot; never click blind to "try".
+- Per-action approval may be ON (`computer_control_approval` = destructive / all): an
+  action can return `{"ok": false, "denied": true}` — the owner declined it via a
+  confirmation dialog. Do NOT retry the same action; stop and ask the owner what they
+  want instead. Giving a clear `element` description on ref actions makes the prompt they
+  see legible.
 
 ## Error cases
 

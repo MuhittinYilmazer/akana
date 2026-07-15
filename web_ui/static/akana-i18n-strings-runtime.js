@@ -444,6 +444,16 @@ window.AkanaI18nStrings = Object.assign(window.AkanaI18nStrings || {}, {
     tr: "akana_vault MCP okuma araçlarını (vault_list/vault_get/vault_get_credential) modele sunar; böylece saklanan sırları keşfedip kullanabilir. Kapatılırsa model kasayı araçla okuyamaz.",
   },
 
+  // ── computer_control_approval ─────────────────────────────────────────────
+  "runtime.computer_control_approval.label": {
+    en: "Computer-control: ask before acting",
+    tr: "Bilgisayar kontrolü: eylemden önce sor",
+  },
+  "runtime.computer_control_approval.desc": {
+    en: "When the computer-control pack drives your desktop, ask for your OK before an action runs (a confirmation dialog on the controlled machine). «off» (default) = full autonomy, no prompt; «destructive» = ask before opening an app, closing a window/tab or dragging — including the low-level equivalents (hotkey like alt+F4, middle-click, mouse hold); «all» = ask before every click / keystroke / window action (reading the screen is never gated). If a confirmation cannot be shown, the action is DENIED (fail-safe).",
+    tr: "Bilgisayar-kontrol paketi masaüstünü sürerken, bir eylem çalışmadan önce onayını iste (kontrol edilen makinede onay penceresi). «off» (varsayılan) = tam otonom, soru yok; «destructive» = uygulama açma, pencere/sekme kapatma veya sürüklemeden önce sor — düşük-seviye eşdeğerleri dahil (alt+F4 gibi kısayol, orta-tık, fare basılı tutma); «all» = her tıklama / tuş / pencere eyleminden önce sor (ekranı okumak asla sınırlanmaz). Onay gösterilemezse eylem REDDEDİLİR (fail-safe).",
+  },
+
   // wake_threshold: hidden from the generic runtime form (voice panel has its own
   // «HEY AKANA» slider, strings live under settings.voice.wake_threshold_*), so the
   // runtime.wake_threshold.{label,desc} keys are intentionally absent here.

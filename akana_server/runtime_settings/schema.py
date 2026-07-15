@@ -776,6 +776,24 @@ _SPECS: tuple[RuntimeSettingSpec, ...] = (
         default=True,
         env_parse=_tool_flag_env,
     ),
+    RuntimeSettingSpec(
+        key="computer_control_approval",
+        type="str",
+        label="Computer-control: ask before acting",
+        description=(
+            "When the computer-control pack drives your desktop, ask for your OK before "
+            "an action runs (a confirmation dialog on the controlled machine). «off» "
+            "(default) = full autonomy, no prompt; «destructive» = ask before opening an "
+            "app, closing a window/tab or dragging — including the low-level equivalents "
+            "(hotkey like alt+F4, middle-click, mouse hold); «all» = ask before every "
+            "click / keystroke / window action (reading the screen is never gated). If a "
+            "confirmation cannot be shown, the action is DENIED (fail-safe)."
+        ),
+        category="araclar",
+        env_var="AKANA_COMPUTER_APPROVAL",
+        default="off",
+        options=("off", "destructive", "all"),
+    ),
     # -- audio & wake -------------------------------------------------------------
     # wake_threshold single source of truth: runtime store > env (WAKE_THRESHOLD) >
     # default. At startup, apply_runtime_overrides mirrors this value to
