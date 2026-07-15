@@ -11,6 +11,8 @@ Usage:
   python akana.py test           Run pytest
   python akana.py ship           Pack a portable tarball
   python akana.py reset-memory   Delete Inbox/staging/semantic/graph caches
+  python akana.py backup         Snapshot the data dir (~/.akana) to a .tar.gz
+  python akana.py restore FILE   Restore the data dir from a backup (stop the server first)
 """
 
 from __future__ import annotations

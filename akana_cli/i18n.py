@@ -621,6 +621,71 @@ _STRINGS: dict[str, dict[str, str]] = {
         "tr": "staging/semantic/graph/vector temizlendi: {path}",
     },
 
+    # ── backup / restore ──────────────────────────────────────────────────────
+    "backup.no_data_dir": {
+        "en": "No data dir at {path} — nothing to back up.",
+        "tr": "{path} konumunda veri dizini yok — yedeklenecek bir şey yok.",
+    },
+    "backup.backing_up": {"en": "Backing up: {path}", "tr": "Yedekleniyor: {path}"},
+    "backup.server_running": {
+        "en": "The Akana server appears to be running — this is safe (SQLite uses the online backup API), just proceeding.",
+        "tr": "Akana sunucusu çalışıyor görünüyor — bu güvenli (SQLite çevrimiçi yedek API'sini kullanır), devam ediliyor.",
+    },
+    "backup.vault_key_warning": {
+        "en": "WARNING: --include-vault-key bundles your MASTER KEY — the archive can then decrypt ALL your secrets in plaintext. Store it as carefully as a password.",
+        "tr": "UYARI: --include-vault-key ANA ANAHTARINI da paketler — arşiv artık TÜM sırlarını düz metin olarak çözebilir. Onu bir parola kadar dikkatli sakla.",
+    },
+    "backup.vault_key_missing": {
+        "en": "--include-vault-key requested but no key file found (key may be in env/keyring) — archive stays ciphertext-only.",
+        "tr": "--include-vault-key istendi ama anahtar dosyası bulunamadı (anahtar env/keyring'de olabilir) — arşiv yalnız şifreli-metin kalır.",
+    },
+    "backup.db_raw_copy": {
+        "en": "{name} is not a valid SQLite DB ({exc}) — copied as-is.",
+        "tr": "{name} geçerli bir SQLite veritabanı değil ({exc}) — olduğu gibi kopyalandı.",
+    },
+    "backup.failed": {"en": "Backup failed: {exc}", "tr": "Yedekleme başarısız: {exc}"},
+    "backup.done": {
+        "en": "Backed up {count} files → {path} ({mb} MB)",
+        "tr": "{count} dosya yedeklendi → {path} ({mb} MB)",
+    },
+    "backup.ciphertext_note": {
+        "en": "Secrets are encrypted with a key stored OUTSIDE this archive — restore on the SAME machine, or use --include-vault-key for another machine.",
+        "tr": "Sırlar bu arşivin DIŞINDA saklanan bir anahtarla şifreli — AYNI makinede geri yükle, ya da başka makine için --include-vault-key kullan.",
+    },
+    "restore.no_archive": {"en": "No such archive: {path}", "tr": "Böyle bir arşiv yok: {path}"},
+    "restore.server_running": {
+        "en": "The Akana server is running — stop it first ('python akana.py stop') before restoring.",
+        "tr": "Akana sunucusu çalışıyor — geri yüklemeden önce durdur ('python akana.py stop').",
+    },
+    "restore.restoring": {"en": "Restoring {src} → {dst}", "tr": "Geri yükleniyor {src} → {dst}"},
+    "restore.bad_archive": {
+        "en": "Archive has no manifest — not an Akana backup.",
+        "tr": "Arşivde manifest yok — bir Akana yedeği değil.",
+    },
+    "restore.hash_mismatch": {
+        "en": "Integrity check failed (corrupt archive): {files}",
+        "tr": "Bütünlük kontrolü başarısız (bozuk arşiv): {files}",
+    },
+    "restore.unlisted": {
+        "en": "Archive contains files not in its manifest (tampered): {files}",
+        "tr": "Arşiv, manifestinde olmayan dosyalar içeriyor (kurcalanmış): {files}",
+    },
+    "restore.exists": {
+        "en": "{path} already has data — pass --force to move it aside and restore.",
+        "tr": "{path} zaten veri içeriyor — kenara alıp geri yüklemek için --force geç.",
+    },
+    "restore.moved_aside": {"en": "Existing data moved to {path}", "tr": "Mevcut veri {path} konumuna taşındı"},
+    "restore.failed": {"en": "Restore failed: {exc}", "tr": "Geri yükleme başarısız: {exc}"},
+    "restore.vault_key_written": {
+        "en": "Master key restored to {path}",
+        "tr": "Ana anahtar {path} konumuna geri yüklendi",
+    },
+    "restore.done": {"en": "Restored to {path}", "tr": "{path} konumuna geri yüklendi"},
+    "restore.restart_hint": {
+        "en": "Start Akana: python akana.py start",
+        "tr": "Akana'yı başlat: python akana.py start",
+    },
+
     # ── setup: doctor-preflight fallback + OS install-hint tails ──────────────
     "setup.doctor_skipped": {
         "en": "doctor preflight skipped ({exc}). Re-run: python akana.py doctor",
@@ -685,6 +750,34 @@ _STRINGS: dict[str, dict[str, str]] = {
     "cli.help.reset_memory": {
         "en": "Delete Inbox / staging / semantic / graph caches (conversations preserved)",
         "tr": "Gelen Kutusu / staging / semantic / graph önbelleklerini sil (konuşmalar korunur)",
+    },
+    "cli.help.backup": {
+        "en": "Snapshot the data dir (~/.akana) to a .tar.gz",
+        "tr": "Veri dizinini (~/.akana) bir .tar.gz'ye yedekle",
+    },
+    "cli.help.backup_out": {
+        "en": "Output file or directory (default: current dir)",
+        "tr": "Çıktı dosyası veya dizini (varsayılan: geçerli dizin)",
+    },
+    "cli.help.backup_voices": {
+        "en": "Also back up voices/ (large, re-downloadable models)",
+        "tr": "voices/ dizinini de yedekle (büyük, yeniden indirilebilir modeller)",
+    },
+    "cli.help.backup_key": {
+        "en": "Also bundle the vault master key (cross-machine restore — sensitive!)",
+        "tr": "Kasa ana anahtarını da paketle (makineler arası geri yükleme — hassas!)",
+    },
+    "cli.help.restore": {
+        "en": "Restore the data dir from a backup .tar.gz (stop the server first)",
+        "tr": "Veri dizinini bir yedek .tar.gz'den geri yükle (önce sunucuyu durdur)",
+    },
+    "cli.help.restore_archive": {
+        "en": "Path to the backup .tar.gz",
+        "tr": "Yedek .tar.gz'nin yolu",
+    },
+    "cli.help.restore_force": {
+        "en": "Move an existing data dir aside instead of refusing",
+        "tr": "Mevcut veri dizinini reddetmek yerine kenara al",
     },
 
     # ── .env file ────────────────────────────────────────────────────────────

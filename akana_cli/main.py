@@ -81,6 +81,13 @@ def build_parser() -> argparse.ArgumentParser:
         "reset-memory",
         help=i18n.t("cli.help.reset_memory"),
     )
+    bk = sub.add_parser("backup", help=i18n.t("cli.help.backup"))
+    bk.add_argument("--out", type=str, default=None, help=i18n.t("cli.help.backup_out"))
+    bk.add_argument("--include-voices", action="store_true", help=i18n.t("cli.help.backup_voices"))
+    bk.add_argument("--include-vault-key", action="store_true", help=i18n.t("cli.help.backup_key"))
+    rs = sub.add_parser("restore", help=i18n.t("cli.help.restore"))
+    rs.add_argument("archive", type=str, help=i18n.t("cli.help.restore_archive"))
+    rs.add_argument("--force", action="store_true", help=i18n.t("cli.help.restore_force"))
 
     return p
 
@@ -174,6 +181,23 @@ def main(argv: list[str] | None = None) -> int:
             from akana_cli.reset_memory_cmd import run_reset_memory
 
             return run_reset_memory()
+        if args.command == "backup":
+            from pathlib import Path
+
+            from akana_cli.backup_cmd import run_backup
+
+            out = Path(args.out) if args.out else None
+            return run_backup(
+                out,
+                include_voices=args.include_voices,
+                include_vault_key=args.include_vault_key,
+            )
+        if args.command == "restore":
+            from pathlib import Path
+
+            from akana_cli.backup_cmd import run_restore
+
+            return run_restore(Path(args.archive), force=args.force)
         # No subcommand given → show help cleanly (exit 0), not an argparse error.
         parser.print_help()
         return 0
