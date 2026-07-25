@@ -322,6 +322,7 @@ async def _rescue_dropped_queue_item(
                     "type": "turn_completed",
                     "conversation_id": conv_id,
                     "status": "error",
+                    "source": "user",  # a queued USER message that failed to drain
                 }
             )
         except Exception:  # a broadcast failure can't stop the drain
@@ -506,6 +507,11 @@ async def _run_turn_detached(app: Any, gen: AsyncIterator[bytes], turn: _ActiveT
                     "type": "turn_completed",
                     "conversation_id": turn.conversation_id,
                     "status": status,
+                    # The USER's own turn (they sent it and are waiting for it): consumers
+                    # that announce results — the desktop notifier — must skip these, or
+                    # every reply finishing in a hidden tab pops a notification claiming
+                    # background work finished. Background producers stamp "background".
+                    "source": "user",
                 }
                 if turn.assistant_turn_id:
                     payload["assistant_turn_id"] = turn.assistant_turn_id

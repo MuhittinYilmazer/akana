@@ -58,6 +58,7 @@ async def broadcast_turn_completed(
     *,
     status: str = "ok",
     assistant_turn_id: str | None = None,
+    source: str = "background",
 ) -> None:
     """Announce that a background turn FINISHED in ``conversation_id``.
 
@@ -73,6 +74,12 @@ async def broadcast_turn_completed(
         "type": "turn_completed",
         "conversation_id": cid,
         "status": str(status or "ok"),
+        # WHO produced this turn. Consumers must be able to tell a result the user is
+        # waiting for (their own reply) from one that arrived on its own (a background
+        # job / scheduled fire) — the desktop notifier only announces the latter, and
+        # without this marker every hidden-tab reply would pop a "background work
+        # finished" notification. Everything routed through this helper IS background.
+        "source": str(source or "background"),
     }
     if assistant_turn_id:
         payload["assistant_turn_id"] = str(assistant_turn_id)

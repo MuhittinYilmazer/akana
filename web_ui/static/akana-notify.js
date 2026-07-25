@@ -53,15 +53,22 @@
     }
   }
 
-  // The gesture hook: the FIRST interaction arms permission (browsers reject a
-  // permission request that is not gesture-bound). Passive + once — zero cost afterwards.
-  function wireGestureArm() {
-    if (!supported()) return;
-    const arm = () => {
+  // Permission is asked IN CONTEXT, never on arrival: prompting every visitor on their
+  // first click is the classic hostile pattern (and gets the site blocked by the browser).
+  // Instead the ask is armed only once a real background result has actually landed —
+  // i.e. the user demonstrably uses the feature — and then fires on their next gesture,
+  // because browsers reject a request that is not gesture-bound.
+  let _armed = false;
+
+  function armPermissionAsk() {
+    if (!supported() || _armed || _asked) return;
+    if (Notification.permission !== "default") return;
+    _armed = true;
+    const ask = () => {
       void ensurePermission();
     };
     for (const type of ["pointerdown", "keydown"]) {
-      window.addEventListener(type, arm, { once: true, passive: true });
+      window.addEventListener(type, ask, { once: true, passive: true });
     }
   }
 
@@ -83,14 +90,25 @@
    */
   function onTurnCompleted(convId, evt, opts) {
     if (!supported() || !enabled()) return false;
-    if (Notification.permission !== "granted") return false;
+    // Announce ONLY work that arrived on its own. The server stamps `source`:
+    // "user" = the reply they are waiting for (never announced — otherwise every reply
+    // finishing in a hidden tab pops a notification), "background" = a background_run
+    // job or scheduled fire. An UNSTAMPED event is treated as the user's own: a missing
+    // marker must fail quiet, not spam.
+    const src = String((evt && evt.source) || "user").toLowerCase();
+    if (src !== "background") return false;
+    // A failed background turn is not "finished work" — the engine reports the failure
+    // into the chat itself; announcing "your result is ready" would be a lie.
+    const status = String((evt && evt.status) || "ok").toLowerCase();
+    if (status !== "ok") return false;
     const isCurrent = Boolean(opts && opts.isCurrent);
     const hidden = typeof document !== "undefined" && document.hidden;
     if (isCurrent && !hidden) return false; // watching it happen — nothing to announce
-    // Only announce work the user did NOT type: a background job / scheduled fire. A turn
-    // the user themselves sent is theirs to follow (they know it is running).
-    const src = String((evt && (evt.source || evt.kind)) || "").toLowerCase();
-    if (src === "user") return false;
+    if (Notification.permission !== "granted") {
+      // A real background result just landed but we may ask: arm the contextual prompt.
+      armPermissionAsk();
+      return false;
+    }
     let n;
     try {
       n = new Notification(_t("notify.done_title", { chat: convTitle(convId) }), {
@@ -119,7 +137,9 @@
   }
 
   function init() {
-    wireGestureArm();
+    // Nothing to wire on load — the permission ask is armed by the first real background
+    // result (see armPermissionAsk), so a user who never uses background work is never
+    // prompted at all.
   }
 
   window.AkanaNotify = {

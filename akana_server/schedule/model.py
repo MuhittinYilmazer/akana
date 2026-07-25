@@ -128,6 +128,13 @@ class ScheduleItem:
     #: prompt-driven schedule (so old rows, which have no ``message`` key, load
     #: unchanged — see :meth:`from_dict`).
     message: str = ""
+    #: What KIND of thing this row is, for surfaces that must treat them differently.
+    #: ``""`` = a normal user schedule/reminder; ``"background"`` = a detached job started
+    #: by ``background_run`` (it is an implementation detail of "do this in the
+    #: background", not something the user set up, so it is announced as a finished JOB
+    #: rather than a reminder and is hidden from the reminder list). Tolerant default so
+    #: rows written before this field load unchanged.
+    tag: str = ""
     enabled: bool = True
     weekday: int | None = None
     delivery: Delivery = field(default_factory=Delivery)
@@ -143,6 +150,7 @@ class ScheduleItem:
             "title": self.title,
             "prompt": self.prompt,
             "message": self.message,
+            "tag": self.tag,
             "kind": self.kind,
             "when": self.when,
             "next_run_at": self.next_run_at,
@@ -173,6 +181,8 @@ class ScheduleItem:
             # TOLERANT: rows written before the verbatim-message feature have no
             # ``message`` key — default to "" so they keep loading as prompt-driven.
             message=str(raw.get("message") or ""),
+            # Same tolerance for rows written before background jobs existed.
+            tag=str(raw.get("tag") or ""),
             kind=str(raw["kind"]),
             when=str(raw.get("when") or ""),
             next_run_at=str(raw.get("next_run_at") or ""),

@@ -105,7 +105,17 @@ def _build_system_prompt(settings: Any, item: ScheduleItem) -> str | None:
         from akana_server.persona.builtin import builtin_personas
 
         lang = (item.language or "en").strip().lower()
-        return builtin_personas(lang)[0].system_prompt
+        prompt = builtin_personas(lang)[0].system_prompt
+        if item.tag == "background":
+            # This run IS the background job. The persona tells the model to hand
+            # turn-outliving work to `background_run` — which, unqualified, would let a
+            # job spawn a job spawn a job. Here the work is already detached: do it now.
+            prompt += (
+                "\n\n[BACKGROUND JOB] You ARE the detached background run the user asked "
+                "for. Do the work and answer in full now — do NOT call background_run "
+                "again (that would just defer it forever)."
+            )
+        return prompt
     except Exception:  # pragma: no cover - persona import/edge failure
         return None
 
@@ -195,14 +205,62 @@ async def _deliver_connector(
 
 
 def _same_chat_body(item: ScheduleItem, body: str) -> str:
-    """The injected same-chat message: a compact reminder header + the LLM result.
+    """The injected same-chat message: a compact header + the result.
 
     The header names WHICH schedule fired (the user may have several); the body is
     the model's own reminder text. Language follows the schedule's stored language
-    (set at create time from the runtime toggle)."""
+    (set at create time from the runtime toggle). A ``background`` row is NOT a
+    reminder the user set — it is the detached work they asked for — so it is
+    announced as a finished job instead."""
     turkish = str(item.language or "").lower().startswith("tr")
-    head = f"⏰ Hatırlatma: «{item.title}»" if turkish else f"⏰ Reminder: «{item.title}»"
+    if item.tag == "background":
+        head = f"✅ Arka plan işi bitti: «{item.title}»" if turkish else f"✅ Background job done: «{item.title}»"
+    else:
+        head = f"⏰ Hatırlatma: «{item.title}»" if turkish else f"⏰ Reminder: «{item.title}»"
     return f"{head}\n\n{body}"
+
+
+def _failure_body(item: ScheduleItem, reason: str) -> str:
+    """What the user sees when a same-chat run produced nothing.
+
+    A background job PROMISED a follow-up ("I'll post the result here when it's done").
+    If the LLM call fails or comes back empty and we stay silent, that promise silently
+    never arrives — the exact complaint background_run exists to fix, one level down. So
+    the failure is reported into the same chat instead of only into ``last_run``."""
+    turkish = str(item.language or "").lower().startswith("tr")
+    what = "Arka plan işi" if item.tag == "background" else "Zamanlanmış görev"
+    what_en = "Background job" if item.tag == "background" else "Scheduled task"
+    detail = (reason or "").strip()
+    if turkish:
+        head = f"⚠️ {what} tamamlanamadı: «{item.title}»"
+        tail = f"\n\nSebep: {detail}" if detail else ""
+        return f"{head}{tail}"
+    head = f"⚠️ {what_en} could not complete: «{item.title}»"
+    tail = f"\n\nReason: {detail}" if detail else ""
+    return f"{head}{tail}"
+
+
+async def _report_same_chat_failure(app: Any, settings: Any, item: ScheduleItem, reason: str) -> None:
+    """Best-effort: tell the originating chat that the run produced nothing. Only for
+    SAME-CHAT rows — those are the ones where the user is sitting in the conversation
+    expecting the follow-up. Never raises (a failed report must not break the sweep)."""
+    if app is None or not item.delivery.same_chat or not item.delivery.conversation_id:
+        return
+    try:
+        from akana_server.chat_injections import deliver_or_queue
+
+        await deliver_or_queue(
+            app,
+            settings,
+            str(item.delivery.conversation_id),
+            _failure_body(item, reason),
+            kind="schedule",
+            title=item.title,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001
+        log.debug("schedule %s: failure report could not be delivered", item.id, exc_info=True)
 
 
 async def _run_one(
@@ -253,6 +311,8 @@ async def _run_one(
         except Exception as exc:  # noqa: BLE001 - a scheduled turn must never crash the loop
             log.warning("schedule %s: LLM run failed: %s", item.id, exc, exc_info=True)
             store.mark_ran(item.id, status="error", error=str(exc), now=now, roll_forward=advance)
+            # Do not leave the user waiting on a promise that will never land.
+            await _report_same_chat_failure(app, settings, item, str(exc))
             return {"id": item.id, "status": "error", "error": str(exc)}
 
         body = (text or "").strip()
@@ -260,6 +320,7 @@ async def _run_one(
     if not body:
         # Nothing to deliver; still advance the schedule so it does not re-fire.
         store.mark_ran(item.id, status="skipped", error="empty result", now=now, roll_forward=advance)
+        await _report_same_chat_failure(app, settings, item, "empty result")
         return {"id": item.id, "status": "skipped", "error": "empty result"}
 
     # 2) Delivery — thread and/or connector, each isolated. Track per-target

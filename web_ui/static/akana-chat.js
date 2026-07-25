@@ -1723,6 +1723,9 @@
     },
     deleteConversationById,
     switchChatConversation,
+    // Public so surfaces outside the chat module can name a conversation (the desktop
+    // notifier titles its notification with the chat's own title instead of "Chat").
+    getChatArchiveItems: () => t().getChatArchiveItems(),
     abortActiveChatStream,
     cancelActiveTurnOnServer,
     refreshQueueState,
