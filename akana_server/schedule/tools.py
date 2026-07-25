@@ -412,7 +412,8 @@ SCHEDULE_SCHEMAS: tuple[dict[str, Any], ...] = (
             "kept: the instruction runs as its own full turn seconds later and its result "
             "is posted into this conversation automatically. After calling it, finish your "
             "reply immediately with one short line saying you started it — do NOT wait, "
-            "poll, or ask the user to check back."
+            "poll, or ask the user to check back. It starts within about half a minute "
+            "and reports whether it succeeded or failed."
         ),
         "input_schema": {
             "type": "object",
@@ -706,6 +707,10 @@ class ScheduleTools:
             delivery=Delivery(mode="thread", conversation_id=str(conv), same_chat=True),
             created_by=self._created_by,
             language=self._default_language(),
+            # Marks the row as a detached JOB, not a reminder the user set up: the engine
+            # announces it as finished work (not "⏰ Reminder") and the reminder list
+            # hides it, so heavy background use doesn't fill the Schedule panel.
+            tag="background",
         )
         return {
             "status": "started",
@@ -774,7 +779,14 @@ class ScheduleTools:
         return {"status": "created", "schedule": item.public_dict()}
 
     def _tool_list(self, args: dict[str, Any]) -> dict[str, Any]:
-        items = self._store.load()
+        # Background jobs are an implementation detail of "do this in the background",
+        # not reminders the user set up: listing them would make "what are my reminders?"
+        # return a wall of spent «Background job» rows. Opt in with include_background.
+        items = [
+            i
+            for i in self._store.load()
+            if i.tag != "background" or bool(args.get("include_background"))
+        ]
         return {
             "schedules": [i.public_dict() for i in items],
             "count": len(items),

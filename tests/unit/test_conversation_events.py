@@ -53,11 +53,17 @@ def test_broadcast_active_and_completed_shapes():
     asyncio.run(broadcast_turn_active(app, "c1"))
     asyncio.run(broadcast_turn_completed(app, "c1", status="ok", assistant_turn_id="t9"))
     assert hub.sent[0] == {"type": "turn_active", "conversation_id": "c1"}
+    # ``source`` marks WHO produced the turn. Everything routed through this helper is
+    # background (a scheduled fire / a background_run job); the user's own turn is
+    # stamped "user" by chat_detached. The desktop notifier announces ONLY "background",
+    # so without this marker every reply finishing in a hidden tab would pop a
+    # "background work finished" notification.
     assert hub.sent[1] == {
         "type": "turn_completed",
         "conversation_id": "c1",
         "status": "ok",
         "assistant_turn_id": "t9",
+        "source": "background",
     }
 
 

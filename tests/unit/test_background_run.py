@@ -99,6 +99,113 @@ def test_refuses_an_empty_instruction(tmp_path):
 # -- native dispatch ----------------------------------------------------------
 
 
+def test_job_is_tagged_and_hidden_from_the_reminder_list(tmp_path):
+    """A background job is an implementation detail of "do it in the background", not a
+    reminder the user set up: it must not fill «what are my reminders?» with spent rows."""
+    t = _tools(tmp_path)
+    t.handle_tool_call("background_run", {"instruction": "work", "title": "Job"})
+    created = t.handle_tool_call(
+        "schedule_create",
+        {"kind": "once", "when": "in 2 hours", "message": "real reminder", "title": "Su iç"},
+    )
+    assert created.get("status") == "created", created
+    assert ScheduleStore(tmp_path).load()[0].tag == "background"
+    listed = t.handle_tool_call("schedule_list", {})
+    titles = [s.get("title") for s in listed["schedules"]]
+    assert listed["count"] == 1 and "Job" not in titles
+    # …but they remain inspectable on request.
+    assert t.handle_tool_call("schedule_list", {"include_background": True})["count"] == 2
+
+
+# -- engine: the result (and the FAILURE) actually reach the chat --------------
+
+
+def _run_engine(tmp_path, llm):
+    """Run the due sweep with a patched LLM + a recording injection; return the messages
+    that would land in the chat."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from akana_server import chat_injections
+    from akana_server.orchestrator import llm_dispatch, memory_tools
+    from akana_server.schedule import engine
+
+    delivered: list[str] = []
+
+    async def fake_deliver(app, s, conv_id, text, *, kind="schedule", title=""):
+        delivered.append(text)
+        return "delivered"
+
+    orig_deliver = chat_injections.deliver_or_queue
+    orig_llm = llm_dispatch.complete_chat_aggregated
+    orig_mcp = memory_tools.mcp_servers_payload
+    chat_injections.deliver_or_queue = fake_deliver  # engine imports it at call time
+    llm_dispatch.complete_chat_aggregated = llm
+    memory_tools.mcp_servers_payload = lambda *a, **k: {}
+    try:
+        item = ScheduleStore(tmp_path).load()[0]
+        asyncio.run(
+            engine.run_due_schedules(
+                SimpleNamespace(data_dir=tmp_path),
+                app=SimpleNamespace(state=SimpleNamespace()),
+                now=parse_iso(item.next_run_at),
+            )
+        )
+    finally:
+        chat_injections.deliver_or_queue = orig_deliver
+        llm_dispatch.complete_chat_aggregated = orig_llm
+        memory_tools.mcp_servers_payload = orig_mcp
+    return delivered
+
+
+def test_result_reaches_the_chat_framed_as_a_finished_job(tmp_path):
+    _tools(tmp_path).handle_tool_call("background_run", {"instruction": "x", "title": "Rapor"})
+
+    async def ok(settings, prompt, **kw):
+        return ("the answer", {}, None)
+
+    [msg] = _run_engine(tmp_path, ok)
+    assert "the answer" in msg
+    # a job the user asked for is NOT a reminder they set
+    assert "Reminder" not in msg and "Hatırlatma" not in msg
+    assert "Rapor" in msg
+
+
+def test_a_failed_job_is_reported_instead_of_vanishing(tmp_path):
+    """THE bug this feature exists to prevent, one level down: background_run makes the
+    model promise "the result will be posted here". If the run fails and we stay silent,
+    that promise silently never arrives."""
+    _tools(tmp_path).handle_tool_call("background_run", {"instruction": "x", "title": "Rapor"})
+
+    async def boom(settings, prompt, **kw):
+        raise RuntimeError("provider exploded")
+
+    [msg] = _run_engine(tmp_path, boom)
+    assert "Rapor" in msg
+    assert "provider exploded" in msg  # the user learns WHY, not just that it failed
+
+
+def test_an_empty_result_is_reported_too(tmp_path):
+    _tools(tmp_path).handle_tool_call("background_run", {"instruction": "x", "title": "Rapor"})
+
+    async def empty(settings, prompt, **kw):
+        return ("   ", {}, None)
+
+    [msg] = _run_engine(tmp_path, empty)
+    assert "Rapor" in msg and "empty" in msg.lower()
+
+
+def test_background_turn_is_told_not_to_spawn_another(tmp_path):
+    """The persona tells the model to hand turn-outliving work to background_run — inside
+    the background run itself that would defer the work forever."""
+    from akana_server.schedule import engine
+
+    _tools(tmp_path).handle_tool_call("background_run", {"instruction": "x", "title": "J"})
+    item = ScheduleStore(tmp_path).load()[0]
+    prompt = engine._build_system_prompt(None, item) or ""
+    assert "BACKGROUND JOB" in prompt and "do NOT call background_run again" in prompt
+
+
 def test_native_dispatch_returns_end_your_turn_guidance(tmp_path):
     from types import SimpleNamespace
 

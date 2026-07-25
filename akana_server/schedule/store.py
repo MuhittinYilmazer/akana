@@ -430,6 +430,7 @@ class ScheduleStore:
         created_by: str = "user",
         language: str = "en",
         enabled: bool = True,
+        tag: str = "",
         now: datetime | None = None,
     ) -> ScheduleItem:
         """Validate, compute the first ``next_run_at``, and persist a new schedule.
@@ -456,6 +457,7 @@ class ScheduleStore:
             title=title.strip(),
             prompt=prompt.strip(),
             message=message.strip(),
+            tag=str(tag or "").strip(),
             kind=kind,
             when=str(when).strip(),
             next_run_at=to_iso(first),
