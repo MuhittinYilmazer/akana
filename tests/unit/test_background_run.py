@@ -195,6 +195,117 @@ def test_an_empty_result_is_reported_too(tmp_path):
     assert "Rapor" in msg and "empty" in msg.lower()
 
 
+def test_the_chat_is_told_work_STARTED_not_just_finished(tmp_path):
+    """The composer's "working…" strip is driven by turn_active. Nothing ever emitted it,
+    so a background job ran completely invisibly: the user saw silence until the result
+    appeared. Announcing the start is only safe because EVERY same-chat exit path ends in
+    a turn_completed (success, parked delivery, and now failure/empty) — otherwise the
+    strip would spin forever."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from akana_server import chat_injections, conversation_events
+    from akana_server.orchestrator import llm_dispatch, memory_tools
+    from akana_server.schedule import engine
+
+    events: list[tuple[str, str]] = []
+
+    async def fake_active(app, conv_id, **kw):
+        events.append(("active", conv_id))
+
+    async def fake_deliver(app, s, conv_id, text, *, kind="schedule", title=""):
+        # the real deliver_or_queue broadcasts turn_completed on delivery
+        events.append(("completed", conv_id))
+        return "delivered"
+
+    async def ok(settings, prompt, **kw):
+        return ("done", {}, None)
+
+    _tools(tmp_path).handle_tool_call("background_run", {"instruction": "x", "title": "J"})
+    orig = (
+        conversation_events.broadcast_turn_active,
+        chat_injections.deliver_or_queue,
+        llm_dispatch.complete_chat_aggregated,
+        memory_tools.mcp_servers_payload,
+    )
+    conversation_events.broadcast_turn_active = fake_active
+    chat_injections.deliver_or_queue = fake_deliver
+    llm_dispatch.complete_chat_aggregated = ok
+    memory_tools.mcp_servers_payload = lambda *a, **k: {}
+    try:
+        item = ScheduleStore(tmp_path).load()[0]
+        asyncio.run(
+            engine.run_due_schedules(
+                SimpleNamespace(data_dir=tmp_path),
+                app=SimpleNamespace(state=SimpleNamespace()),
+                now=parse_iso(item.next_run_at),
+            )
+        )
+    finally:
+        (
+            conversation_events.broadcast_turn_active,
+            chat_injections.deliver_or_queue,
+            llm_dispatch.complete_chat_aggregated,
+            memory_tools.mcp_servers_payload,
+        ) = orig
+    kinds = [k for k, _ in events]
+    assert kinds == ["active", "completed"], events
+    assert all(cid == "conv-1" for _, cid in events)
+
+
+def test_a_failed_job_still_ends_the_working_strip(tmp_path):
+    """The dangerous half of announcing a start: if the run fails, the strip must still be
+    released. The failure report goes through the same delivery path, which broadcasts
+    turn_completed — so 'started' is always followed by 'finished'."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from akana_server import chat_injections, conversation_events
+    from akana_server.orchestrator import llm_dispatch, memory_tools
+    from akana_server.schedule import engine
+
+    events: list[str] = []
+
+    async def fake_active(app, conv_id, **kw):
+        events.append("active")
+
+    async def fake_deliver(app, s, conv_id, text, *, kind="schedule", title=""):
+        events.append("completed")
+        return "delivered"
+
+    async def boom(settings, prompt, **kw):
+        raise RuntimeError("provider exploded")
+
+    _tools(tmp_path).handle_tool_call("background_run", {"instruction": "x", "title": "J"})
+    orig = (
+        conversation_events.broadcast_turn_active,
+        chat_injections.deliver_or_queue,
+        llm_dispatch.complete_chat_aggregated,
+        memory_tools.mcp_servers_payload,
+    )
+    conversation_events.broadcast_turn_active = fake_active
+    chat_injections.deliver_or_queue = fake_deliver
+    llm_dispatch.complete_chat_aggregated = boom
+    memory_tools.mcp_servers_payload = lambda *a, **k: {}
+    try:
+        item = ScheduleStore(tmp_path).load()[0]
+        asyncio.run(
+            engine.run_due_schedules(
+                SimpleNamespace(data_dir=tmp_path),
+                app=SimpleNamespace(state=SimpleNamespace()),
+                now=parse_iso(item.next_run_at),
+            )
+        )
+    finally:
+        (
+            conversation_events.broadcast_turn_active,
+            chat_injections.deliver_or_queue,
+            llm_dispatch.complete_chat_aggregated,
+            memory_tools.mcp_servers_payload,
+        ) = orig
+    assert events == ["active", "completed"], events
+
+
 def test_background_turn_is_told_not_to_spawn_another(tmp_path):
     """The persona tells the model to hand turn-outliving work to background_run — inside
     the background run itself that would defer the work forever."""

@@ -295,6 +295,26 @@ async def _run_one(
         system_prompt = _build_system_prompt(settings, item)
         mcp = _mcp_servers(settings, item.delivery.conversation_id)
 
+        # LIVE UI: tell the chat that work has STARTED, so the composer shows the
+        # "working…" strip while a background_run job / same-chat reminder thinks. The
+        # frontend machinery for this (turn_active → bgActiveTurns → the strip) existed
+        # but was unreachable: nothing ever emitted turn_active, so background work ran
+        # completely invisibly.
+        # SAME-CHAT ONLY, deliberately: every same-chat exit path ends in a
+        # turn_completed broadcast — success and parked delivery via deliver_or_queue,
+        # failure/empty via _report_same_chat_failure — so the strip can never be left
+        # spinning. A separate-thread/connector run has exits with no broadcast, which
+        # WOULD strand it.
+        if app is not None and item.delivery.same_chat and item.delivery.conversation_id:
+            try:
+                from akana_server.conversation_events import broadcast_turn_active
+
+                await broadcast_turn_active(app, str(item.delivery.conversation_id))
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - a UI hint must never block the run
+                log.debug("schedule %s: turn_active announce failed", item.id, exc_info=True)
+
         # 1) LLM turn. An unconfigured provider raises LLMCallError (503); any
         #    exception is caught → the schedule is marked failed and rolled forward.
         try:
