@@ -269,4 +269,18 @@ window.AkanaI18nStrings = Object.assign(window.AkanaI18nStrings || {}, {
     en: "… (message too large: {total} characters — showing first {shown})",
     tr: "… (mesaj çok büyük: {total} karakter — ilk {shown} gösterildi)"
   },
+
+  // ── akana-notify (desktop notifications for background results) ──────────
+  "notify.done_title": {
+    en: "Akana — {chat}",
+    tr: "Akana — {chat}"
+  },
+  "notify.done_body": {
+    en: "Background work finished — the result is in the chat.",
+    tr: "Arka plandaki iş bitti — sonuç sohbete düştü."
+  },
+  "notify.untitled_chat": {
+    en: "Chat",
+    tr: "Sohbet"
+  },
 });

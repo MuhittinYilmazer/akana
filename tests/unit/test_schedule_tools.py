@@ -26,7 +26,16 @@ from akana_server.schedule_mcp.mcp import McpServer, mcp_tool_list
 
 NOW = datetime(2026, 7, 11, 10, 0, tzinfo=TR_TZ)
 
-_NAMES = {"schedule_create", "schedule_list", "schedule_cancel", "schedule_update"}
+#: ``background_run`` ships in this family on purpose: it writes a due-in-seconds `once`
+#: schedule (the only mechanism that works from the MCP child too), so it rides the same
+#: declarations, dispatch and enable gate. See tests/unit/test_background_run.py.
+_NAMES = {
+    "background_run",
+    "schedule_create",
+    "schedule_list",
+    "schedule_cancel",
+    "schedule_update",
+}
 
 
 def _settings(tmp_path):
