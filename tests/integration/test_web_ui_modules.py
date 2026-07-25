@@ -447,6 +447,17 @@ def test_code_tools_scroll_extent_harness() -> None:
     _run_node_harness(REPO_ROOT / "tests/web/code_tools_scroll_extent.harness.mjs")
 
 
+def test_conv_scroll_memory_harness() -> None:
+    """Node-vm contract: per-conversation scroll memory. #log-scroll is ONE scroller
+    shared by every conversation pane, so without a saved/restored per-conversation
+    offset the chat you open inherits the offset of the chat you just left (user
+    report: "it starts where the previous chat was, not where we left off") and a
+    reading position is destroyed on every switch. Also locks that programmatic
+    scrolls are INSTANT — the scroller's CSS `scroll-behavior: smooth` would otherwise
+    animate them, making stream-follow lag and silently stop."""
+    _run_node_harness(REPO_ROOT / "tests/web/conv_scroll_memory.harness.mjs")
+
+
 @pytest.mark.parametrize("page", list(EXPECTED_BY_PAGE))
 def test_html_theme_preload_prevents_fouc(page: str) -> None:
     """The saved theme (akana.theme) must be applied via an inline script before the first paint.

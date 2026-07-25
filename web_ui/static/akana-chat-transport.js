@@ -2760,7 +2760,13 @@
       window.AkanaChatRender.putToolCallsForTurn?.(body.turn_id, body.tool_calls);
     }
     chatCtx.hooks.log.appendChild(wrap);
-    (chatCtx.hooks.logScroll || chatCtx.hooks.log).scrollTop = (chatCtx.hooks.logScroll || chatCtx.hooks.log).scrollHeight;
+    // Instant jump: the scroller carries CSS `scroll-behavior: smooth`, so a raw
+    // `scrollTop = scrollHeight` here ANIMATES (the reply appears while the view is still
+    // gliding). shell.scrollLogToBottom defeats smooth for the jump and also clears the
+    // send-time tail gap.
+    const _sc = chatCtx.hooks.logScroll || chatCtx.hooks.log;
+    if (window.AkanaShell?.scrollLogToBottom) window.AkanaShell.scrollLogToBottom(_sc);
+    else _sc.scrollTop = _sc.scrollHeight;
     return body.text;
     } finally {
       unregisterStream(pseudoCtx);

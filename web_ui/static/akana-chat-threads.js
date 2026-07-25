@@ -297,6 +297,15 @@
     }
 
     function scrollLogToEnd() {
+      // Restore-aware: land at the DISPLAYED conversation's own remembered position —
+      // which IS the bottom when it was following the stream or has never been visited.
+      // A blind scroll-to-bottom here would undo the per-conversation restore, so every
+      // switch would still jump to the end and a reading position could never survive.
+      const restore = window.AkanaShell?.restoreConvScroll;
+      if (typeof restore === "function") {
+        restore();
+        return;
+      }
       bridge.hooks.scrollLogToBottom?.(bridge.hooks.logScroll || bridge.hooks.log);
     }
 

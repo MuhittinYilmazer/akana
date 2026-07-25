@@ -62,6 +62,7 @@ const _t = (k, p) => window.AkanaI18n?.t(k, p) ?? k;
       wireDraftPersistence();
       wireGreeting();
       wireScrollFab();
+      wireScrollMemory();
       wireCodeCopy();
     }
   }
@@ -339,6 +340,20 @@ const _t = (k, p) => window.AkanaI18n?.t(k, p) ?? k;
     return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= slackPx;
   }
 
+  // The scroller carries CSS `scroll-behavior: smooth` (right for the scroll-down FAB and
+  // anchor jumps), but that turns every programmatic `scrollTop = …` into an ANIMATION:
+  // stream-follow restarts it every frame so the view lags behind the answer, and a
+  // mid-animation read of scrollTop is STALE — `_isNearBottom` then wrongly concludes the
+  // user scrolled away and silently stops following. Every programmatic jump below goes
+  // through this helper, which defeats `smooth` for that one assignment.
+  function _scrollToInstant(el, top) {
+    if (!el) return;
+    const prev = el.style ? el.style.scrollBehavior : null;
+    if (el.style) el.style.scrollBehavior = "auto";
+    el.scrollTop = top;
+    if (el.style) el.style.scrollBehavior = prev || "";
+  }
+
   let _stickScrollRaf = null;
   let _stickScrollTarget = null;
 
@@ -350,9 +365,68 @@ const _t = (k, p) => window.AkanaI18n?.t(k, p) ?? k;
       _stickScrollRaf = null;
       const el = _stickScrollTarget;
       if (el && _isNearBottom(el)) {
-        el.scrollTop = el.scrollHeight;
+        _scrollToInstant(el, el.scrollHeight);
       }
     });
+  }
+
+  // ── PER-CONVERSATION SCROLL MEMORY ─────────────────────────────────────────
+  // #log-scroll is ONE scroller shared by every conversation pane (switching only
+  // shows/hides panes), so without this the offset of the chat you just left carries
+  // into the chat you open — "it starts where the previous chat was" — and your reading
+  // position in a chat is destroyed the moment you leave it (user report).
+  // Stored per conv: the raw offset PLUS whether it was at the bottom, because content
+  // grows (a new turn, a re-hydrate) and "was following" must restore to the NEW bottom,
+  // not to a stale pixel offset.
+  const _scrollByConv = new Map(); // convKey ("" = new-chat pane) -> {top, atBottom}
+  let _scrollRecordRaf = null;
+
+  function _displayedConvKey() {
+    return _panes ? _panes.displayedConvId() : null; // "" for the new-chat pane, null = none
+  }
+
+  function _recordConvScroll() {
+    const scroller = hooks.logScroll || document.getElementById("log-scroll");
+    const key = _displayedConvKey();
+    if (!scroller || key == null) return;
+    _scrollByConv.set(key, { top: scroller.scrollTop, atBottom: _isNearBottom(scroller) });
+  }
+
+  /** Land at the DISPLAYED conversation's own position: its remembered offset, or the
+   *  bottom when it was following / has never been visited. Clamped to the current
+   *  content height. Two rAFs so the just-shown pane has been laid out first. */
+  function restoreConvScroll() {
+    const scroller = hooks.logScroll || document.getElementById("log-scroll");
+    if (!scroller) return;
+    const saved = _scrollByConv.get(_displayedConvKey());
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const max = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+        _scrollToInstant(scroller, !saved || saved.atBottom ? max : Math.min(saved.top, max));
+      });
+    });
+  }
+
+  /** Forget a conversation's remembered offset (deleted/archived chat). */
+  function forgetConvScroll(convId) {
+    _scrollByConv.delete(convId == null ? "" : String(convId));
+  }
+
+  function wireScrollMemory() {
+    const scroller = hooks.logScroll || document.getElementById("log-scroll");
+    if (!scroller || !scroller.addEventListener) return;
+    // rAF-throttled: one record per frame at most, so free-scrolling stays cheap.
+    scroller.addEventListener(
+      "scroll",
+      () => {
+        if (_scrollRecordRaf != null) return;
+        _scrollRecordRaf = requestAnimationFrame(() => {
+          _scrollRecordRaf = null;
+          _recordConvScroll();
+        });
+      },
+      { passive: true },
+    );
   }
 
   function updateEmptyState() {
@@ -384,7 +458,7 @@ const _t = (k, p) => window.AkanaI18n?.t(k, p) ?? k;
     _clearTailGap(); // reset the send-pin padding + anchor (normal scroll-to-bottom)
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        el.scrollTop = el.scrollHeight;
+        _scrollToInstant(el, el.scrollHeight);
       });
     });
   }
@@ -461,7 +535,7 @@ const _t = (k, p) => window.AkanaI18n?.t(k, p) ?? k;
     wrap.innerHTML = html;
     log.appendChild(wrap);
     updateEmptyState();
-    if (wasFollowing) scroller.scrollTop = scroller.scrollHeight;
+    if (wasFollowing) _scrollToInstant(scroller, scroller.scrollHeight);
     return wrap;
   }
 
@@ -1158,6 +1232,9 @@ const _t = (k, p) => window.AkanaI18n?.t(k, p) ?? k;
     showConversation: (id) => {
       if (!_panes) return null;
       const prevKey = _panes.displayedConvId();
+      // Remember where the user was in the chat being LEFT before the pane swap — the
+      // scroller is shared, so this is the only moment its offset still belongs to them.
+      _recordConvScroll();
       const pane = _panes.show(id);
       // Pane changed → drop the leaving chat's "pin-to-top" tail gap; it lives on the
       // shared scroller and would inflate the new chat's scroll height if carried over.
@@ -1172,11 +1249,19 @@ const _t = (k, p) => window.AkanaI18n?.t(k, p) ?? k;
         // `top` it kept the old scroll extent alive (empty chat scrollable for
         // thousands of px) and floated its Copy button over the new chat.
         _dismissCodeTools?.();
+        // Land at THIS chat's own position instead of inheriting the offset of the chat
+        // we just left (the shared scroller keeps it verbatim otherwise). Callers that
+        // then hydrate re-apply this via scrollLogToEnd once the content is rendered.
+        restoreConvScroll();
       }
       return pane;
     },
     clearConversation: (id) => (_panes ? _panes.clear(id) : (hooks.log && (hooks.log.innerHTML = ""))),
-    removeConversation: (id) => (_panes ? _panes.remove(id) : false),
+    removeConversation: (id) => {
+      forgetConvScroll(id); // deleted/archived chat → drop its remembered scroll offset
+      return _panes ? _panes.remove(id) : false;
+    },
+    restoreConvScroll,
     rekeyConversation: (a, b) => (_panes ? _panes.rekey(a, b) : false),
     displayedConvId: () => (_panes ? _panes.displayedConvId() : null),
     displayedPane: () => currentPane(),
