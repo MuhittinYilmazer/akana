@@ -112,6 +112,9 @@ EXPECTED_BY_PAGE = {
         "akana-chat.js",
         "akana-settings.js",
         "akana-mobile-nav.js",
+        # Desktop notifications for background results — after AkanaChat/AkanaI18n,
+        # whose globals it reads (chat title lookup, switch-to-conversation on click).
+        "akana-notify.js",
         "akana-pair.js",
         "akana-vault.js",
         "akana-personas.js",
@@ -456,6 +459,17 @@ def test_conv_scroll_memory_harness() -> None:
     scrolls are INSTANT — the scroller's CSS `scroll-behavior: smooth` would otherwise
     animate them, making stream-follow lag and silently stop."""
     _run_node_harness(REPO_ROOT / "tests/web/conv_scroll_memory.harness.mjs")
+
+
+def test_notify_background_result_harness() -> None:
+    """Node-vm contract: desktop notifications for background results. Background work
+    (background_run / a scheduled fire) posts its result into a chat by itself; if the
+    user is not looking at that chat the result is silent, which defeats the point.
+    Locks: silent while watching (current chat + visible tab), fires when hidden or for
+    another conversation, gated on permission + the user's off switch, never for the
+    user's own turn, permission asked once and only on a gesture, click focuses and
+    opens the chat, repeats replace via a per-chat tag."""
+    _run_node_harness(REPO_ROOT / "tests/web/notify_background_result.harness.mjs")
 
 
 @pytest.mark.parametrize("page", list(EXPECTED_BY_PAGE))

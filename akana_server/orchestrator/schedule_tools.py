@@ -31,14 +31,10 @@ log = logging.getLogger(__name__)
 
 #: Names this module handles — dispatch returns ``None`` for anything else so the
 #: shared gemini dispatcher can fall through to its own unknown-tool handling.
-SCHEDULE_TOOL_NAMES = frozenset(
-    {
-        "schedule_create",
-        "schedule_list",
-        "schedule_cancel",
-        "schedule_update",
-    }
-)
+#: DERIVED from the single schema source, so a tool added there (e.g. ``background_run``)
+#: is dispatchable on the native providers too — a hardcoded list silently dropped it
+#: (the declaration reached the model, the call then fell through as unknown).
+SCHEDULE_TOOL_NAMES = frozenset(s["name"] for s in schedule_schemas())
 
 #: Gemini native function declarations — DERIVED from the MCP schemas
 #: (``input_schema`` → ``parameters``; identical JSON-Schema body, only the key
@@ -57,6 +53,12 @@ def _format_result(name: str, result: dict[str, Any]) -> str:
     """Turn a ScheduleTools result dict into compact text the model reads."""
     if result.get("error"):
         return f"Schedule request failed: {result['error']}"
+    if name == "background_run":
+        return (
+            f"Background job «{result.get('title')}» started (id={result.get('id')}). "
+            "It runs on its own and posts the result into this chat when it finishes — "
+            "end your reply now; do not wait or poll."
+        )
     if name == "schedule_create":
         s = result.get("schedule", {})
         return (

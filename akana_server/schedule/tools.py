@@ -394,7 +394,45 @@ _DELIVERY_PROPS: dict[str, Any] = {
     },
 }
 
+#: How far out a background job is scheduled. It must be in the FUTURE (the store's
+#: past-guard) yet land on the very next engine sweep, so the user sees it start almost
+#: immediately rather than a poll interval later.
+_BACKGROUND_START_DELAY_S = 5
+
 SCHEDULE_SCHEMAS: tuple[dict[str, Any], ...] = (
+    {
+        "name": "background_run",
+        "description": (
+            "Run work in the BACKGROUND and report back into this chat when it finishes. "
+            "Use this whenever the work would outlive your current reply — a long "
+            "research/summarisation job, something that must wait on a slow tool, or any "
+            "time you are about to say 'I'll get back to you when it's done'. IMPORTANT: "
+            "you CANNOT keep working after your reply ends — nothing resumes you. Calling "
+            "this is the ONLY way a promise of 'I'll tell you when it's ready' is actually "
+            "kept: the instruction runs as its own full turn seconds later and its result "
+            "is posted into this conversation automatically. After calling it, finish your "
+            "reply immediately with one short line saying you started it — do NOT wait, "
+            "poll, or ask the user to check back."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "instruction": {
+                    "type": "string",
+                    "description": (
+                        "The complete, self-contained instruction to execute in the "
+                        "background. It runs in a FRESH turn with no memory of this "
+                        "conversation, so restate everything it needs."
+                    ),
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Short label shown with the result (e.g. 'Rapor özeti').",
+                },
+            },
+            "required": ["instruction"],
+        },
+    },
     {
         "name": "schedule_create",
         "description": (
@@ -564,6 +602,7 @@ class ScheduleTools:
     @property
     def _handlers(self) -> dict[str, Callable[[dict[str, Any]], dict[str, Any]]]:
         return {
+            "background_run": self._tool_background_run,
             "schedule_create": self._tool_create,
             "schedule_list": self._tool_list,
             "schedule_cancel": self._tool_cancel,
@@ -629,6 +668,55 @@ class ScheduleTools:
             # Basically-now / within grace: fire a few seconds out, deterministically.
             return to_iso(now + timedelta(seconds=5))
         return resolved_iso
+
+    def _tool_background_run(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Detach work from the current turn: a one-off schedule due in seconds whose
+        result is injected back into THIS conversation.
+
+        Why a schedule and not an in-process task: the model may be calling this from the
+        MCP CHILD process (claude/cursor/codex), which has no handle on the server's event
+        loop — but every surface can WRITE to the schedule store, and the server's engine
+        sweep runs what is due. That also makes a job survive a restart for free, and it
+        reuses the proven "LLM turn → deliver_or_queue into the chat" path (so the answer
+        parks safely if the user's own turn is still streaming).
+        """
+        instruction = str(args.get("instruction") or args.get("prompt") or "").strip()
+        if not instruction:
+            return {"error": "instruction is required"}
+        conv = self._origin_conversation or _clip(args.get("conversation_id"))
+        if not conv:
+            return {
+                "error": (
+                    "background_run must be called from a conversation (there is nowhere "
+                    "to report back to); use schedule_create for standalone work"
+                )
+            }
+        title = _clip(args.get("title")) or "Background job"
+        # Explicit near-future stamp: skip the natural-language `when` parser entirely —
+        # there is nothing to interpret here, and the past-guard would have to nudge it
+        # anyway. now + a few seconds = due on the next sweep.
+        when = to_iso(now_tr() + timedelta(seconds=_BACKGROUND_START_DELAY_S))
+        item = self._store.create(
+            title=title,
+            prompt=instruction,
+            message="",
+            kind="once",
+            when=when,
+            weekday=None,
+            delivery=Delivery(mode="thread", conversation_id=str(conv), same_chat=True),
+            created_by=self._created_by,
+            language=self._default_language(),
+        )
+        return {
+            "status": "started",
+            "id": item.id,
+            "title": title,
+            "note": (
+                "Started in the background. END YOUR REPLY NOW with one short line saying "
+                "you started it — the result is posted into this chat by itself when it "
+                "finishes. Do not wait, poll, or ask the user to check back."
+            ),
+        }
 
     def _tool_create(self, args: dict[str, Any]) -> dict[str, Any]:
         title = _clip(args.get("title"))

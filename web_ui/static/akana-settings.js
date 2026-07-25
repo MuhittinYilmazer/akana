@@ -1673,6 +1673,16 @@
     if (type === "turn_active" || type === "turn_completed" || type === "queue_updated") {
       const cid = String(evt.conversation_id || "");
       const isCurrent = cid && window.AkanaChat?.conversationIdForMemory?.() === cid;
+      // Background work (background_run / a scheduled fire) posts its result by itself;
+      // announce it to the OS unless the user is already watching that chat live —
+      // otherwise the whole point (walk away, get told when it's done) is lost.
+      if (cid && type === "turn_completed") {
+        try {
+          window.AkanaNotify?.onTurnCompleted?.(cid, evt, { isCurrent: Boolean(isCurrent) });
+        } catch {
+          /* a notification must never break event handling */
+        }
+      }
       if (cid && isCurrent) {
         if (type === "queue_updated") {
           window.AkanaChat?.setQueueDepth?.(evt.depth);
