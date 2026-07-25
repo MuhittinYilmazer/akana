@@ -799,5 +799,9 @@ async def get_chat_active(
         headers={
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
+            # When this turn actually started (epoch ms). A RECONNECTING client (F5, tab
+            # restore) has no memory of it and would restart its elapsed-time strip at
+            # 0:00 — a turn that has been running for minutes would look brand new.
+            "X-Akana-Turn-Started": str(int(turn.started_at * 1000)),
         },
     )

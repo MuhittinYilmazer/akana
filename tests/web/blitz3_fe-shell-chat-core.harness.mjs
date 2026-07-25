@@ -294,24 +294,28 @@ await check("fe-shell-ui-6 · begin() still resets the clock for a genuinely NEW
   assert.ok(/0:00/.test(txt), `a new turn should start at 0:00, got "${txt}"`);
 });
 
-await check("fe-shell-ui-6 (review) · resume(convId) refuses a CONCURRENT turn's clock/phase (conv mismatch → fresh)", () => {
+await check("fe-shell-ui-6 (review) · a CONCURRENT turn never lends its clock/phase to another chat", () => {
   const h = loadTurnStatus();
   h.TS.begin("A");              // A's turn starts at now=1000
   h.TS.setPhase("writing");
   h.now.v = 46000;             // 45s of A
-  h.TS.end();                  // switch AWAY from A (snapshot retained = A's)
-  // A CONCURRENT turn in conv B begins → overwrites the single retained snapshot with B's.
+  h.TS.end();                  // switch AWAY from A
+  // A CONCURRENT turn in conv B runs meanwhile.
   h.TS.begin("B");             // now=46000
   h.TS.setPhase("tool", "grep foo");
   h.now.v = 70000;
-  h.TS.end();                  // switch away from B (retained snapshot is now B's)
+  h.TS.end();                  // switch away from B
   // Switch BACK to A while A is still streaming.
   h.now.v = 80000;
-  h.TS.resume("A");            // requested id A ≠ retained id B → must NOT show B's data
+  h.TS.resume("A");
   const txt = h.label().textContent;
   assert.ok(!/grep/.test(txt), `must NOT attribute B's tool label to A (got "${txt}")`);
-  assert.ok(/0:00/.test(txt), `a conv mismatch must fall back to a FRESH clock (got "${txt}")`);
   assert.ok(!/0:34/.test(txt), `must NOT show B's elapsed (46000→80000 = 0:34) (got "${txt}")`);
+  // UPGRADED (the strip now keeps a clock PER CONVERSATION): the old design retained one
+  // snapshot, so the best it could do on a mismatch was restart at 0:00 — which made a
+  // still-running turn look brand new on every visit. A's own clock is now restored:
+  // started at 1000, now 80000 → 1:19.
+  assert.ok(/1:19/.test(txt), `A must resume ITS OWN elapsed, got "${txt}"`);
 });
 
 await check("fe-shell-ui-6 (review) · resume(convId) PRESERVES the clock when the id matches (real switch-back)", () => {

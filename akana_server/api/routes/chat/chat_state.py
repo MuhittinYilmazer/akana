@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -122,6 +123,11 @@ class _ActiveTurn:
     """
 
     conversation_id: str
+    #: Wall-clock start of the turn (epoch seconds). The resume endpoint hands this to a
+    #: reconnecting client so the "working… · 0:42" strip keeps counting from when the
+    #: turn ACTUALLY started: after F5 the frontend has no memory of it and would restart
+    #: the clock at 0:00, making a long turn look like it just began.
+    started_at: float = field(default_factory=time.time)
     chunks: list[bytes] = field(default_factory=list)
     cond: asyncio.Condition = field(default_factory=asyncio.Condition)
     done: bool = False

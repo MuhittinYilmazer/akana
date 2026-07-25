@@ -2181,6 +2181,14 @@
     if (key == null) return;
     const rec = _streamsByConv.get(key);
     if (rec && rec.streamCtx === streamCtx) _streamsByConv.delete(key);
+    // This conversation's turn is over: drop its retained elapsed/phase so a later
+    // switch back cannot restore a DEAD clock (the strip keeps per-conversation clocks
+    // precisely so two concurrent turns don't overwrite each other).
+    try {
+      if (typeof key === "string") window.AkanaTurnStatus?.clear?.(key);
+    } catch {
+      /* status strip is optional */
+    }
   }
 
   /** Return the live stream record for the DISPLAYED conv (null if none). */
@@ -2968,7 +2976,17 @@
     if (isForegroundConv(convId)) {
       chatCtx.hooks.setStreamingUi?.(true);
     }
-    window.AkanaTurnStatus?.begin(convId);
+    // Seed the elapsed clock from when the turn ACTUALLY started (the resume endpoint
+    // reports it): after F5 this page has no memory of the turn, and a bare begin() would
+    // restart at 0:00 — a turn running for minutes would read as brand new.
+    let resumedStartedAt;
+    try {
+      const raw = response.headers?.get?.("X-Akana-Turn-Started");
+      if (raw) resumedStartedAt = Number(raw);
+    } catch {
+      /* header unavailable (opaque/proxied response) → fall back to "now" */
+    }
+    window.AkanaTurnStatus?.begin(convId, resumedStartedAt);
 
     const wrap = document.createElement("div");
     wrap.className = "row row-assistant";

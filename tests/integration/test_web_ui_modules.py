@@ -472,6 +472,16 @@ def test_notify_background_result_harness() -> None:
     _run_node_harness(REPO_ROOT / "tests/web/notify_background_result.harness.mjs")
 
 
+def test_turn_status_per_conversation_harness() -> None:
+    """Node-vm contract: the turn-status strip keeps a clock PER CONVERSATION. One strip
+    serves several chats that can work at once — keeping only the last-started turn's
+    clock made switching back to a still-working chat show the OTHER chat's elapsed time
+    and phase. Also locks that a reconnect (F5) seeds the clock from the turn's real start
+    (X-Akana-Turn-Started) instead of restarting at 0:00, and that a finished turn's clock
+    is dropped so a later visit can't restore a dead one."""
+    _run_node_harness(REPO_ROOT / "tests/web/turn_status_per_conversation.harness.mjs")
+
+
 @pytest.mark.parametrize("page", list(EXPECTED_BY_PAGE))
 def test_html_theme_preload_prevents_fouc(page: str) -> None:
     """The saved theme (akana.theme) must be applied via an inline script before the first paint.

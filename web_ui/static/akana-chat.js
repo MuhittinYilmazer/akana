@@ -307,9 +307,11 @@
       if (active) {
         // resume() (NOT begin()) — switching BACK to a conversation whose turn is still
         // running must preserve the true elapsed/phase; begin() would restart it at 0:00.
-        // Pass the displayed conv id so resume() refuses to attribute a concurrent turn's
-        // clock/phase to this conversation (falls back to a fresh clock on a mismatch).
-        if (!window.AkanaTurnStatus?.isActive?.()) window.AkanaTurnStatus?.resume?.(convId);
+        // ALWAYS resume, even when the strip is already active: with two chats working at
+        // once the strip would otherwise keep showing whichever turn started LAST (proven:
+        // return to A and read B's clock). resume() is conversation-scoped and restores
+        // THIS chat's own clock/phase.
+        window.AkanaTurnStatus?.resume?.(convId);
       } else {
         window.AkanaTurnStatus?.end?.();
       }
@@ -390,8 +392,12 @@
     if (chatInFlight) return; // a foreground turn already owns the strip
     if (conversationIdForMemory() !== id) return;
     try {
-      window.AkanaTurnStatus?.begin?.(id);
-      window.AkanaTurnStatus?.setPhase?.("preparing");
+      // resume(), NOT begin(): re-opening a chat whose background job is still running
+      // must continue ITS clock. begin() restarts at 0:00, so every visit made a job that
+      // had been working for minutes look like it just started. resume() restores this
+      // conversation's own clock when there is one and starts fresh otherwise (the
+      // first turn_active).
+      window.AkanaTurnStatus?.resume?.(id);
     } catch {
       /* ignore */
     }
@@ -422,6 +428,9 @@
     if (_cid && bgActiveTurns.delete(_cid) && !chatInFlight) {
       try {
         window.AkanaTurnStatus?.end?.();
+        // Drop this conversation's retained clock too — the job is over, so re-opening
+        // the chat must not restore a dead "working since…" timer.
+        window.AkanaTurnStatus?.clear?.(_cid);
       } catch {
         /* ignore */
       }
@@ -505,6 +514,12 @@
     const id = (convId || "").trim();
     if (!id || conversationIdForMemory() === id) return;
     bgActiveTurns.delete(id); // the background turn finished
+    // …and its clock, so opening that chat later doesn't resurrect a finished timer.
+    try {
+      window.AkanaTurnStatus?.clear?.(id);
+    } catch {
+      /* ignore */
+    }
     void ensureThreads().refreshArchiveActivity?.(id);
     const items = ensureThreads().getChatArchiveItems?.() || [];
     const meta = items.find((c) => c.id === id);

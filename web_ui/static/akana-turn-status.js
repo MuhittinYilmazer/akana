@@ -24,11 +24,20 @@
   let phase = "preparing";
   let toolLabel = "";
   let timer = null;
-  // The conversation this retained clock/phase belongs to. The strip is a global
-  // singleton but two conversations can stream concurrently; recording the id lets
-  // resume() refuse to attribute another conversation's elapsed/phase to the one now
-  // displayed (see resume()). null = unbound (new-chat before adoption / no turn).
+  // The conversation whose turn is currently PAINTED on the (singleton) strip.
+  // null = unbound (new-chat before adoption / no turn).
   let turnConvId = null;
+  // PER-CONVERSATION clocks. Several conversations can run turns at the same time, but
+  // there is ONE strip: keeping only the last-started turn's clock meant switching back
+  // to a chat that was still working showed the OTHER chat's elapsed time and phase
+  // (proven: A working 2s, B started 1s ago → returning to A read "0:01"). Each turn's
+  // own start/phase/tool label lives here and is restored when its chat is displayed.
+  const byConv = new Map(); // convId -> {startedAt, phase, toolLabel}
+
+  function snapshot() {
+    if (turnConvId == null) return;
+    byConv.set(turnConvId, { startedAt, phase, toolLabel });
+  }
 
   function formatElapsed(ms) {
     const totalSec = Math.max(0, Math.floor(ms / 1000));
@@ -74,13 +83,23 @@
     form.insertBefore(strip, inner || null);
   }
 
-  function begin(convId) {
+  /**
+   * Start the strip for a new turn. ``startedAtMs`` (optional) is when the turn REALLY
+   * began — passed when reconnecting to a turn that has been running since before this
+   * page existed (F5 / tab restore, from the resume endpoint's X-Akana-Turn-Started).
+   * Without it the clock would restart at 0:00 and a 5-minute turn would look brand new.
+   * A missing/absurd value (clock skew, a future stamp) falls back to "now".
+   */
+  function begin(convId, startedAtMs) {
     mount();
     active = true;
-    startedAt = Date.now();
+    const now = Date.now();
+    const stamp = Number(startedAtMs);
+    startedAt = Number.isFinite(stamp) && stamp > 0 && stamp <= now ? stamp : now;
     phase = "preparing";
     toolLabel = "";
     turnConvId = convId || null;
+    snapshot(); // this conversation's own clock, so a concurrent turn can't overwrite it
     paint();
     if (timer == null) timer = window.setInterval(paint, 1000);
   }
@@ -88,22 +107,39 @@
   // Re-attach the strip to an ALREADY-RUNNING turn (conversation switch-back) WITHOUT
   // restarting the clock or reverting the phase — begin() would reset startedAt to now
   // ("Preparing · 0:00") and lose the true elapsed of the in-flight turn.
-  // CONV-SCOPED: the retained clock/phase belongs to whatever conversation called begin()
-  // LAST. With two concurrent streams (A then B) the snapshot is B's; resuming A must NOT
-  // show B's elapsed/tool label. When the requested id does not match the retained one,
-  // fall back to begin() semantics (fresh clock, generic phase). Also start fresh if no
-  // turn time is retained. A null id (legacy caller / pre-adoption) skips the check.
+  // CONV-SCOPED: each conversation's clock is kept separately (see byConv), so switching
+  // between two chats that are BOTH working shows each one its own elapsed/phase instead
+  // of whichever turn started last. A conversation we have no clock for starts fresh.
   function resume(convId) {
     mount();
     active = true;
     const wantId = convId || null;
-    const mismatch = wantId !== null && turnConvId !== null && wantId !== turnConvId;
-    if (mismatch || !startedAt) {
+    // Unbound caller (no id — a new chat before it has one, or a legacy call): there is
+    // nothing to disambiguate, so just re-attach to whatever is retained rather than
+    // wiping a running turn's clock.
+    if (wantId === null) {
+      if (!startedAt) startedAt = Date.now();
+      paint();
+      if (timer == null) timer = window.setInterval(paint, 1000);
+      return;
+    }
+    if (wantId === turnConvId && startedAt) {
+      paint(); // already showing this conversation's turn
+      if (timer == null) timer = window.setInterval(paint, 1000);
+      return;
+    }
+    const saved = wantId !== null ? byConv.get(wantId) : null;
+    if (saved && saved.startedAt) {
+      startedAt = saved.startedAt;
+      phase = saved.phase || "preparing";
+      toolLabel = saved.toolLabel || "";
+    } else {
       startedAt = Date.now();
       phase = "preparing";
       toolLabel = "";
-      turnConvId = wantId;
     }
+    turnConvId = wantId;
+    snapshot();
     paint();
     if (timer == null) timer = window.setInterval(paint, 1000);
   }
@@ -128,14 +164,27 @@
     phase = next;
     if (next === "tool") toolLabel = detail ? String(detail) : _t("ui.turn_tool_default");
     else toolLabel = "";
+    snapshot(); // keep this conversation's phase, so returning to it restores the real one
     paint();
+  }
+
+  /** Forget a conversation's clock — its turn is over (or the chat is gone). */
+  function clear(convId) {
+    const id = convId || null;
+    if (id !== null) byConv.delete(id);
+    if (id === null || id === turnConvId) {
+      startedAt = 0;
+      phase = "preparing";
+      toolLabel = "";
+      turnConvId = null;
+    }
   }
 
   function isActive() {
     return active;
   }
 
-  window.AkanaTurnStatus = { mount, begin, resume, end, setPhase, isActive };
+  window.AkanaTurnStatus = { mount, begin, resume, end, setPhase, isActive, clear };
 
   if (typeof document !== "undefined") {
     if (document.readyState === "loading") {
