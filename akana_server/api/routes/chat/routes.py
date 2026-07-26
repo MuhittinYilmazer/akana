@@ -783,6 +783,12 @@ async def get_chat_active(
 
     If there's NO active turn, it returns 204 — the frontend falls back to a
     normal `messages` fetch.
+
+    A turn with no replayable buffer — a blocking/voice/connector turn, or a background
+    job (schedule fire / background_run) — cannot be followed, but it IS running: it
+    answers **202** with ``started_at`` instead of 204. 204 there meant the client
+    concluded "idle" after F5 while the server still refused new sends as busy (or ran
+    minutes of promised background work completely invisibly).
     """
     conv_id = (conversation_id or "").strip()
     turn = _active_turns(request.app).get(conv_id) if conv_id else None
@@ -792,6 +798,36 @@ async def get_chat_active(
     # would await ``cond.wait()`` forever (only STOP marks a placeholder done). Treat it like
     # "no active turn": return 204 so the FE falls back to a normal messages fetch (b2h-#8).
     if turn is None or turn.done or turn.placeholder:
+        from akana_server.api.routes.chat.turn_gate import nonstreaming_turn_started_at
+        from akana_server.background_activity import background_started_at
+
+        started = nonstreaming_turn_started_at(request.app, conv_id)
+        kind = "nonstreaming"
+        background = background_started_at(request.app, conv_id)
+        if started is None:
+            started = background
+            kind = "background"
+        if started is not None:
+            return JSONResponse(
+                status_code=202,
+                content={
+                    "running": True,
+                    "followable": False,
+                    # ``kind`` is the FOLLOWABILITY hint and reports one probe in a fixed
+                    # priority, so a background job running behind a blocking/voice/
+                    # connector turn is not visible in it. ``background`` is the
+                    # independent flag the marker rebuild after an F5 keys off — the
+                    # client's marker map is wiped by the reload, so keying it off
+                    # ``kind`` meant it took neither branch and never rebuilt the strip.
+                    "kind": kind,
+                    "conversation_id": conv_id,
+                    "started_at": int(started * 1000),
+                    "background": background is not None,
+                    "background_started_at": (
+                        int(background * 1000) if background is not None else None
+                    ),
+                },
+            )
         return Response(status_code=204)
     return StreamingResponse(
         _follow_turn(turn),

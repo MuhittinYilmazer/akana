@@ -35,6 +35,8 @@
       chatRecordMessage,
       recordPendingUserMessage,
       mergeServerMessages,
+      noteServerQueuedTexts,
+      hasUnrecognizedPending,
       syncThreadConversationId,
       activateThreadForConversation,
       purgeConversationFromChatStore,
@@ -158,8 +160,35 @@
       );
     }
 
+    /** The texts the server still holds QUEUED for this conversation (202-accepted behind a
+     *  running turn). Returns the raw text_previews, or null when the queue could not be
+     *  read — a transient failure must leave whatever was noted before untouched. */
+    async function fetchQueuedPreviews(convId) {
+      try {
+        const r = await fetch(
+          `${baseUrl()}/api/v1/chat/queue/${encodeURIComponent(convId)}`,
+          { headers: authHeaders() },
+        );
+        if (!r || !r.ok) return null;
+        const body = await r.json();
+        const items = Array.isArray(body?.items) ? body.items : [];
+        return items.map((it) => String((it && it.text_preview) || ""));
+      } catch {
+        return null;
+      }
+    }
+
     async function chatHydrateFromServer(convId, targetThread = null) {
       if (!convId) return false;
+      // QUEUED-MESSAGE RESCUE: a message accepted with 202 lives ONLY in the server's
+      // in-memory queue until it drains — it is in no /messages snapshot — and on the client
+      // only in the store's session-pending set, which is deliberately empty after a page
+      // load. Without the server's own queue view the merge below would drop that row as a
+      // stale ghost (it flashes in the provisional paint, then disappears). Read the queue in
+      // PARALLEL with the turns, and only when such an at-risk pending row actually exists.
+      const queueP = hasUnrecognizedPending(targetThread || chatActiveThread())
+        ? fetchQueuedPreviews(convId)
+        : null;
       try {
         // Turns + meta(title) are INDEPENDENT reads → start in PARALLEL (not sequential).
         // Previously meta fetch waited for turns (extra 1 round-trip latency);
@@ -217,11 +246,17 @@
           return false;
         }
         const thread = targetThread || chatActiveThread() || ensureChatThread(chatProfile());
+        if (queueP) {
+          const previews = await queueP;
+          if (previews) noteServerQueuedTexts(convId, previews);
+        }
+        // Bind BEFORE the merge: the merge's queued-message rescue resolves the server
+        // queue by the thread's conversation id.
+        thread.conversationId = convId;
         // MERGE (not a blind replace): the server snapshot may not yet contain the
         // message the user just wrote → preserve the trailing pending message
         // (multi-chat loss shield). Once the server reflects it, merge collapses to one copy.
         thread.messages = mergeServerMessages(thread, bridge.mapServerMessagesToThread(turns));
-        thread.conversationId = convId;
         const metaR = await metaP;
         if (metaR && metaR.ok) {
           const meta = await metaR.json();
@@ -462,6 +497,10 @@
         await archive.deleteConversationApi(convId);
         archive.clearConvActivity?.(convId);
         purgeConversationFromChatStore(convId);
+        // The composer parks pending attachments per conversation on every switch; a
+        // deleted chat has no return trip, so its slot (and its preview object URLs)
+        // would live on for the rest of the page session.
+        bridge.dropParkedAttachments?.(convId);
         bridge.removeConversation?.(convId); // PARALLEL-CHAT: remove the deleted chat's pane from DOM
         if (isActiveConv) {
           setConversationId(null);
@@ -576,13 +615,33 @@
       }
     }
 
+    /** Move the composer's pending attachments from the chat being left to the one opened.
+     *  Falls back to the destructive clear when the composer offers no parking (older
+     *  bridge) — EC2 (no cross-chat attachment leak) must hold either way. */
+    function swapPendingAttachments(leavingConvId, targetConvId) {
+      const leaving = leavingConvId || null;
+      const target = targetConvId || null;
+      // An UNBOUND surface (empty/new chat) has no stable key to park under: its slot would
+      // be the very same slot the NEXT empty chat restores from, i.e. the files would leak
+      // into it. Only real conversations get a parking slot; everything else still clears.
+      if (leaving && typeof bridge.parkPendingAttachments === "function") {
+        bridge.parkPendingAttachments(leaving);
+      } else {
+        bridge.clearPendingAttachments?.();
+      }
+      if (target) bridge.restorePendingAttachments?.(target);
+    }
+
     async function switchChatConversation(convId) {
       if (!convId || isConversationDisplayed(convId)) return;
-      bridge.clearPendingAttachments?.(); // EC2: don't carry pending attachments into another chat
       // CONNECTION-LIMIT FIX: capture the leaving (currently displayed) chat BEFORE
       // the mutation → to release its POST stream once the switch completes
       // (see abortStream call below + rationale). Skip if "" (empty surface).
       const _leavingConvId = conversationIdForMemory();
+      // EC2: don't carry pending attachments into another chat — PARK them under the chat
+      // being left and hand this chat its own back, instead of destroying uploads the user
+      // already paid for (the typed draft survives the same round trip).
+      swapPendingAttachments(_leavingConvId, convId);
       const myGen = ++_switchGen; // generation counter for this switch
       // OPTIMISTIC NAVIGATION (claude-code "view ≠ IO" principle): do NOT tie the
       // VISIBLE transition to any REST/IO. Previously `await restoreConversationLlm`
@@ -777,8 +836,43 @@
       void archive.loadChatArchiveList();
       void archive.refreshActiveConversationMeta();
       // Open-late: if a background turn (task/schedule) is live on this conversation,
-      // show the "working…" strip even though we missed its turn_active event.
+      // show the "working…" strip even though we missed its turn_active event — after F5 or
+      // on a second device that frame was never delivered here, so the marker itself has to
+      // be rebuilt from the server before the strip can be shown.
+      if (!resumed) await seedBackgroundWorkingFromServer(convId);
       window.AkanaChat?.maybeShowBgWorking?.(convId);
+    }
+
+    /** Rebuild the background-work indicator from the SERVER's view of this conversation.
+     *
+     *  bgActiveTurns is fed exclusively by live turn_active frames received by THIS page
+     *  instance, so after F5 (or opening the app on a second device) a still-running
+     *  background job leaves no trace and the "working…" strip never appears again for the
+     *  rest of the job. A turn the server reports as active while this page is neither
+     *  streaming it nor able to resume it IS background work from here — seed it through the
+     *  same consumer entry a live frame would have used, stamped source:"background" (a
+     *  missing source means "user" by contract, which would drive nothing).
+     *  Depends on the server registering background/engine runs in the /chat/active view
+     *  (owned by the server-lifecycle/schedule side); it is a silent no-op until then. */
+    async function seedBackgroundWorkingFromServer(convId) {
+      if (!convId) return false;
+      try {
+        if (bridge.isConversationStreamActive?.(convId)) return false;
+        // ONE seam, and it must be the SOURCE-AWARE one: `reconcileBgActiveTurn(convId)` in
+        // akana-chat.js is the only reader of the answer's kind. A bare probeActiveTurn
+        // cannot tell a schedule fire / background_run (202 kind:"background") from the
+        // user's own unfollowable voice/blocking turn (202 kind:"nonstreaming") or their own
+        // detached SSE turn (200) — stamping any of those source:"background" violates the
+        // contract's core rule AND leaks a marker only a background completion can drop
+        // (→ phantom "working…" strip). The id is REQUIRED (the seam is a no-op for "") and
+        // the await is what makes the strip appear on this pass, not one navigation later.
+        const reconcile = window.AkanaChat?.reconcileBgActiveTurn;
+        if (typeof reconcile !== "function") return false;
+        await reconcile(convId);
+        return true;
+      } catch {
+        return false;
+      }
     }
 
     /** Resume a running turn in the opened conversation if one exists — defensive, swallows errors. */
@@ -792,6 +886,14 @@
     }
 
     async function chatRestoreActiveThread() {
+      // RESTORE IS A NAVIGATION and must join the same generation counter as
+      // switchChatConversation / chatStartNewThread. app.js fires it un-awaited at boot with
+      // the UI fully interactive, and its hydrate await can take seconds under load; without
+      // a gen guard its post-await repaint hijacks whatever chat the user navigated to in the
+      // meantime — hooks.log is the CURRENTLY displayed pane and setConversationId rebinds
+      // whatever thread is active NOW (the new/other chat would inherit the old conv id and
+      // the next message would go to the wrong conversation).
+      const myGen = ++_switchGen;
       setChatPersistPaused(true);
       // PARALLEL-CHAT: after F5/restore, FIRST show the active chat's pane
       // (keyed to the correct conv-id) → beginLogHydrate only wraps that pane and
@@ -819,24 +921,36 @@
       } else {
         beginLogHydrate();
       }
+      // TRANSIENT ≠ GONE: chatHydrateFromServer returns false for a network blip, for ANY
+      // non-2xx (its own transient-error shield) and for the 404-with-local-messages
+      // keep-branch — all cases where it deliberately PRESERVES local state. Unbinding the
+      // thread on those looks harmless (the snapshot still paints) but forks the chat: the
+      // next send creates a brand-new server conversation with no history, and a turn still
+      // running in the old one is never resumed. Only an authoritative failure with nothing
+      // local to protect may unbind — the same rule the switch path uses (`else if (!hadLocal)`).
+      const hadLocal = provisional.length > 0;
       try {
         if (thread.conversationId) {
           conversationId = thread.conversationId;
           sessionStorage.setItem("akana.conversationId", thread.conversationId);
           const ok = await chatHydrateFromServer(thread.conversationId, thread);
-          if (!ok) thread.conversationId = null;
+          if (!ok && !hadLocal) thread.conversationId = null;
         } else {
           const legacy = sessionStorage.getItem("akana.conversationId");
           if (legacy) {
             thread.conversationId = legacy;
             const ok = await chatHydrateFromServer(legacy, thread);
-            if (!ok) {
+            if (!ok && !hadLocal) {
               thread.conversationId = null;
               sessionStorage.removeItem("akana.conversationId");
               conversationId = null;
             }
           }
         }
+        // A newer navigation (new chat / switch / delete) started during the hydrate await →
+        // this restore is stale. Its repaint would wipe the pane the user is looking at NOW
+        // and rebind that thread to the restored conversation.
+        if (myGen !== _switchGen) return;
         // AUTHORITATIVE RE-PAINT: hydrate updated thread.messages with the server
         // authoritative data → replace the provisional render entirely (no double render).
         bridge.hooks.log.innerHTML = "";
@@ -844,15 +958,29 @@
         if (thread.conversationId) setConversationId(thread.conversationId);
         else setConversationId(null);
       } finally {
-        finishLogHydrate();
-        setChatPersistPaused(false);
+        // Only the most recent navigation finalizes the log/persist latches — a superseding
+        // op owns them (see staleInFlightSwitch), and a stale finish would hide its hero /
+        // clear its loading state mid-hydrate.
+        if (myGen === _switchGen) {
+          finishLogHydrate();
+          setChatPersistPaused(false);
+        }
         flushChatStore();
       }
+      if (myGen !== _switchGen) return;
       // After returning to the page / F5: if a turn is running, retrieve the accumulated response.
       const restoredConvId = chatActiveThread()?.conversationId;
       if (restoredConvId) {
         const resumed = await resumeActiveTurnIfAny(restoredConvId);
-        if (!resumed) await refreshConversationLogAfterTurn(restoredConvId);
+        if (myGen !== _switchGen) return;
+        if (!resumed) {
+          await refreshConversationLogAfterTurn(restoredConvId);
+          await seedBackgroundWorkingFromServer(restoredConvId);
+        }
+        // Open-late after F5: this page instance never saw the turn_active frame of a
+        // background job, so the working strip has to be rebuilt here — the switch path
+        // has always done this, restore never did.
+        window.AkanaChat?.maybeShowBgWorking?.(restoredConvId);
       }
       void window.AkanaChat?.refreshQueueState?.(restoredConvId);
       if (restoredConvId) void archive.refreshConvActivityFromServer?.(restoredConvId);
@@ -873,7 +1001,9 @@
       // (symmetric with switchChatConversation; held POST must not exhaust the pool).
       // If "" (already on an empty surface) the guard below skips.
       const _leavingConvId = conversationIdForMemory();
-      bridge.clearPendingAttachments?.(); // EC2: don't carry old attachments into the new chat
+      // EC2: don't carry old attachments into the new chat — park them under the chat being
+      // left; the empty new chat starts with its own (empty) set.
+      swapPendingAttachments(_leavingConvId, null);
       // CONCURRENT N-STREAMS: "+/new chat" does NOT abort the previous chat's LIVE STREAM.
       // Previously bridge.abortStream() was here → opening a new chat while A was streaming
       // killed A's stream (user: "type in A, open new chat, both should stream" was broken).
@@ -1051,6 +1181,7 @@
         bridge.abortStream(oldId); // audit M2: hedefli kes (oldId arka-plansa bile leak yok)
         if (oldId) {
           purgeConversationFromChatStore(oldId);
+          bridge.dropParkedAttachments?.(oldId); // deleted → its parking slot can never be reopened
           bridge.removeConversation?.(oldId); // remove deleted conv pane from DOM
         }
         archive.setChatArchiveItems(archive.getChatArchiveItems().filter((c) => c.id !== oldId));

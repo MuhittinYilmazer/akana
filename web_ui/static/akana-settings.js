@@ -38,6 +38,9 @@
   const WS_RECONNECT_BASE_MS = 1000;
   const WS_RECONNECT_MAX_MS = 30000;
   let wsReconnectAttempt = 0;
+  // Has this page ever had an OPEN /ws/events socket? Distinguishes the first handshake
+  // (boot already reconciled) from a RE-connect (a gap where broadcasts were lost).
+  let wsEverOpened = false;
 
   const baseUrl = () => window.AkanaCore.baseUrl();
   const authHeaders = (j) => window.AkanaCore.authHeaders(j);
@@ -320,10 +323,20 @@
   let codexModelsCache = null;
   let onModelSwitcherDocClick = null;
   let onModelSwitcherKey = null;
-  let _conversationLlmRestore = false;
+  // >0 while a conversation restore is APPLYING its patch: the writes it makes to the
+  // global form must not echo back as a per-conversation save. A counter, not a flag,
+  // because two restores can overlap (rapid switching) and a boolean would be cleared by
+  // whichever finishes first while the other is still applying.
+  let _conversationLlmRestore = 0;
+  // Stale-async guard for restoreConversationLlm: it is fired un-awaited on EVERY
+  // conversation switch (akana-chat-threads switchChatConversation) and MUTATES GLOBAL
+  // state (runtime provider/model + header pill + thinking-provider, which the composer's
+  // effort vocabulary is keyed on). Whoever started LAST owns that state — a superseded
+  // restore whose GET resolves late must not write it. Same idiom as _switchGen in threads.
+  let _convLlmRestoreGen = 0;
 
   async function persistConversationLlm(convId, patch) {
-    if (!convId || !patch || _conversationLlmRestore) return;
+    if (!convId || !patch || _conversationLlmRestore > 0) return;
     const safe = patch && typeof patch === "object" ? patch : {};
     const body = {};
     for (const k of [
@@ -353,13 +366,16 @@
   /** Restore saved provider/model to the global UI when switching conversations. */
   async function restoreConversationLlm(convId) {
     if (!convId) return;
+    const myGen = ++_convLlmRestoreGen;
     try {
       const r = await fetch(
         `${baseUrl()}/api/v1/conversations/${encodeURIComponent(convId)}/llm-settings`,
         { headers: authHeaders() },
       );
+      if (myGen !== _convLlmRestoreGen) return; // a newer switch owns the global settings
       if (!r.ok) return;
       const j = await r.json();
+      if (myGen !== _convLlmRestoreGen) return;
       const s = j.settings || {};
       const patch = {};
       if (s.provider) patch.provider = s.provider;
@@ -370,7 +386,7 @@
       if (s.openai_model) patch.openai_model = s.openai_model;
       if (s.codex_model) patch.codex_model = s.codex_model;
       if (!Object.keys(patch).length) return;
-      _conversationLlmRestore = true;
+      _conversationLlmRestore += 1;
       try {
         invalidateLlmSettingsLoads();
         const pr = await fetch(`${baseUrl()}/api/v1/system/llm-settings`, {
@@ -378,11 +394,14 @@
           headers: authHeaders(true),
           body: JSON.stringify({ settings: patch }),
         });
+        if (myGen !== _convLlmRestoreGen) return;
         if (!pr.ok) return;
         const pj = await pr.json();
+        if (myGen !== _convLlmRestoreGen) return;
         fillLlmForm(pj.settings || pj, pj);
         llmPaneHydrated = true;
         await loadModelPill();
+        if (myGen !== _convLlmRestoreGen) return;
         if (patch.provider) {
           // Provider changed → refresh voice Live capability (provider_is_gemini),
           // same contract as applyModelChoice()/saveLlmSettings() (see there for why).
@@ -393,7 +412,7 @@
           }
         }
       } finally {
-        _conversationLlmRestore = false;
+        _conversationLlmRestore = Math.max(0, _conversationLlmRestore - 1);
       }
     } catch {
       /* ignore */
@@ -1636,6 +1655,24 @@
     wsReconnectAttempt = 0;
   }
 
+  /** Re-read the server's truth after a WS gap.
+   *  /ws/events replays nothing, so every turn_active / turn_completed broadcast that landed
+   *  while the socket was down is gone for good: a job that FINISHED during a laptop sleep /
+   *  Wi-Fi drop / server restart leaves the working strip ticking and the sidebar badge lit
+   *  until an F5, and one that STARTED during it never lights either. Both are recovered by
+   *  asking — the displayed conversation through the background-marker reconcile seam, the
+   *  listed rows through the sidebar's own activity sweep. */
+  function resyncAfterWsReconnect() {
+    try {
+      const cid = String(window.AkanaChat?.conversationIdForMemory?.() || "").trim();
+      // "" is the unbound new chat: it has no server-side turn to reconcile.
+      if (cid) void window.AkanaChat?.reconcileBgActiveTurn?.(cid);
+      void window.AkanaChat?.loadChatArchiveList?.();
+    } catch {
+      /* a resync must never break the socket lifecycle */
+    }
+  }
+
   function scheduleWsReconnect() {
     clearTimeout(reconnectTimer);
     const delay = Math.min(
@@ -1727,11 +1764,17 @@
       hooks.setOrb("idle");
     ws = new WebSocket(wsUrl());
     ws.onopen = () => {
+      // Read BEFORE resetWsReconnectBackoff(): a genuine re-connect is either a socket that
+      // has been open before, or one that had to retry — never the first clean handshake,
+      // which boot has already reconciled.
+      const isReconnect = wsEverOpened || wsReconnectAttempt > 0;
+      wsEverOpened = true;
       resetWsReconnectBackoff();
       setWsStatus(t("settings.ws.connected_label"), "connected");
       if (!hooks.voiceWakeActive() && !hooks.voiceMicRecording() && !hooks.voicePostInFlight())
         hooks.setOrb("ok");
       updateConnectionEndpointCard();
+      if (isReconnect) resyncAfterWsReconnect();
     };
     ws.onclose = () => {
       setWsStatus(t("settings.ws.closed_label"), "closed");

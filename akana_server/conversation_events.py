@@ -37,17 +37,26 @@ def event_hub(app: Any) -> Any | None:
         return None
 
 
-async def broadcast_turn_active(app: Any, conversation_id: str | None) -> None:
+async def broadcast_turn_active(
+    app: Any, conversation_id: str | None, *, source: str = "background"
+) -> None:
     """Announce that a background turn STARTED in ``conversation_id``.
 
     Drives the "working…" indicator and makes a just-created background thread
-    appear in the sidebar while it runs."""
-    hub = event_hub(app)
+    appear in the sidebar while it runs. ``source`` is part of the event contract
+    (see :func:`broadcast_turn_completed`); everything routed through this helper is
+    background unless a caller says otherwise."""
     cid = (conversation_id or "").strip()
-    if hub is None or not cid:
+    if not cid:
+        return
+    src = str(source or "background")
+    hub = event_hub(app)
+    if hub is None:
         return
     try:
-        await hub.broadcast_json({"type": "turn_active", "conversation_id": cid})
+        await hub.broadcast_json(
+            {"type": "turn_active", "conversation_id": cid, "source": src}
+        )
     except Exception:  # noqa: BLE001 - a notification miss must not break the producer
         log.debug("turn_active broadcast failed (conv=%s)", cid, exc_info=True)
 
@@ -66,8 +75,8 @@ async def broadcast_turn_completed(
     thread appears) and toasts on ``status == "ok"``; on the current conversation
     it reloads the thread log so the freshly written result renders without a
     page refresh."""
-    hub = event_hub(app)
     cid = (conversation_id or "").strip()
+    hub = event_hub(app)
     if hub is None or not cid:
         return
     payload: dict[str, Any] = {

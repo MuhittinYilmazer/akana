@@ -59,13 +59,13 @@ def _make_turn_guard(app: FastAPI):
     # Lazy import (service → api is a downward reach the connector engine must not
     # bind at module level): use the PUBLIC turn-gate seam, not the underscore-private
     # route internals. ``register_turn`` raises the same 409 TURN_BUSY as the web/voice
-    # path; ``busy_registry`` is the raw conv→task map (for the per-turn handle swap).
+    # path; ``swap_turn_handle`` re-points the claim at the per-turn child task.
     from fastapi import HTTPException
 
     from akana_server.api.routes.chat.turn_gate import (
-        busy_registry,
         register_turn as _gate_register_turn,
         release_turn as _gate_release_turn,
+        swap_turn_handle as _gate_swap_handle,
     )
 
     def _is_busy_conflict(exc: HTTPException) -> bool:
@@ -81,6 +81,15 @@ def _make_turn_guard(app: FastAPI):
 
     @asynccontextmanager
     async def guard(conversation_id: str | None):
+        """Yields the register-child callback on a real claim, ``None`` when nothing
+        was claimed.
+
+        The yielded value is the body's ONLY way to know whether the gate actually
+        claimed AND ANNOUNCED this turn. ``register_turn`` only emits ``turn_active``
+        on a successful claim, so the degraded "processing anyway" branch below
+        announces nothing — and a body that cannot tell the two apart broadcast an
+        UNPAIRED ``turn_completed`` into a conversation whose OTHER turn was still live.
+        """
         conv_id = (conversation_id or "").strip()
         if not conv_id:
             yield None
@@ -111,38 +120,72 @@ def _make_turn_guard(app: FastAPI):
         # ``register_turn`` (the turn-gate seam) records the CURRENT task as the cancel handle —
         # but the connector turn runs inside the long-lived per-conversation WORKER task, so an
         # external STOP/reset would cancel the whole worker (zombie chat: every future message
-        # silently dropped). The ``register_turn`` callback below lets the body swap the handle to
-        # a per-TURN child task, so STOP cancels only the turn and the worker survives.
-        current: dict[str, Any] = {"handle": handle}
+        # silently dropped).
+        #
+        # The registered handle is instead this HOLDER task, for two reasons:
+        #   * it is what a STOP cancels, and its cancellation is forwarded to the per-TURN
+        #     child only — the worker survives and keeps serving the next queued message;
+        #   * every busy predicate is ``not handle.done()``, so registering the child task
+        #     itself freed the conversation the instant the LLM returned, while the egress
+        #     filter and BOTH turn persists still had to run inside the claim. The holder
+        #     is done only when this context manager exits, so "claimed" and "the critical
+        #     section is running" are the same interval — which is the whole point of
+        #     doing the filter+persist in here.
+        child: dict[str, Any] = {"task": None}
+
+        async def _hold() -> None:
+            try:
+                await asyncio.Event().wait()  # released by the cancel in the finally
+            except asyncio.CancelledError:
+                task = child["task"]
+                if task is not None and not task.done():
+                    task.cancel()
+                raise
 
         def register_turn(task: Any) -> None:
-            if handle is None:
-                return  # degraded (registration failed) → nothing claimed; no-op
-            busy_registry(app)[conv_id] = task
-            current["handle"] = task
+            child["task"] = task
+
+        holder: "asyncio.Task[None] | None" = None
+        if handle is not None:
+            holder = asyncio.create_task(_hold(), name=f"connector-turn-claim:{conv_id}")
+            _gate_swap_handle(app, conv_id, holder)
 
         cancelled = False
         try:
-            yield register_turn
+            # DEGRADED (``handle is None``): nothing claimed → the gate announced nothing
+            # and the body owes nothing. Liveness > perfect exclusion; the message is
+            # still processed, it just runs without the claim.
+            yield register_turn if holder is not None else None
         except asyncio.CancelledError:
             cancelled = True  # STOP → preserve the queue (b8 contract), do not drain
             raise
         finally:
-            _gate_release_turn(app, conv_id, current["handle"])
+            if holder is not None:
+                holder.cancel()  # ends the claim; a live child is cancelled with it
+                # ``announce=False``: the gate announced this turn's START, but its ONE
+                # completion belongs to ``InboundRouter.handle`` — only that knows the real
+                # outcome and the persisted assistant turn id, and both exist only AFTER the
+                # conversation has had to be freed here. Announcing on both sides is how the
+                # channel turn ended up emitting one turn_active and TWO turn_completed, the
+                # first of them before the reply was even written.
+                _gate_release_turn(app, conv_id, holder, announce=False)
             # b1: the connector shares the busy-registry (so concurrent web sends queue with
             # 202) but never drained that queue → a web message queued behind a Telegram turn
-            # was stranded. Mirror the web guards: drain on normal completion (not on STOP).
-            # NOTE: the queue-drain helpers are chat-package internals with no public seam yet;
+            # was stranded. Mirror the web guards: parked INJECTIONS first, then the queue —
+            # a Telegram-bound chat may have no later web/voice turn at all, so draining only
+            # the queue stranded a promised background result (and the turn_completed the
+            # engine deferred to its delivery) until the next restart.
+            # NOTE: the drain helpers are chat-package internals with no public seam yet;
             # they stay behind a lazy import from the ``streaming`` facade until the chat
             # package exposes a public drain entry point (the turn-gate seam covers only the
-            # busy-registry, not the follower/resume queue this drains).
+            # busy-registry, not the injection inbox / follower queue this drains).
             if conv_id and not cancelled:
-                from akana_server.api.routes.chat.streaming import (
-                    _maybe_drain_queue,
-                    _spawn_background,
+                from akana_server.api.routes.chat.chat_detached import (
+                    _drain_injections_then_queue,
                 )
+                from akana_server.api.routes.chat.streaming import _spawn_background
 
-                _spawn_background(app, _maybe_drain_queue(app, conv_id))
+                _spawn_background(app, _drain_injections_then_queue(app, conv_id))
 
     return guard
 
@@ -160,6 +203,10 @@ async def start_connectors(app: FastAPI) -> None:
         registry,
         conversations=getattr(app.state, "conversation_service", None),
         turn_guard=_make_turn_guard(app),
+        # Carrier of the /ws/events hub: a channel turn lands in the same conversation
+        # store the web UI renders, so it must broadcast turn_completed or a bound
+        # conversation open in the browser stays stale until F5.
+        app=app,
     )
     setattr(app.state, _ROUTER_ATTR, router)
     await registry.start_all()

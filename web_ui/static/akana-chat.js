@@ -379,16 +379,237 @@
     }
   }
 
-  // Conversations with a LIVE background turn (schedule fire / task) running on the
-  // server. Populated by turn_active, cleared by turn_completed. Lets a thread opened
-  // AFTER the turn started still show the "working…" strip (open-late case).
-  const bgActiveTurns = new Set();
+  // Conversations with LIVE BACKGROUND turns (schedule fire / background_run) running on
+  // the server. Lets a thread opened AFTER the turn started still show the "working…"
+  // strip (open-late case).
+  // A COUNT per conversation, not set membership: a background job and the user's own turn
+  // are live in the SAME conversation at once (engine runs bypass the busy guard), so one
+  // shared slot meant the user's quick reply completing erased a job that kept running for
+  // minutes. Only source:"background" events touch this map — per the turn-lifecycle
+  // contract a MISSING source is the user's own turn, whose progress the local stream
+  // state already shows.
+  const bgActiveTurns = new Map(); // convId -> live background turn count
+
+  /** Turn events without a `source` are the user's own (fail quiet: a missing marker
+   *  must never light up the background-work indicator). */
+  function isBackgroundTurnEvent(evt) {
+    return String((evt && evt.source) || "user") === "background";
+  }
+
+  const bgTurnCount = (id) => bgActiveTurns.get(id) || 0;
+  // Bumped on every marker ADD so a server probe that was already in flight cannot erase
+  // a turn_active that arrived after the answer was taken.
+  let _bgMarkVersion = 0;
+
+  // Symmetric epoch for REMOVAL: the mark version stops a stale idle answer from erasing a
+  // newer marker, but nothing stopped a stale RUNNING answer from re-creating one that was
+  // dropped while it was in flight — the completion is already consumed, so the re-seeded
+  // marker never gets retired (a phantom ticking strip until the chat is re-opened).
+  // PER CONVERSATION: a job ending in one chat says nothing about another chat's probe, and
+  // a shared counter would suppress a rebuild the other conversation genuinely needs.
+  const _bgDropVersions = new Map(); // convId -> drop count
+  const bgDropVersion = (id) => _bgDropVersions.get(id) || 0;
+
+  function addBgTurn(id) {
+    _bgMarkVersion += 1;
+    bgActiveTurns.set(id, bgTurnCount(id) + 1);
+  }
+
+  /** Decrement; true only when the LAST live background turn on that conv ended. */
+  function dropBgTurn(id) {
+    const n = bgTurnCount(id);
+    if (n <= 0) return false;
+    _bgDropVersions.set(id, bgDropVersion(id) + 1);
+    if (n <= 1) {
+      bgActiveTurns.delete(id);
+      return true;
+    }
+    bgActiveTurns.set(id, n - 1);
+    return false;
+  }
+
+  /** Retire the "working…" strip of a conversation whose background work is over.
+   *  The strip is a SINGLETON painted for the displayed chat, so only take it down when
+   *  it belongs to this conversation and no foreground turn owns it. */
+  function endBgWorking(id) {
+    if (!id) return;
+    try {
+      const displayed = conversationIdForMemory() === id;
+      // A LIVE foreground turn in this conversation owns BOTH the strip and the
+      // conversation's clock (the clock is per-conversation, not per-turn). end() is
+      // gated on that — but clear() force-ends whenever it drops the PAINTED
+      // conversation's clock (it must: no active strip may outlive its clock), so it
+      // took the user's own live turn's strip down behind that guard's back. setPhase
+      // cannot revive it (`if (!active) return`), leaving the turn with no indicator for
+      // its whole duration. The background marker is already gone — leave the rest to the
+      // turn that owns it; its own finalize path ends the strip.
+      if (displayed && chatInFlight) return;
+      if (displayed) window.AkanaTurnStatus?.end?.();
+      // Drop this conversation's retained clock too — the job is over, so re-opening
+      // the chat must not restore a dead "working since…" timer.
+      window.AkanaTurnStatus?.clear?.(id);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // ── Reconciliation with server truth ────────────────────────────────────────
+  // bgActiveTurns is otherwise add-only outside WS turn_completed, so ONE missed frame
+  // (server restarted mid-job, WS in reconnect backoff, laptop slept) left a phantom
+  // "working…" strip that only F5 could clear — and after an F5 the map is empty, so work
+  // that IS running was invisible until its completion toast.
+  // WIRE CONTRACT (server side owned by the turn-lifecycle work, not this module) —
+  // GET /api/v1/chat/active/{id}:
+  //   204 → nothing running in that conversation,
+  //   202 {"running": true, "kind": "background"|"nonstreaming", "started_at": ms,
+  //        "background": bool, "background_started_at": ms} → a turn with no follower
+  //       buffer is running. "kind"/"started_at" describe the ONE turn the server reports
+  //       by priority; "background"/"background_started_at" are independent of it, because
+  //       a background job and the user's own nonstreaming turn can be live at once and
+  //       only the flag can say so,
+  //   200 → a live SSE turn (the user's own detached turn) — its body must be released.
+  // Anything else (network error, unreadable body) is a NO-OP: a reconcile that cannot
+  // see the truth must never erase a live job's indicator.
+  const _bgProbePending = new Map(); // convId -> {stale, promise} of the in-flight round
+
+  async function probeConversationActivity(id) {
+    const base = window.AkanaSettings?.baseUrl?.() || "";
+    const headers = window.AkanaSettings?.authHeaders?.() || {};
+    const r = await fetch(`${base}/api/v1/chat/active/${encodeURIComponent(id)}`, { headers });
+    if (!r) return null;
+    // IDLE is the only answer that PROVES a background job ended: while the user's own
+    // turn holds the registry slot the endpoint reports that turn, so a running/200/202
+    // answer says nothing about a background job running alongside it.
+    if (r.status === 204) return { idle: true, background: false };
+    if (r.status === 202) {
+      const body = await r.json().catch(() => ({}));
+      // ``kind`` is ONE label picked by priority server-side (a nonstreaming turn — the
+      // user's own voice/blocking/connector turn — is reported ahead of a background job),
+      // so it cannot answer "is background work ALSO running here?" when both are live in
+      // the same conversation. After F5 that is the only question left: the marker map is
+      // empty, and a kind:"nonstreaming" answer left applyConversationActivity in neither
+      // branch — the job's strip never came back. The independent ``background`` flag
+      // answers it; the ``kind`` fallback keeps this correct against a server without it.
+      const background =
+        body?.background === true || String(body?.kind || "") === "background";
+      // ``started_at`` (epoch ms) is when the turn ``kind`` names really began — with a
+      // nonstreaming turn in front of it that is the OTHER turn's clock, so prefer the
+      // job's own stamp. After F5 this page has no other memory of it, and the strip's
+      // resume() starts fresh for a conversation it holds no clock for — so dropping the
+      // stamp made a job working for minutes read "0:00" on every visit to the chat.
+      const ownStamp = Number(body?.background_started_at);
+      const startedAt =
+        background && Number.isFinite(ownStamp) && ownStamp > 0
+          ? ownStamp
+          : Number(body?.started_at);
+      return { idle: false, background, startedAt };
+    }
+    if (r.status === 200) {
+      // A live follower stream — we only need the status code, so release the body or the
+      // connection stays open for the rest of the turn (same leak resumeActiveTurn fixed).
+      try {
+        await r.body?.cancel();
+      } catch {
+        /* ignore */
+      }
+      return { idle: false, background: false };
+    }
+    return null; // 4xx/5xx — unknown, change nothing
+  }
+
+  async function applyConversationActivity(id) {
+    const markVersion = _bgMarkVersion;
+    const dropVersion = bgDropVersion(id);
+    let state = null;
+    try {
+      state = await probeConversationActivity(id);
+    } catch {
+      state = null;
+    }
+    if (!state) return false;
+    if (state.background) {
+      // Work we had no marker for (page reload / open-late) → rebuild the indicator and
+      // the sidebar badge, otherwise a running job looks dead until it finishes.
+      // NOT when a completion landed while this probe was in flight: that frame is newer
+      // than the answer and is already consumed, so re-seeding here would leave a marker
+      // nothing can ever retire.
+      if (bgTurnCount(id) <= 0 && bgDropVersion(id) === dropVersion) {
+        addBgTurn(id);
+        try {
+          void ensureThreads().refreshArchiveActivity?.(id);
+        } catch {
+          /* ignore */
+        }
+      }
+      // The job's REAL start, before anything paints: resume() keeps the clock a
+      // conversation already has and starts fresh otherwise — which after F5 means 0:00
+      // for a job the server just told us has been running for minutes. noteClock refuses
+      // to overwrite the painted turn's own clock and sanitises an absurd/missing stamp.
+      try {
+        window.AkanaTurnStatus?.noteClock?.(id, state.startedAt);
+      } catch {
+        /* ignore */
+      }
+      maybeShowBgWorking(id, { reconcile: false }); // this IS the reconcile
+      return true;
+    }
+    // Server says the conversation is IDLE. Only retire a marker the probe could actually
+    // have seen: a turn_active that arrived while it was in flight is newer than the answer.
+    // DECREMENT, never delete: two background jobs can be live in one conversation and an
+    // idle answer only proves ONE of them ended. (The other half is server-side —
+    // background_activity.py registers with setdefault/pop and has no refcount, so the
+    // first of two overlapping jobs to finish already makes this endpoint answer 204.)
+    if (state.idle && bgTurnCount(id) > 0 && _bgMarkVersion === markVersion) {
+      if (dropBgTurn(id)) endBgWorking(id); // its completion frame never arrived
+    }
+    return true;
+  }
+
+  /** Reconcile ONE conversation's background-work marker against the server.
+   *  Coalesced per conversation — but a joiner gets a FRESH round, not the in-flight
+   *  answer (see below). */
+  function reconcileBgActiveTurn(convId) {
+    const id = (convId || "").trim();
+    if (!id) return Promise.resolve(false);
+    const pending = _bgProbePending.get(id);
+    if (pending) {
+      // A later caller's TRIGGER is newer than the answer already in flight, which may
+      // have been taken before the job it is being asked about even started. Handing that
+      // answer over is how open-late seeding silently no-opped: no marker, no strip, and
+      // nothing healed it until the chat was re-opened by hand. Mark the round stale
+      // instead — it runs exactly ONE follow-up probe when it lands and every joiner
+      // resolves on THAT answer, so N joiners cost one extra round trip. It cannot loop:
+      // the re-entry path (maybeShowBgWorking → reconcile:false) never joins.
+      pending.stale = true;
+      return pending.promise;
+    }
+    return startBgProbeRound(id).promise;
+  }
+
+  function startBgProbeRound(id) {
+    const entry = { stale: false, promise: null };
+    entry.promise = applyConversationActivity(id)
+      .catch(() => false) // fire-and-forget callers must never see an unhandled rejection
+      .then((res) => {
+        if (_bgProbePending.get(id) === entry) _bgProbePending.delete(id);
+        return entry.stale ? startBgProbeRound(id).promise : res;
+      });
+    _bgProbePending.set(id, entry);
+    return entry;
+  }
 
   /** Show the composer "working…" strip for the displayed conversation if a
-   *  background turn is live on it and the user isn't already streaming a turn. */
-  function maybeShowBgWorking(convId) {
+   *  background turn is live on it and the user isn't already streaming a turn.
+   *  ``reconcile`` (default on) verifies the marker against the server — OPENING a chat is
+   *  the moment a stale marker becomes a phantom strip and a marker lost to F5 becomes a
+   *  missing one. A caller that just received turn_active passes false: its event is newer
+   *  than any answer the probe could give. */
+  function maybeShowBgWorking(convId, opts = {}) {
     const id = (convId || "").trim();
-    if (!id || !bgActiveTurns.has(id)) return;
+    if (!id) return;
+    // Async + guarded against re-entry (the reconcile calls back into here).
+    if (opts.reconcile !== false) void reconcileBgActiveTurn(id);
+    if (bgTurnCount(id) <= 0) return;
     if (chatInFlight) return; // a foreground turn already owns the strip
     if (conversationIdForMemory() !== id) return;
     try {
@@ -403,37 +624,32 @@
     }
   }
 
-  // A background turn STARTED in the conversation currently on screen → working strip.
+  // A turn STARTED in the conversation currently on screen. Only BACKGROUND work drives
+  // the "working…" strip — the user's own turn is already reflected by local stream state.
   async function onTurnActiveRemote(convId, evt) {
-    void evt;
     const id = (convId || "").trim();
     if (!id) return;
-    bgActiveTurns.add(id);
-    maybeShowBgWorking(id);
+    if (!isBackgroundTurnEvent(evt)) return;
+    addBgTurn(id);
+    maybeShowBgWorking(id, { reconcile: false });
   }
 
-  // A background turn started in a NON-displayed conversation → make its (possibly
-  // brand-new) thread appear in the sidebar so the user can open it while it works.
+  // A turn started in a NON-displayed conversation → make its (possibly brand-new) thread
+  // appear in the sidebar so the user can open it while it works.
   async function onBackgroundTurnActive(convId, evt) {
-    void evt;
     const id = (convId || "").trim();
     if (!id) return;
-    bgActiveTurns.add(id);
+    if (isBackgroundTurnEvent(evt)) addBgTurn(id);
     void loadChatArchiveList();
   }
 
   async function onTurnCompletedRemote(convId, evt) {
-    // A live background turn on this conversation just ended → drop the working strip.
+    // A live BACKGROUND turn on this conversation just ended → drop the working strip.
+    // Gated on source: with a job and the user's own quick reply live in the same chat,
+    // the user's completion used to retire the marker and hide a job that kept running.
     const _cid = (convId || "").trim();
-    if (_cid && bgActiveTurns.delete(_cid) && !chatInFlight) {
-      try {
-        window.AkanaTurnStatus?.end?.();
-        // Drop this conversation's retained clock too — the job is over, so re-opening
-        // the chat must not restore a dead "working since…" timer.
-        window.AkanaTurnStatus?.clear?.(_cid);
-      } catch {
-        /* ignore */
-      }
+    if (_cid && isBackgroundTurnEvent(evt) && dropBgTurn(_cid) && !chatInFlight) {
+      endBgWorking(_cid);
     }
     return onTurnCompletedRemoteInner(convId, evt);
   }
@@ -448,6 +664,19 @@
     // concurrent/multi-chat scenario), silently breaking turn-completion handling
     // (silent because it was "(in promise)").
     if (chatInFlight) {
+      // A BACKGROUND turn's completion says NOTHING about the user's own stream — they run
+      // side by side in the same conversation. The rescue below ABORTS a live stream, and
+      // the background completions emitted with no assistant_turn_id (schedule settle /
+      // injection paths) carry no identity for the transport's mismatch guard to reject,
+      // so a job finishing froze the user's answer mid-sentence and flipped the composer
+      // back to SEND while the server turn kept running.
+      let userStreamLive = false;
+      try {
+        userStreamLive = Boolean(ensureTransport().isConversationStreamActive?.(convId));
+      } catch {
+        /* transport unavailable — fall through to the rescue path */
+      }
+      if (isBackgroundTurnEvent(evt) && userStreamLive) return;
       // Stream in flight: normally the SSE `done` line closes "Thinking". But if the
       // SSE is stalled (half-open TCP / stuck follower) done never arrives and the
       // indicator would stay forever. Since the server signals turn completion via a
@@ -513,19 +742,18 @@
   async function onBackgroundTurnCompleted(convId, evt) {
     const id = (convId || "").trim();
     if (!id || conversationIdForMemory() === id) return;
-    bgActiveTurns.delete(id); // the background turn finished
-    // …and its clock, so opening that chat later doesn't resurrect a finished timer.
-    try {
-      window.AkanaTurnStatus?.clear?.(id);
-    } catch {
-      /* ignore */
-    }
+    const wasBackground = isBackgroundTurnEvent(evt);
+    // Only a BACKGROUND completion retires the marker + its clock (another tab's user turn
+    // in this chat must not hide a job that is still running here).
+    if (wasBackground && dropBgTurn(id)) endBgWorking(id);
     void ensureThreads().refreshArchiveActivity?.(id);
     const items = ensureThreads().getChatArchiveItems?.() || [];
     const meta = items.find((c) => c.id === id);
     const title = (meta && meta.title) || "Chat";
     const status = String((evt && evt.status) || "ok");
-    if (status === "ok") {
+    // "the response you walked away from is ready" — only for work the user did NOT send
+    // (a missing source is their own turn) and only when it actually succeeded.
+    if (wasBackground && status === "ok") {
       hooks.showToast?.(window.AkanaI18n.t("chat.bg_response_ready", { title }), "info");
     }
     void loadChatArchiveList();
@@ -716,6 +944,57 @@
     }
     pendingAttachments = [];
     _attachGen += 1; // EC5: in-flight uploads must not be added to this (old) conversation
+    renderAttachmentChips();
+  }
+
+  // ── Per-conversation attachment parking ─────────────────────────────────────
+  // EC2 (never carry attachments INTO another chat) does not require DESTROYING them.
+  // pendingAttachments is one composer-global array while the composer is shared by every
+  // conversation, so the old clear-on-switch silently threw away files the user had already
+  // uploaded — while the typed half of the same message survived the identical A→B→A round
+  // trip (the draft is restored globally). Park the chips under the chat being left and give
+  // them back on return, like the per-conversation scroll offsets; the array is emptied
+  // either way, so no attachment can leak into another chat.
+  const _parkedAttachments = new Map(); // conv key → attachment[]
+  const _parkKey = (convId) => (convId ? String(convId) : "");
+
+  /** Take the composer's attachments out of circulation and store them under `convId`. */
+  function parkPendingAttachments(convId) {
+    const key = _parkKey(convId);
+    if (pendingAttachments.length) _parkedAttachments.set(key, pendingAttachments);
+    else _parkedAttachments.delete(key);
+    pendingAttachments = [];
+    // EC5: an upload still in flight belongs to the chat we just left, not the one we open.
+    // (Its batch is discarded rather than parked — the id never reached the chip list.)
+    _attachGen += 1;
+    renderAttachmentChips();
+  }
+
+  /** The conversation is GONE (deleted): drop whatever is parked under it. Nothing can ever
+   *  restore that slot again, and its preview object URLs would stay alive — pinning the
+   *  image blobs in memory — for the rest of the page session. */
+  function dropParkedAttachments(convId) {
+    if (!convId) return;
+    const parked = _parkedAttachments.get(_parkKey(convId));
+    if (!parked) return;
+    _parkedAttachments.delete(_parkKey(convId));
+    for (const a of parked) {
+      if (a && a.previewUrl) {
+        try {
+          URL.revokeObjectURL(a.previewUrl);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+  }
+
+  /** Put `convId`'s parked attachments back into the composer (empty if it has none). */
+  function restorePendingAttachments(convId) {
+    const key = _parkKey(convId);
+    const parked = _parkedAttachments.get(key);
+    _parkedAttachments.delete(key);
+    pendingAttachments = Array.isArray(parked) ? parked : [];
     renderAttachmentChips();
   }
 
@@ -1162,6 +1441,11 @@
       cancelActiveTurnOnServer: (convId) =>
         ensureTransport().cancelActiveTurnOnServer(convId),
       clearPendingAttachments,
+      // Conversation switches park/restore instead of clearing (see the parking block);
+      // a DELETE has no return trip, so its slot is dropped.
+      parkPendingAttachments,
+      restorePendingAttachments,
+      dropParkedAttachments,
     };
   }
 
@@ -1591,6 +1875,14 @@
       chatInFlight = dispStreaming;
       hooks.setComposerHint?.(dispStreaming ? "thinking" : "idle");
       syncSendButtonMode();
+      // HAND THE STRIP BACK: the user's own turn owned the singleton strip and its
+      // finalize path ends it — but a background job that was already running in this
+      // chat is still working, and nothing repainted for it. The job stayed invisible
+      // until the user navigated away and back. Must run AFTER chatInFlight goes false
+      // (maybeShowBgWorking refuses to paint over a live foreground turn).
+      if (!dispStreaming && dispConv && bgTurnCount(dispConv) > 0) {
+        maybeShowBgWorking(dispConv);
+      }
       if (!queued) void refreshQueueState();
       hooks.syncOrbWithVoice();
       window.AkanaVoice?.resumeWakeListeningIfIdle?.();
@@ -1689,13 +1981,58 @@
     wireChatForm();
     wireComposerAttachments();
     wireThinkingMode();
+    // A background job that was running when the page reloaded has no client-side trace
+    // left — rebuild the indicator from the server before the user concludes it died.
+    try {
+      void reconcileBgActiveTurn(conversationIdForMemory());
+    } catch {
+      /* threads may not be ready — the next conversation open reconciles anyway */
+    }
   }
+
+  // ── Voice conversation mode is PINNED to the chat its scene is showing ──────
+  // Every voice turn samples the conversation id at SUBMIT time, but the displayed
+  // conversation can be retargeted underneath the fullscreen scene (a desktop-notification
+  // click calls switchChatConversation) — the next utterance then lands in, and Stop/barge
+  // cancels, the OTHER chat while the scene still shows this one. Live mode pins its id at
+  // session start (akana-voice.js); the turn-based path pins here.
+  let voicePinnedConvId = null;
+
+  function voiceConversationActive() {
+    try {
+      return Boolean(window.AkanaVoice?.isConversationMode?.());
+    } catch {
+      return false;
+    }
+  }
+
+  async function submitVoiceTurn(text) {
+    if (!voiceConversationActive()) {
+      voicePinnedConvId = null; // single-shot voice follows the displayed chat
+      return submitChatText(text, { voiceTurn: true });
+    }
+    const displayed = conversationIdForMemory() || null;
+    if (!voicePinnedConvId) voicePinnedConvId = displayed;
+    else if (voicePinnedConvId !== displayed) {
+      try {
+        await switchChatConversation(voicePinnedConvId);
+      } catch {
+        /* the pinned chat is gone — fall through and use the displayed one */
+      }
+    }
+    return submitChatText(text, { voiceTurn: true });
+  }
+
+  // The session ended → the next session pins its own chat (a stale pin would drag it back).
+  window.AkanaBus?.on?.("voice:mode:exit", () => {
+    voicePinnedConvId = null;
+  });
 
   window.AkanaChat = {
     init,
     // Voice conversation mode turn: writes to the same chat pipeline with the voiceTurn
     // flag, without touching the composer (shows in log, TTS active).
-    submitVoiceText: (text) => submitChatText(text, { voiceTurn: true }),
+    submitVoiceText: (text) => submitVoiceTurn(text),
     // AskUserQuestion answer: when the user clicks an option on the question card,
     // the selection is sent as a NORMAL typed turn (without touching the composer).
     // Session continues via ``--resume`` → Claude reads the answer as a reply to its question.
@@ -1749,6 +2086,13 @@
     onTurnActiveRemote,
     onBackgroundTurnActive,
     maybeShowBgWorking,
+    // Reconcile one conversation's background-work indicator with the server
+    // (page load / conversation open; also the right call after a WS reconnect).
+    reconcileBgActiveTurn,
+    // The strip's clocks are per CONVERSATION, not per turn: the transport must be able to
+    // ask whether a background job still holds this conversation before it drops the clock
+    // its own stream is finished with (otherwise the job's elapsed restarts at 0:00).
+    hasLiveBackgroundTurn: (convId) => bgTurnCount((convId || "").trim()) > 0,
     setQueueDepth,
     setThinkingProvider,
     // Test-only seam (node-vm contract harness): seed/read the composer's pending

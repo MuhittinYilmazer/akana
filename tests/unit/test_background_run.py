@@ -132,7 +132,7 @@ def _run_engine(tmp_path, llm):
 
     delivered: list[str] = []
 
-    async def fake_deliver(app, s, conv_id, text, *, kind="schedule", title=""):
+    async def fake_deliver(app, s, conv_id, text, *, kind="schedule", title="", **_kw):
         delivered.append(text)
         return "delivered"
 
@@ -213,7 +213,7 @@ def test_the_chat_is_told_work_STARTED_not_just_finished(tmp_path):
     async def fake_active(app, conv_id, **kw):
         events.append(("active", conv_id))
 
-    async def fake_deliver(app, s, conv_id, text, *, kind="schedule", title=""):
+    async def fake_deliver(app, s, conv_id, text, *, kind="schedule", title="", **_kw):
         # the real deliver_or_queue broadcasts turn_completed on delivery
         events.append(("completed", conv_id))
         return "delivered"
@@ -269,7 +269,7 @@ def test_a_failed_job_still_ends_the_working_strip(tmp_path):
     async def fake_active(app, conv_id, **kw):
         events.append("active")
 
-    async def fake_deliver(app, s, conv_id, text, *, kind="schedule", title=""):
+    async def fake_deliver(app, s, conv_id, text, *, kind="schedule", title="", **_kw):
         events.append("completed")
         return "delivered"
 

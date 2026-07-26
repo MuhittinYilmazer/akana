@@ -125,11 +125,34 @@ async def _default_complete(
 
 @dataclass(slots=True)
 class _TurnOutcome:
-    """Result of a single inbound turn: text to return to the channel + persistence decision."""
+    """Result of a single inbound turn: the text to return to the channel + what happened.
+
+    ``status`` is the REAL outcome of the turn ("ok" / "error" / "cancelled") — consumers
+    gate on it, so an LLM failure that becomes :data:`LLM_ERROR_REPLY` must not be
+    reported as finished work. ``finalized`` marks a turn that already went through the
+    egress filter and the archive INSIDE its turn claim (the LLM path); the command
+    replies, which never claim the conversation, are still filtered by the caller."""
 
     text: str
     conversation_id: str | None = None
-    persist: bool = False
+    status: str = "ok"
+    finalized: bool = False
+    assistant_turn_id: str = ""
+
+
+@dataclass(slots=True)
+class _TurnAnnounce:
+    """The ONE ``turn_completed`` an announced channel turn is owed.
+
+    The turn gate emits ``turn_active`` when the conversation is claimed; consumers latch
+    on it (the composer's working strip, the sidebar badge) and only a completion clears
+    them. The gate cannot emit that completion itself — it is released by a generic
+    context manager that knows neither the outcome nor the assistant turn id — so the
+    debt is tracked here and settled on EVERY exit of :meth:`InboundRouter.handle`:
+    success, LLM error, a persist that wrote nothing, and worker cancellation."""
+
+    conv: str | None = None
+    settled: bool = False
 
 
 @dataclass(slots=True)
@@ -168,9 +191,15 @@ class InboundRouter:
         max_concurrency: int = _DEFAULT_MAX_CONCURRENCY,
         max_workers: int = _DEFAULT_MAX_WORKERS,
         turn_guard: Callable[[str | None], Any] | None = None,
+        app: Any | None = None,
     ) -> None:
         self._settings = settings
         self._registry = registry
+        # The FastAPI app, only as the carrier of the /ws/events hub: a channel turn is
+        # written to the SAME conversation store the web UI renders, so it must announce
+        # itself or a bound conversation open in the browser stays stale until F5
+        # (conversation_events module docstring). None (headless / F1 tests) → no-op.
+        self._app = app
         self._complete = complete or _default_complete
         # Per-conversation turn gate (async CM factory). The connector turn awaits
         # this to prevent a concurrent second LLM turn in the SAME conversation
@@ -395,27 +424,43 @@ class InboundRouter:
     # -- single message flow ------------------------------------------------------
 
     async def handle(self, msg: InboundMessage) -> str:
-        """Process a single inbound message end-to-end; returns the final text sent to the channel."""
+        """Process a single inbound message end-to-end; returns the final text sent to the channel.
+
+        Also the single emission point for this turn's ``turn_completed``: exactly one, on
+        every exit path, carrying the real status and (when the pair landed) the assistant
+        turn id the frontend reloads."""
         begin_turn(None, mode="connector", reuse=False)  # each message = fresh trace_id
         started = time.monotonic()
-        outcome = await self._build_outcome(msg)
-        filtered = filter_outbound(outcome.text)
-        if filtered.redacted:
-            self._audit_egress(msg, filtered.matched)
-        if outcome.persist and outcome.conversation_id:
-            # The text VISIBLE on the channel (including egress masking) is written to
-            # the archive — the web UI record matches exactly what was sent to the channel.
-            await self._persist_turn_pair(outcome.conversation_id, msg.text, filtered.text)
-        await self._send_chunks(msg, filtered.text)
-        # Latency observation: queue-to-reply time — the first log to check for slowness.
-        log.info(
-            "connector %s: inbound turn %.2fs (chat=%s, %d char reply)",
-            msg.connector_id,
-            time.monotonic() - started,
-            msg.chat_id,
-            len(filtered.text),
-        )
-        return filtered.text
+        ann = _TurnAnnounce()
+        try:
+            outcome = await self._build_outcome(msg, ann)
+            text = outcome.text
+            if not outcome.finalized:
+                # Command replies (they claim no conversation, so they are not archived)
+                # still go through the egress filter before they leave the process.
+                filtered = filter_outbound(text)
+                if filtered.redacted:
+                    self._audit_egress(msg, filtered.matched)
+                text = filtered.text
+            await self._settle_announced(ann, outcome.status, outcome.assistant_turn_id)
+            await self._send_chunks(msg, text)
+            # Latency observation: queue-to-reply time — the first log to check for slowness.
+            log.info(
+                "connector %s: inbound turn %.2fs (chat=%s, %d char reply)",
+                msg.connector_id,
+                time.monotonic() - started,
+                msg.chat_id,
+                len(text),
+            )
+            return text
+        except asyncio.CancelledError:
+            # The WORKER is being torn down mid-turn (shutdown / live reload). STOP is a
+            # real outcome, not a non-event: without this the announced turn stays latched.
+            await self._settle_announced(ann, "cancelled", "")
+            raise
+        finally:
+            # Backstop: an exit that forgot to settle still releases the indicator.
+            await self._settle_announced(ann, "error", "")
 
     async def _send_chunks(self, msg: InboundMessage, text: str) -> None:
         connector = self._registry.get(msg.connector_id)
@@ -434,7 +479,10 @@ class InboundRouter:
                 )
                 return  # if the first chunk failed, don't force the rest
 
-    async def _build_outcome(self, msg: InboundMessage) -> _TurnOutcome:
+    async def _build_outcome(
+        self, msg: InboundMessage, ann: _TurnAnnounce | None = None
+    ) -> _TurnOutcome:
+        ann = ann if ann is not None else _TurnAnnounce()
         # FULL AUTONOMY: inbound risk/approval policy gate removed — every message
         # flows directly into the command/conversation path.
 
@@ -461,6 +509,15 @@ class InboundRouter:
         # concurrent 2nd LLM + no history race). Without a gate (no-op) old behaviour
         # is preserved exactly.
         async with self._turn_guard(conversation_id) as register_turn:
+            # A non-None yield means the gate CLAIMED the conversation and announced the
+            # turn (``turn_active``): only then does this router owe exactly one
+            # turn_completed for it, on every exit path below. ``None`` means nothing was
+            # claimed — the no-op guard, an empty conversation id, or the degraded
+            # "processing anyway" branch after the gate's wait ceiling — and a turn that
+            # announced nothing must complete nothing, or the completion clears the
+            # indicator of whichever turn IS still live in this conversation.
+            if conversation_id and register_turn is not None:
+                ann.conv = str(conversation_id)
             history = self._history_for(conversation_id)
             system_prompt = self._system_prompt_for(msg, conversation_id)
             turn_task: "asyncio.Task[str] | None" = None
@@ -500,12 +557,44 @@ class InboundRouter:
                 # Only the per-turn child was cancelled (external STOP) → swallow so the worker
                 # survives and processes the next queued message.
                 log.info("connector turn cancelled by STOP (conv=%s)", conversation_id)
-                return _TurnOutcome(text=LLM_ERROR_REPLY)
+                return _TurnOutcome(
+                    text=LLM_ERROR_REPLY,
+                    conversation_id=conversation_id,
+                    status="cancelled",
+                )
             except Exception as e:
                 capture_failure(e, where="connectors.InboundRouter._build_outcome.complete")
-                return _TurnOutcome(text=LLM_ERROR_REPLY)
-        reply = (text or "").strip() or EMPTY_REPLY
-        return _TurnOutcome(text=reply, conversation_id=conversation_id, persist=True)
+                # Nothing to archive, but the conversation id travels with the outcome so
+                # the failure is ANNOUNCED as a failure instead of vanishing.
+                return _TurnOutcome(
+                    text=LLM_ERROR_REPLY,
+                    conversation_id=conversation_id,
+                    status="error",
+                )
+            reply = (text or "").strip() or EMPTY_REPLY
+            # Egress filter + archive INSIDE the claim, deliberately. The text VISIBLE on
+            # the channel (masking included) is what the web UI record must show, and the
+            # claim is what orders it: releasing first lets the very next thing the gate
+            # unblocks — a waiting web turn reading history, or this guard's own post-turn
+            # injection drain — slip its write between this turn's user message and its
+            # answer.
+            filtered = filter_outbound(reply)
+            if filtered.redacted:
+                self._audit_egress(msg, filtered.matched)
+            asst_id = ""
+            if conversation_id:
+                asst_id = await self._persist_turn_pair(
+                    conversation_id, msg.text, filtered.text
+                )
+            return _TurnOutcome(
+                text=filtered.text,
+                conversation_id=conversation_id,
+                # A reply that never reached the store is not a successful turn:
+                # announcing "ok" with no turn id makes the UI reload and find nothing.
+                status="ok" if (asst_id or not conversation_id) else "error",
+                finalized=True,
+                assistant_turn_id=asst_id,
+            )
 
     # -- LLM call (backward-compatible signature) ---------------------------------------
 
@@ -645,10 +734,43 @@ class InboundRouter:
         except Exception:
             return self._max_turns
 
+    async def _settle_announced(
+        self, ann: _TurnAnnounce, status: str, assistant_turn_id: str
+    ) -> None:
+        """Emit the ONE ``turn_completed`` this turn owes (idempotent, never raises).
+
+        A bound conversation is the advertised mirror of the channel, but the turn is
+        appended OUTSIDE the chat SSE flow, so without this push an open web pane shows
+        nothing (no new rows, no sidebar reorder, no activity badge) until the user
+        switches chats or reloads — the exact symptom conversation_events prevents.
+
+        ``source="user"``: the contract defines only "user" and "background", and a
+        channel message IS the user's own send — it must refresh the UI without arming
+        the desktop notifier for a message they just typed on their phone.
+        """
+        if ann.settled or not ann.conv or self._app is None:
+            return
+        ann.settled = True
+        try:
+            from akana_server.conversation_events import broadcast_turn_completed
+
+            await broadcast_turn_completed(
+                self._app,
+                ann.conv,
+                status=str(status or "ok"),
+                assistant_turn_id=assistant_turn_id or None,
+                source="user",
+            )
+        except BaseException:  # noqa: BLE001 - releasing the UI must survive even a cancel
+            log.debug(
+                "connector turn_completed announce failed (conv=%s)", ann.conv, exc_info=True
+            )
+
     async def _persist_turn_pair(
         self, conversation_id: str, user_text: str, assistant_text: str
-    ) -> None:
-        """Write the turn pair through the SAME writer as chat.py (turn_writer).
+    ) -> str:
+        """Write the turn pair through the SAME writer as chat.py (turn_writer); returns
+        the assistant turn id ("" when nothing was written).
 
         b26: the sqlite writes run OFF the event loop (asyncio.to_thread). On the loop they
         blocked the whole server under DB-lock contention (busy_timeout up to 10s + blocking
@@ -656,7 +778,7 @@ class InboundRouter:
         streaming". Every other persist path already offloads; the connector did not.
         """
         if self._conversations is None:
-            return
+            return ""
         try:
             from akana_server.orchestrator.turn_writer import (
                 persist_assistant_turn,
@@ -671,7 +793,7 @@ class InboundRouter:
                 user_text=user_text,
                 data_dir=dd,
             )
-            await asyncio.to_thread(
+            return await asyncio.to_thread(
                 persist_assistant_turn,
                 conversation_id=conversation_id,
                 assistant_text=assistant_text,
@@ -680,6 +802,7 @@ class InboundRouter:
             )
         except Exception as e:  # archive error does not break the reply flow
             capture_failure(e, where="connectors.InboundRouter._persist_turn_pair")
+            return ""
 
     # -- skill injection -------------------------------------------------------
 

@@ -225,8 +225,10 @@
     e.tabs.forEach((t) =>
       t.addEventListener("click", () => setTab(t.dataset.artifactTab)),
     );
-    e.close?.addEventListener("click", close);
-    e.backdrop?.addEventListener("click", close);
+    // Wrapped: close() takes an options object, and a raw listener would hand it the
+    // click Event as options.
+    e.close?.addEventListener("click", () => close());
+    e.backdrop?.addEventListener("click", () => close());
     e.panel.addEventListener("keydown", (ev) => {
       if (ev.key === "Escape") {
         ev.stopPropagation();
@@ -373,7 +375,7 @@
     open({ code, lang: pre.dataset.lang || "", trigger: btn });
   }
 
-  function close() {
+  function close(opts) {
     const e = dom();
     if (!e) return;
     document.body.classList.remove("artifacts-open");
@@ -381,12 +383,27 @@
     e.backdrop?.setAttribute("aria-hidden", "true");
     // Remove iframe → stop running scripts/timers/audio.
     e.preview.replaceChildren();
-    // Return focus to the triggering button (keyboard user must not get lost).
-    if (lastTrigger && document.contains(lastTrigger)) {
+    // Return focus to the triggering button (keyboard user must not get lost) — but NOT on a
+    // conversation switch: that button belongs to the chat being left (possibly in an
+    // LRU-evicted pane), so restoring focus there would yank focus out of the chat just opened.
+    if (!opts?.keepFocus && lastTrigger && document.contains(lastTrigger)) {
       lastTrigger.focus({ preventScroll: true });
     }
+    // The panel is a module singleton shared by every conversation pane: a retained `current`
+    // keeps the closed chat's code alive behind the panel's own Copy/Download/Open actions,
+    // and `lastTrigger` pins a detached DOM subtree once the pane LRU evicts it.
     lastTrigger = null;
+    current = null;
     bus()?.emit("artifact:close", {});
+  }
+
+  /* Conversation switch: nothing else closes or rebinds this singleton, so chat A's artifact
+     stayed open over chat B — the same stranded-shared-widget family as the message action bar
+     and the code-copy capsule, which akana-shell.js showConversation already dismisses.
+     No-op when the panel was never built/opened (do not construct the DOM cache just to close). */
+  function dismissForConversationSwitch() {
+    if (!els || els.panel.getAttribute("aria-hidden") !== "false") return;
+    close({ keepFocus: true });
   }
 
   /* ── Actions ───────────────────────────────────────────────────────────── */
@@ -515,5 +532,6 @@
     open,
     openFromButton,
     close,
+    dismiss: dismissForConversationSwitch,
   };
 })();

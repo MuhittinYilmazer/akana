@@ -232,9 +232,12 @@ def guard_nonstreaming_turn(get_conv_id: Callable[[dict[str, Any]], Any]):
 
         @functools.wraps(fn)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
-            from akana_server.api.routes.chat.streaming import (
-                _register_nonstreaming_turn,
-                _release_nonstreaming_turn,
+            # The PUBLIC turn-gate seam, not the raw registry: register/release also
+            # emit this turn's turn_active/turn_completed. Going straight to the
+            # registry is what left the blocking/voice surface emitting NOTHING.
+            from akana_server.api.routes.chat.turn_gate import (
+                register_turn,
+                release_turn,
             )
 
             request = None
@@ -246,10 +249,10 @@ def guard_nonstreaming_turn(get_conv_id: Callable[[dict[str, Any]], Any]):
             except TypeError:
                 pass
             app = getattr(request, "app", None)
-            token = (
-                _register_nonstreaming_turn(app, conv_id) if app is not None else None
-            )
+            token = register_turn(app, conv_id) if app is not None else None
             cancelled = False
+            # The announced outcome must be the REAL one: consumers gate on it.
+            status = "ok"
             try:
                 return await fn(*args, **kwargs)
             except asyncio.CancelledError:
@@ -257,21 +260,38 @@ def guard_nonstreaming_turn(get_conv_id: Callable[[dict[str, Any]], Any]):
                 # queue (does not auto-run the next message). Record it so the finally skips the
                 # drain, matching the streaming STOP path (status != 'cancelled' gate).
                 cancelled = True
+                status = "cancelled"
+                raise
+            except Exception:
+                status = "error"
                 raise
             finally:
                 if app is not None:
-                    _release_nonstreaming_turn(app, conv_id, token)
+                    release_turn(app, conv_id, token, status=status)
                     # #8 queue drain: when a blocking/voice turn finishes NORMALLY, drain the
                     # next queued message (symmetric with the streaming finally). Otherwise a
-                    # message queued with 202 after a voice/blocking turn hangs forever. Skipped
-                    # on STOP (cancelled) so STOP does not auto-run the queue (b8).
-                    if conv_id and not cancelled:
-                        from akana_server.api.routes.chat.streaming import (
-                            _maybe_drain_queue,
-                            _spawn_background,
+                    # message queued with 202 after a voice/blocking turn hangs forever.
+                    # Parked INJECTIONS drain first, exactly as on the streaming path: a
+                    # background result that became ready during this turn must land BEFORE
+                    # the next queued user message, not wait for some later streaming turn.
+                    # On STOP the QUEUE is deliberately preserved (b8: STOP must not auto-run
+                    # the next message) but the injections still drain — a parked injection is
+                    # a finished background result, not a message waiting to run, and skipping
+                    # it stranded the very answer the user was promised. Same split the
+                    # streaming STOP path makes in ``_announce_turn_finished``.
+                    if conv_id:
+                        from akana_server.api.routes.chat.streaming import _spawn_background
+                        from akana_server.api.routes.chat.chat_detached import (
+                            _drain_injections_only,
+                            _drain_injections_then_queue,
                         )
 
-                        _spawn_background(app, _maybe_drain_queue(app, conv_id))
+                        drain = (
+                            _drain_injections_only(app, conv_id)
+                            if cancelled
+                            else _drain_injections_then_queue(app, conv_id)
+                        )
+                        _spawn_background(app, drain)
 
         return wrapper
 

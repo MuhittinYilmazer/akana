@@ -144,6 +144,30 @@
     if (timer == null) timer = window.setInterval(paint, 1000);
   }
 
+  /**
+   * Remember when a conversation's turn REALLY started, WITHOUT painting anything.
+   * The strip is a singleton bound to the displayed chat, so a turn resumed while another
+   * chat is on screen may not begin() — but dropping the start stamp with it meant
+   * switching back later read "Preparing · 0:00" for a turn that had been running for
+   * minutes (the resume endpoint's X-Akana-Turn-Started was simply discarded).
+   * A missing/absurd value (clock skew, a future stamp) falls back to "now".
+   */
+  function noteClock(convId, startedAtMs) {
+    const id = convId || null;
+    if (id === null) return;
+    // The PAINTED turn owns its own clock — snapshot() keeps it authoritative.
+    if (active && id === turnConvId) return;
+    const now = Date.now();
+    const stamp = Number(startedAtMs);
+    const at = Number.isFinite(stamp) && stamp > 0 && stamp <= now ? stamp : now;
+    const prev = byConv.get(id);
+    byConv.set(id, {
+      startedAt: at,
+      phase: (prev && prev.phase) || "preparing",
+      toolLabel: (prev && prev.toolLabel) || "",
+    });
+  }
+
   function end() {
     active = false;
     if (timer != null) {
@@ -168,11 +192,16 @@
     paint();
   }
 
-  /** Forget a conversation's clock — its turn is over (or the chat is gone). */
+  /** Forget a conversation's clock — its turn is over (or the chat is gone).
+   *  SAFE BY CONSTRUCTION: dropping the clock of the conversation currently PAINTED must
+   *  also take the strip down. Zeroing startedAt while the strip stayed active and its 1 s
+   *  timer kept running made the very next paint render `Date.now() - 0` — an epoch-sized
+   *  elapsed time in the visible chat. No active strip may outlive its clock. */
   function clear(convId) {
     const id = convId || null;
     if (id !== null) byConv.delete(id);
     if (id === null || id === turnConvId) {
+      end();
       startedAt = 0;
       phase = "preparing";
       toolLabel = "";
@@ -184,7 +213,7 @@
     return active;
   }
 
-  window.AkanaTurnStatus = { mount, begin, resume, end, setPhase, isActive, clear };
+  window.AkanaTurnStatus = { mount, begin, resume, end, setPhase, isActive, clear, noteClock };
 
   if (typeof document !== "undefined") {
     if (document.readyState === "loading") {

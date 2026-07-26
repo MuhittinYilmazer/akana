@@ -665,8 +665,16 @@
     // ── On-return turn resume ──────────────────────────────────────────────
     // BACKEND CONTRACT: GET /api/v1/chat/active/{cid}
     //   • NO active turn → 204 No Content
-    //   • Active turn EXISTS → replays the SSE chunks accumulated so far and
-    //     returns a live continuing SSE stream (text/event-stream).
+    //   • A FOLLOWABLE turn (the user's own detached turn, with an SSE buffer) → 200,
+    //     replays the chunks accumulated so far and continues live (text/event-stream).
+    //   • A turn with NO follower buffer (background_run / schedule fire / a blocking or
+    //     voice turn) → 202 {running, kind, started_at}. There is nothing to FOLLOW, so
+    //     this must NOT be handed to the resume path: 202 is 2xx and carries a JSON body,
+    //     so the old `!r.ok || !r.body` test let it through and the caller attached an SSE
+    //     consumer to JSON — an empty assistant bubble that never fills, plus the normal
+    //     log refresh skipped because "a turn was resumed". The background indicator for
+    //     those turns comes from the WS turn_active/turn_completed pair and
+    //     probeConversationActivity (akana-chat.js), not from here.
     // 404/405 (old server / route missing) is also silently treated as "no active turn" (null).
     let _activeProbeInFlight = null;
 
@@ -687,6 +695,16 @@
           );
           if (r.status === 204 || r.status === 404 || r.status === 405) {
             return null; // no active turn (or endpoint not yet available)
+          }
+          if (r.status === 202) {
+            // Running, but not followable (no SSE buffer). Release the JSON body so the
+            // connection does not sit open, and report "nothing to resume".
+            try {
+              await r.body?.cancel();
+            } catch {
+              /* ignore */
+            }
+            return null;
           }
           if (!r.ok || !r.body) return null;
           return r; // live SSE Response — caller reads it
@@ -1648,6 +1666,64 @@
     chatCtx.setConversationId(convId);
   }
 
+  // ── Already-heard audio (resume follower) ──────────────────────────────────
+  // The resume follower replays the server's turn buffer from index 0, so its early
+  // tts_chunk frames are audio the user ALREADY heard — while a turn that is still
+  // running keeps producing new ones behind them. Each chunk carries a per-turn sentence
+  // ``seq``, so the boundary is exactly "the highest sentence this browser session already
+  // handed to the player": at or below it is replay, above it is the tail the user is
+  // waiting for. Mirrored into sessionStorage because the case that needs the boundary
+  // most (F5) is the one that wipes memory. Audio is irreversible once spoken, so a frame
+  // we cannot place (no usable seq, or no mark for this turn — another tab's turn, a fresh
+  // tab) counts as replay and is dropped: that is the old whole-stream behaviour.
+  const _spokenTtsSeq = new Map(); // convId -> {turnId, seq}
+  const SPOKEN_TTS_KEY = "akana.tts.spoken.";
+
+  /** Highest sentence seq already spoken for this conv's turn, or null if unknown. */
+  function spokenTtsMark(convId, turnId) {
+    const cid = String(convId || "").trim();
+    const tid = String(turnId || "").trim();
+    if (!cid || !tid) return null;
+    let mark = _spokenTtsSeq.get(cid);
+    if (!mark) {
+      try {
+        const raw = window.sessionStorage?.getItem(SPOKEN_TTS_KEY + cid);
+        if (raw) mark = JSON.parse(raw);
+      } catch {
+        /* unavailable/unparseable → treat as unknown */
+      }
+      if (mark) _spokenTtsSeq.set(cid, mark);
+    }
+    if (!mark || String(mark.turnId || "") !== tid) return null;
+    const seq = Number(mark.seq);
+    return Number.isFinite(seq) && seq > 0 ? seq : null;
+  }
+
+  function noteSpokenAudio(streamCtx, payload) {
+    const cid = String((streamCtx && streamCtx.convId) || "").trim();
+    const tid = String((streamCtx && streamCtx.turnId) || "").trim();
+    const seq = Number(payload && payload.seq);
+    if (!cid || !tid || !Number.isFinite(seq) || seq <= 0) return;
+    const prev = spokenTtsMark(cid, tid);
+    if (prev != null && prev >= seq) return;
+    const mark = { turnId: tid, seq };
+    _spokenTtsSeq.set(cid, mark);
+    try {
+      window.sessionStorage?.setItem(SPOKEN_TTS_KEY + cid, JSON.stringify(mark));
+    } catch {
+      /* private mode / quota → the in-memory mark still covers a tab-return */
+    }
+  }
+
+  function isAlreadyHeardAudio(streamCtx, payload) {
+    if (!streamCtx || !streamCtx.resumeFollower) return false; // a live stream is never replay
+    const seq = Number(payload && payload.seq);
+    if (!Number.isFinite(seq) || seq <= 0) return true;
+    const mark = spokenTtsMark(streamCtx.convId, streamCtx.turnId);
+    if (mark == null) return true;
+    return seq <= mark;
+  }
+
   function handleChatStreamEvent(f, streamCtx) {
     let payload;
     try {
@@ -1785,10 +1861,16 @@
       // Aurora voice scene: reflect the tool card too (fullscreen overlay hides the
       // chat log → tool cards must appear in the scene). Send the raw call;
       // the overlay derives the same action sentence via AkanaChatRender helpers.
-      try {
-        window.AkanaBus?.emit?.("voice:tool", { call: payload.call || {} });
-      } catch {
-        /* ignore */
+      // FOREGROUND-GATED like the delta/tts/done emits: the scene shows the conversation
+      // being SPOKEN, and akana-voice's watchdog treats every voice:tool as "this turn is
+      // still progressing" — a background job's steady tool events would both show foreign
+      // cards and postpone the stuck-voice-turn rescue indefinitely.
+      if (isForegroundStream(streamCtx)) {
+        try {
+          window.AkanaBus?.emit?.("voice:tool", { call: payload.call || {} });
+        } catch {
+          /* ignore */
+        }
       }
     } else if (f.event === "ask_user") {
       // Claude (headless) asked a structured question → interactive card.
@@ -1837,7 +1919,18 @@
       // read drain here via the catch's `await flushSseQueue()` AFTER
       // streamCtx.aborted=true. Do NOT play audio from an aborted stream — otherwise
       // the cancelled answer re-speaks over the new listening turn.
-      if (payload.audio_b64 && !streamCtx.aborted && isForegroundStream(streamCtx)) {
+      // REPLAY GATE: a resume follower (GET /chat/active) receives the whole buffered
+      // turn from index 0 — audio the user has ALREADY heard. Re-enqueuing it re-speaks
+      // the reply from the start after F5, or duplicates it behind the chunks still in
+      // the player queue after a tab-return. PER FRAME, not per stream: a turn that is
+      // still running has a live tail the user is waiting for, and silencing the whole
+      // follower threw that away too (the point of resuming is to hear the rest).
+      if (
+        payload.audio_b64 &&
+        !streamCtx.aborted &&
+        !isAlreadyHeardAudio(streamCtx, payload) &&
+        isForegroundStream(streamCtx)
+      ) {
         // GEN GATE (defence in depth): on the FIRST tts frame of this stream, capture
         // the ttsPlayer's current accept-gen and carry it with all subsequent chunks.
         // reset() (every cancel path) increments accept-gen → late frames from this
@@ -1847,6 +1940,7 @@
         if (streamCtx._ttsAcceptGen == null) {
           streamCtx._ttsAcceptGen = chatCtx.hooks.ttsPlayer?.acceptGen?.() ?? null;
         }
+        noteSpokenAudio(streamCtx, payload);
         void chatCtx.hooks.ttsPlayer?.enqueue(
           payload.audio_b64,
           payload.mime,
@@ -2184,8 +2278,14 @@
     // This conversation's turn is over: drop its retained elapsed/phase so a later
     // switch back cannot restore a DEAD clock (the strip keeps per-conversation clocks
     // precisely so two concurrent turns don't overwrite each other).
+    // NOT while a BACKGROUND job still holds this conversation: the clocks are per
+    // CONVERSATION, not per turn, so the user's own stream ending would drop the clock the
+    // job is still using and the strip handed back to it would restart at 0:00. Its own
+    // completion (onTurnCompletedRemote → endBgWorking) clears it.
     try {
-      if (typeof key === "string") window.AkanaTurnStatus?.clear?.(key);
+      if (typeof key === "string" && !window.AkanaChat?.hasLiveBackgroundTurn?.(key)) {
+        window.AkanaTurnStatus?.clear?.(key);
+      }
     } catch {
       /* status strip is optional */
     }
@@ -2573,6 +2673,19 @@
         ) {
           return resolve(false);
         }
+        // POSITIVE IDENTITY ONLY. This path ABORTS a live stream, so it must be able to
+        // PROVE the completed turn is THIS stream's turn. Two ways it could not:
+        // a completion with no assistant_turn_id (the schedule/injection settle paths
+        // emit those) identifies nothing at all, and `ctx.turnId` is written by the `meta`
+        // frame — which may not have landed when the completion was broadcast. Aborting
+        // on absent evidence froze the user's own answer mid-sentence with the composer
+        // flipping back to SEND while the server turn kept running. `ctx.turnId` is
+        // re-read HERE, not snapshotted at entry: meta usually arrives during the grace,
+        // which is what makes the mismatch decidable at all. The cost is that a stream
+        // stalled BEFORE its meta is no longer force-closed — a stuck bar, not a
+        // destroyed answer.
+        const liveTurnId = String(ctx.turnId || "").trim();
+        if (!atid || !liveTurnId || atid !== liveTurnId) return resolve(false);
         const wasForeground = isForegroundStream(ctx);
         abortActiveChatStream(cid); // close ONLY this conv's stalled SSE
         // Clear "Responding" ONLY if this stream is the displayed one — a
@@ -2986,7 +3099,21 @@
     } catch {
       /* header unavailable (opaque/proxied response) → fall back to "now" */
     }
-    window.AkanaTurnStatus?.begin(convId, resumedStartedAt);
+    // FOREGROUND GATE (same as the log reload / setStreamingUi above and streamChat's
+    // begin): the strip is a SINGLETON bound to one conversation. probeActiveTurn +
+    // the log reload above are awaits long enough for the user to switch chats, and
+    // begin() would then bind the strip to a conversation that is no longer displayed —
+    // painting its phase/clock over the visible chat with no gated path left to end it
+    // (finalizeStreamUi is foreground-gated, so the background stream's end never calls
+    // AkanaTurnStatus.end()).
+    if (isForegroundConv(convId)) {
+      window.AkanaTurnStatus?.begin(convId, resumedStartedAt);
+    } else {
+      // Not displayed → nothing may be painted, but the turn's real start must still be
+      // retained per conversation: without it, switching to this chat later shows
+      // "Preparing · 0:00" for a turn the server says has been running for minutes.
+      window.AkanaTurnStatus?.noteClock?.(convId, resumedStartedAt);
+    }
 
     const wrap = document.createElement("div");
     wrap.className = "row row-assistant";
@@ -3032,6 +3159,13 @@
       userText: "",
       toolPhaseActive: false,
       convId: convId || null,
+      // GET /chat/active follower: the server replays the detached turn's buffer from
+      // index 0, so the frames up to the re-attach point are ones the live stream already
+      // delivered. Text has its own replay shield (_turnFinalText → REPLACE not APPEND);
+      // audio has none and is irreversible once spoken, so the tts_chunk handler places
+      // each frame by its sentence seq against what this session already spoke
+      // (isAlreadyHeardAudio) — the replayed prefix is dropped, the live tail plays.
+      resumeFollower: true,
       rowEl: wrap, // see streamChat: for reattachLiveRow after a tab switch
     };
 
@@ -3174,7 +3308,16 @@
     if (r.status === 202) {
       const body = await r.json().catch(() => ({}));
       if (body && body.queued) {
-        chatCtx.hooks.setQueueDepth?.(body.depth);
+        // FOREGROUND GATE: the queue chip + SEND↔STOP mode are singletons scoped to the
+        // DISPLAYED conversation (queueDepth>0 forces STOP), and a chat switch during the
+        // connect await above is exactly why boundConvId was pre-sampled. Writing another
+        // conversation's depth here leaves the visible chat with a phantom "1 queued" chip
+        // and a dead STOP button that nothing heals (later queue_updated events for that
+        // conv are isCurrent-gated). Same guard as refreshQueueState's post-await re-check.
+        // The toast stays ungated: it is feedback on the user's OWN send, not chat state.
+        if (isForegroundConv(boundConvId)) {
+          chatCtx.hooks.setQueueDepth?.(body.depth);
+        }
         chatCtx.hooks.showToast?.(window.AkanaI18n.t("transport.toast.queued"), "info");
         return { queued: true, depth: body.depth, item_id: body.item_id };
       }
@@ -3237,7 +3380,14 @@
     if (logRoot) logRoot.dataset.chatStreaming = "1";
     // Tool-queue + SSE-queue reset is streamCtx-scoped and happens inside
     // consumeSseResponse (NO GLOBAL reset here to avoid disrupting concurrent streams).
-    window.AkanaTurnStatus?.setPhase("connecting");
+    // Same foreground gate as the begin() above (no await in between, so the decision is
+    // unchanged): setPhase mutates whatever conversation the singleton strip is currently
+    // bound to AND snapshots that phase into its per-conversation clock — a stream that
+    // lost the foreground during the connect await would flip the displayed chat's strip
+    // to "Connecting" and corrupt its saved phase.
+    if (isForegroundConv(streamConvId)) {
+      window.AkanaTurnStatus?.setPhase("connecting");
+    }
 
     /** Tool/warning nodes live in msg-body, not the row wrapper. */
     function insertBeforeBubble(node) {
@@ -3360,13 +3510,20 @@
       // Aurora voice scene: when the turn ends with an error before producing any text,
       // it used to freeze on "Thinking" forever (chat:stream:done is NOT emitted on
       // this path). Signal a terminal error → scene shows a warning and returns to listening.
-      try {
-        window.AkanaBus?.emit?.("chat:stream:error", {
-          code: serverError.code,
-          message: serverError.message,
-        });
-      } catch {
-        /* ignore */
+      // FOREGROUND-GATED like chat:stream:start/delta/done: this block also runs for
+      // BACKGROUND streams, and the scene's consumer forces "no response" → Listening —
+      // a background conversation's failure would abort the voice turn the user is
+      // actually having. (The record is already unregistered here, so isForegroundStream
+      // resolves via the stream's own convId.)
+      if (isForegroundStream(streamCtx)) {
+        try {
+          window.AkanaBus?.emit?.("chat:stream:error", {
+            code: serverError.code,
+            message: serverError.message,
+          });
+        } catch {
+          /* ignore */
+        }
       }
       const streamErr = new Error(serverError.message || "stream error");
       // Signal to the send-path catch (chat.js) that the error is already on screen as a

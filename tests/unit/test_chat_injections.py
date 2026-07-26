@@ -130,12 +130,14 @@ def test_drain_stops_when_conversation_becomes_busy_again(tmp_path):
 
     import akana_server.chat_injections as ci
 
-    ci_busy = ci.conversation_busy
+    # The drain re-checks a RUNNING turn (not conversation_busy — a queued user
+    # message must not keep a parked result out of the history that turn will read).
+    ci_busy = ci._turn_running
     try:
-        ci.conversation_busy = busy_after_one
+        ci._turn_running = busy_after_one
         delivered = asyncio.run(drain_pending(app, settings, conv))
     finally:
-        ci.conversation_busy = ci_busy
+        ci._turn_running = ci_busy
     assert delivered == 1
     assert len(_load(tmp_path)["pending"][conv]) == 1  # r2 still parked
     _ = orig_busy  # readability
