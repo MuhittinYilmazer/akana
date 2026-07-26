@@ -53,7 +53,13 @@
       const id = (convId || "").trim();
       if (!id) return;
       const cur = getConvActivity(id);
-      conversationActivity.set(id, { ...cur, ...patch });
+      const next = { ...cur, ...patch };
+      // Keep the map to the conversations that are ACTUALLY busy: an idle entry is
+      // indistinguishable from a missing one (getConvActivity defaults to idle), and the
+      // server sweep below writes an entry for EVERY listed row it probes — retaining the
+      // idle ones would let them crowd the un-probed rows out of the sweep budget.
+      if (!next.running && !(Number(next.queueDepth) > 0)) conversationActivity.delete(id);
+      else conversationActivity.set(id, next);
       paintArchiveActivityBadge(id);
     }
 
@@ -132,11 +138,26 @@
           const body = await qr.json().catch(() => ({}));
           patch.queueDepth = Math.max(0, Number(body.depth) || 0);
         }
-        patch.running = ar.status === 200;
-        // GET /chat/active is a live SSE follower on an active turn (buffer replay +
-        // live stream); we only need the status code here — releasing the body avoids
-        // leaking an open follower connection for the remainder of the turn (same class
-        // of leak transport's resumeActiveTurn fixed: see the b17 comment there).
+        // WIRE CONTRACT — GET /api/v1/chat/active/{id}:
+        //   204 → nothing running · 200 → a followable SSE turn (the user's own detached
+        //   turn) · 202 {running, kind:"background"|"nonstreaming"} → running but with no
+        //   follower buffer to attach to.
+        // A background job (schedule fire / background_run) NEVER registers a follower, so
+        // 202 is the ONLY answer it ever gives: reading just `status === 200` made every
+        // running job read as IDLE, and patchConvActivity's idle-delete then erased the
+        // "Responding" badge the WS turn_active had painted — within one sweep cycle.
+        // Anything else (5xx, network blip) is not an answer at all: leaving `running`
+        // unset keeps the current state instead of claiming the job is over.
+        if (ar.status === 202) {
+          const body = await ar.json().catch(() => ({}));
+          patch.running = body?.running !== false;
+        } else if (ar.status === 200 || ar.status === 204) {
+          patch.running = ar.status === 200;
+        }
+        // 200 is a live SSE follower (buffer replay + live stream); we only need the status
+        // code here — releasing the body avoids leaking an open follower connection for the
+        // remainder of the turn (same class of leak transport's resumeActiveTurn fixed: see
+        // the b17 comment there).
         if (ar.status === 200) {
           try {
             await ar.body?.cancel();
@@ -150,10 +171,48 @@
       }
     }
 
+    // conversationActivity is fed ONLY by ws turn_active/queue_updated, so it is EMPTY
+    // after F5 and has a hole for every event missed while the socket was down — while
+    // the turns themselves keep running DETACHED on the server. Probing just the
+    // displayed conversation left every other row claiming nothing was happening for the
+    // whole (possibly multi-minute) life of a background job. Reconcile the LISTED rows
+    // instead. Bounded + throttled because this runs after every list load (background
+    // turn events trigger those) and GET /chat/active is a live SSE follower, not a
+    // one-shot status read.
+    const ACTIVITY_SWEEP_ROWS = 20;
+    const ACTIVITY_SWEEP_MIN_GAP_MS = 10000;
+    let _lastActivitySweepAt = 0;
+
+    async function sweepArchiveActivityFromServer(opts = {}) {
+      const now = Date.now();
+      const cur = ctx.conversationIdForMemory();
+      if (!opts.force && now - _lastActivitySweepAt < ACTIVITY_SWEEP_MIN_GAP_MS) {
+        // Throttled: the displayed conversation still gets its truth on every load.
+        if (cur) await refreshConvActivityFromServer(cur);
+        return;
+      }
+      _lastActivitySweepAt = now;
+      const ids = [];
+      const seen = new Set();
+      const push = (v) => {
+        const id = String(v || "").trim();
+        if (!id || seen.has(id)) return;
+        seen.add(id);
+        ids.push(id);
+      };
+      // Priority order inside the budget: displayed chat, known-busy chats, then the rest
+      // of the visible list (the rows whose state we have never learned from the server).
+      push(cur);
+      for (const id of conversationActivity.keys()) push(id);
+      for (const c of chatArchiveItems) push(c && c.id);
+      await Promise.all(
+        ids.slice(0, ACTIVITY_SWEEP_ROWS).map((id) => refreshConvActivityFromServer(id)),
+      );
+    }
+
     async function refreshKnownArchiveActivity() {
       paintAllArchiveActivityBadges();
-      const cur = ctx.conversationIdForMemory();
-      if (cur) await refreshConvActivityFromServer(cur);
+      await sweepArchiveActivityFromServer();
     }
 
     function wireChatActivityWs() {
@@ -689,6 +748,24 @@
       });
     }
 
+    /** Report a failed list load WITHOUT destroying what is already on screen.
+     *  Both failure paths used to `list.innerHTML = ""` and drop a single error row in,
+     *  bypassing renderChatArchiveList's rename guard. loadChatArchiveList runs on
+     *  BACKGROUND turn events the user does not control, so a transient failure (server
+     *  restart, network blip) could land mid-keystroke: removing a focused input fires no
+     *  blur in Chrome, so the typed title vanished with no PATCH — and a perfectly good
+     *  cached list was blanked with it. A stale-but-real list is not a lie; an empty one is.
+     *  Only a list that has nothing to lose gets the error row. */
+    function showArchiveListError(list, key) {
+      if (list.querySelector(".chat-archive-rename-input")) return;
+      if (list.querySelector(".chat-archive-li")) return;
+      list.innerHTML = "";
+      const li = document.createElement("li");
+      li.className = "chat-archive-empty";
+      li.textContent = window.AkanaI18n.t(key);
+      list.appendChild(li);
+    }
+
     // GENERATION guard across concurrent loaders: search-debounce, conversation-switch,
     // new-chat, delete, and meta-refresh all call loadChatArchiveList. Without the guard,
     // a slow IN-FLIGHT response (e.g. search) would OVERWRITE the result of a MORE RECENT
@@ -753,11 +830,7 @@
         );
         if (myGen !== _archiveListGen) return; // bayat
         if (!r.ok) {
-          list.innerHTML = "";
-          const li = document.createElement("li");
-          li.className = "chat-archive-empty";
-          li.textContent = window.AkanaI18n.t("archive.empty.load_error");
-          list.appendChild(li);
+          showArchiveListError(list, "archive.empty.load_error");
           return;
         }
         const data = await r.json();
@@ -771,11 +844,7 @@
         void refreshKnownArchiveActivity();
       } catch {
         if (myGen !== _archiveListGen) return; // stale — let a newer load write
-        list.innerHTML = "";
-        const li = document.createElement("li");
-        li.className = "chat-archive-empty";
-        li.textContent = window.AkanaI18n.t("archive.empty.conn_error");
-        list.appendChild(li);
+        showArchiveListError(list, "archive.empty.conn_error");
       }
     }
 
@@ -1087,6 +1156,13 @@
           const next = !activeConversationMeta?.pinned;
           void patchConversationApi(id, { pinned: next })
             .then(() => {
+              // EVERY path that PATCHes pinned must keep _convMetaCache in step (the row
+              // action at the pin button above does the same). While a sidebar query is
+              // active the reload re-runs the SEARCH branch, which reads pinned from this
+              // cache because /conversations/search omits it — a stale entry leaves the
+              // search row rendering the OLD pinned state and Pin/Unpin label, visibly
+              // contradicting the thread-bar button right above it.
+              _convMetaCache.set(String(id), { pinned: next });
               bridge.hooks.showToast(next ? window.AkanaI18n.t("archive.toast.pinned") : window.AkanaI18n.t("archive.toast.unpinned"));
               void refreshActiveConversationMeta();
               void loadChatArchiveList();

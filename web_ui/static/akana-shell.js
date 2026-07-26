@@ -1249,6 +1249,10 @@ const _t = (k, p) => window.AkanaI18n?.t(k, p) ?? k;
         // `top` it kept the old scroll extent alive (empty chat scrollable for
         // thousands of px) and floated its Copy button over the new chat.
         _dismissCodeTools?.();
+        // Same family, one level up: the artifact preview panel is a module singleton with no
+        // per-conversation binding, so chat A's artifact stayed open (and its Copy/Download
+        // acted on A's code) over chat B.
+        window.AkanaArtifacts?.dismiss?.();
         // Land at THIS chat's own position instead of inheriting the offset of the chat
         // we just left (the shared scroller keeps it verbatim otherwise). Callers that
         // then hydrate re-apply this via scrollLogToEnd once the content is rendered.

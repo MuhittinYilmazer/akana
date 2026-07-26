@@ -27,6 +27,59 @@
     // (user report: "sometimes the first message I sent reappears as the last message").
     const _sessionPendingTexts = new Set();
 
+    // The messages the SERVER still holds QUEUED for a conversation (202-accepted behind a
+    // running turn; chat_turn_queue). Such a message is in NEITHER source the merge trusts:
+    // it is not in GET /messages until it drains, and after a page load _sessionPendingTexts
+    // is empty by design — so the ghost-guard below would drop it and the user would watch
+    // their message vanish (and retype it → the turn runs twice). Keyed by conversation id;
+    // the values are the server's own text_previews, so comparison happens in that shape.
+    const _serverQueuedPreviews = new Map();
+
+    /** Mirror of the server's chat_turn_queue._preview_text (80 chars, newlines → spaces).
+     *  Must stay in sync with it: the queue endpoint only exposes previews, so this is the
+     *  only shape in which a local pending text can be compared against the server queue. */
+    function previewOfText(text) {
+      const s = String(text ?? "").trim().replace(/\n/g, " ");
+      // CODE POINTS, not UTF-16 code units: the server measures and slices Python `str`
+      // (one unit per code point) while a JS string counts an emoji as two. Measuring in
+      // units made every message containing an astral character produce a DIFFERENT
+      // preview here than on the server — so the F5 queue-rescue never matched it and the
+      // user watched exactly those messages vanish — and a raw slice could even cut a
+      // surrogate pair in half.
+      const cps = Array.from(s);
+      return cps.length <= 80 ? s : `${cps.slice(0, 79).join("")}…`;
+    }
+
+    /** Record (or clear) the previews the server reports as still queued for `convId`.
+     *  Pass an empty list once the queue drains — the message is persisted by then, so the
+     *  merge's server-snapshot match takes over and a leftover preview would keep a real
+     *  ghost alive. */
+    function noteServerQueuedTexts(convId, previews) {
+      const id = (convId || "").trim();
+      if (!id) return;
+      const list = Array.isArray(previews) ? previews.filter((p) => typeof p === "string") : [];
+      if (list.length) _serverQueuedPreviews.set(id, new Set(list));
+      else _serverQueuedPreviews.delete(id);
+    }
+
+    function isServerQueued(thread, txt) {
+      const set = _serverQueuedPreviews.get((thread?.conversationId || "").trim());
+      return Boolean(set && set.has(previewOfText(txt)));
+    }
+
+    /** Would the merge drop this thread's trailing pending as a stale ghost? Callers use it
+     *  to decide whether the server queue is worth a request — i.e. only when a pending row
+     *  exists that THIS page session cannot vouch for (the post-reload case). */
+    function hasUnrecognizedPending(thread) {
+      const msgs = Array.isArray(thread?.messages) ? thread.messages : [];
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        const m = msgs[i];
+        if (!m || (!m._pendingUser && !m._localError)) break;
+        if (m._pendingUser && !_sessionPendingTexts.has((m.text || "").trim())) return true;
+      }
+      return false;
+    }
+
     function chatProfile() {
       return "cursor";
     }
@@ -380,7 +433,10 @@
           // a STALE GHOST revived from localStorage on return from a separate page (/memory)
           // (e.g. quota truncation corrupted the text or a clean merge record was lost) →
           // server has content + no match → would be appended at the end, DROP.
-          if (!serverEmpty && !_sessionPendingTexts.has(txt)) continue;
+          // EXCEPTION: the server itself reports this text as still QUEUED (202, not yet
+          // drained → deliberately absent from the snapshot). That is authoritative
+          // "not a ghost", and it is the only thing that survives a reload.
+          if (!serverEmpty && !_sessionPendingTexts.has(txt) && !isServerQueued(thread, txt)) continue;
         } else if (m._localError) {
           // The server now persists error turns: if this optimistic card's error is
           // already in the snapshot, DROP the local copy (server is source of truth →
@@ -462,6 +518,8 @@
       chatRecordMessage,
       recordPendingUserMessage,
       mergeServerMessages,
+      noteServerQueuedTexts,
+      hasUnrecognizedPending,
       syncThreadConversationId,
       activateThreadForConversation,
       purgeConversationFromChatStore,

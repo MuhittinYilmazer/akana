@@ -170,6 +170,35 @@ const _pipeT = (k, vars) => {
         }
         const convId = window.AkanaChat?.conversationIdForMemory?.();
         if (convId) fd.append("conversation_id", convId);
+        // A1 (cross-pane): /api/v1/voice takes seconds and parallel-chat lets the user open
+        // another chat meanwhile. hooks.appendRow writes into the DISPLAYED pane,
+        // chatRecordMessage into the ACTIVE thread and setConversationId REBINDS that thread
+        // (so the next typed message would go to this voice turn's conversation) — all shared
+        // state that no longer belongs to this turn after a switch. Snapshot the displayed
+        // conversation at POST time; every shared-state write below is gated on it still being
+        // displayed. The turn itself is never lost: syncConversationLogFromServer(convId) is
+        // conversation-targeted and persists it into its OWN thread either way.
+        // The gate needs the SURFACE's identity, not its conversation id: displayedConvId()
+        // is "" for every unbound/new chat (they all share the one new-chat pane), so an
+        // equality test on it matches a DIFFERENT chat and the hijack above still lands when
+        // the user hits "+" mid-flight. "" is not an identity — an unbound surface is
+        // identified by its own ACTIVE THREAD, and a surface with no identity at all
+        // (nothing displayed) can never satisfy the gate.
+        const displayedSurface = () => {
+          const conv = window.AkanaShell?.displayedConvId?.() ?? null;
+          if (conv === null) return null; // no pane displayed
+          if (conv) return `conv:${conv}`;
+          let tid = null;
+          try {
+            tid = window.AkanaChat?.chatActiveThread?.()?.id ?? null;
+          } catch {
+            tid = null;
+          }
+          return tid ? `thread:${tid}` : null;
+        };
+        const surfaceAtPost = displayedSurface();
+        const stillDisplayed = () => surfaceAtPost !== null && displayedSurface() === surfaceAtPost;
+        const appendVoiceRow = (html) => (stillDisplayed() ? bridge.hooks.appendRow(html) : null);
         // Forward any pending visual/PDF attachments from the composer to the voice turn
         // (Gemini/OpenAI see them natively). consumePendingFileIds clears the chips.
         try {
@@ -204,7 +233,7 @@ const _pipeT = (k, vars) => {
               bridge.hooks.setOrb("idle");
               return;
             }
-            bridge.hooks.appendRow(
+            appendVoiceRow(
               `<div class="meta">${_pipeT("voice.meta_voice")} ${r.status}</div><div class="bubble-bot">${escapeHtml(errMsg)}</div>`,
             );
             bridge.hooks.setOrb("err");
@@ -216,11 +245,16 @@ const _pipeT = (k, vars) => {
             bridge.hooks.setOrb("idle");
             return;
           }
-          bridge.hooks.appendRow(
+          appendVoiceRow(
             `<div class="meta">${_pipeT("voice.meta_you_voice")}</div><div class="bubble-user">${escapeHtml(transcript)}</div>`,
           );
-          bridge.hooks.chatRecordMessage({ kind: "user", text: `[voice] ${transcript}` });
-          const assistantRow = bridge.hooks.appendRow(
+          // Optimistic local echo only while this turn's chat is still displayed — otherwise it
+          // would be pushed into the OTHER chat's thread (chatRecordMessage writes to the active
+          // thread). The server sync below restores it into the right thread regardless.
+          if (stillDisplayed()) {
+            bridge.hooks.chatRecordMessage({ kind: "user", text: `[voice] ${transcript}` });
+          }
+          const assistantRow = appendVoiceRow(
             `<div class="meta">${_pipeT("voice.meta_akana_latency", { ms: body.latency_ms })}</div><div class="bubble-bot bubble-assistant"></div>`,
           );
           window.AkanaMarkdown?.applyMarkdownToRow?.(assistantRow, ".bubble-bot", body.text || "");
@@ -238,7 +272,7 @@ const _pipeT = (k, vars) => {
             // otherwise read-aloud fails silently with zero user feedback.
             const retryText = body.text || "";
             const retryLang = bridge.ttsLangFromSpeech ? bridge.ttsLangFromSpeech() : (sl.startsWith("en") ? "en" : "tr");
-            const failRow = bridge.hooks.appendRow(
+            const failRow = appendVoiceRow(
               `<div class="meta">${_pipeT("voice.meta_voice")}</div>` +
                 `<div class="bubble-bot">${escapeHtml(_pipeT("voice.tts_failed_meta"))} ` +
                 (retryText
@@ -276,17 +310,22 @@ const _pipeT = (k, vars) => {
               });
             }
           }
-          if (body.conversation_id) bridge.hooks.setConversationId(body.conversation_id);
+          // setConversationId rebinds the ACTIVE thread and flips the foreground gate, and the
+          // composer is shared — both must stay untouched when the user has moved to another
+          // chat, or their next typed message (and their draft) would be hijacked by this turn.
+          if (stillDisplayed()) {
+            if (body.conversation_id) bridge.hooks.setConversationId(body.conversation_id);
+            bridge.msg.value = "";
+          }
           const convId = body.conversation_id || window.AkanaChat?.conversationIdForMemory?.();
           if (convId) void window.AkanaChat?.syncConversationLogFromServer?.(convId);
-          bridge.msg.value = "";
           bridge.hooks.setOrb("ok");
         } catch (err) {
           if (err && err.name === "AbortError") {
             bridge.hooks.setOrb("idle");
             return;
           }
-          bridge.hooks.appendRow(`<div class="meta">${_pipeT("voice.meta_voice")}</div><div class="bubble-bot">${escapeHtml(String(err))}</div>`);
+          appendVoiceRow(`<div class="meta">${_pipeT("voice.meta_voice")}</div><div class="bubble-bot">${escapeHtml(String(err))}</div>`);
           bridge.hooks.setOrb("err");
         } finally {
           if (bridge.voice.voiceFetchAbort === fetchAbort) bridge.voice.voiceFetchAbort = null;

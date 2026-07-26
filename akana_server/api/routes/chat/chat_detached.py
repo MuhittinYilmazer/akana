@@ -89,6 +89,45 @@ class ConversationNotUsable(RuntimeError):
     """
 
 
+def _completion_tokens(app: Any) -> set[object]:
+    """Turns that have announced a start and still owe exactly one completion."""
+    reg = getattr(app.state, "chat_turn_completion_tokens", None)
+    if not isinstance(reg, set):
+        reg = set()
+        app.state.chat_turn_completion_tokens = reg
+    return reg
+
+
+def _arm_completion(app: Any) -> object:
+    token = object()
+    _completion_tokens(app).add(token)
+    return token
+
+
+def _take_completion(app: Any, token: object | None) -> bool:
+    """Claim the right to announce this turn's completion (at most one caller wins)."""
+    if token is None:
+        return True  # no token (direct/legacy call) → the caller is the only announcer
+    reg = _completion_tokens(app)
+    if token not in reg:
+        return False
+    reg.discard(token)
+    return True
+
+
+def _completion_watchdog(app: Any, turn: _ActiveTurn, token: object):
+    def _on_done(task: "asyncio.Task[None]") -> None:
+        if getattr(app.state, "chat_shutting_down", False):
+            _take_completion(app, token)  # the process is going away; no consumer left
+            return
+        if not _take_completion(app, token):
+            return  # the turn's own finally already announced
+        status = "cancelled" if task.cancelled() else (turn.status or "ok")
+        _spawn_background(app, _announce_turn_finished(app, turn, status))
+
+    return _on_done
+
+
 async def _claim_and_run(
     app: Any,
     conv_id: str,
@@ -117,10 +156,23 @@ async def _claim_and_run(
         raise TurnAlreadyRunning(f"turn already running for {conv_id}")
     turn = _ActiveTurn(conversation_id=conv_id)
     reg[conv_id] = turn
-    turn.task = asyncio.create_task(_run_turn_detached(app, gen, turn))
+    # ONE completion announcement per turn, guaranteed on every exit path: the producer's
+    # own finally normally makes it, and the task done-callback is the fail-safe for the
+    # path the finally cannot cover — a STOP landing before the task ever ran closes the
+    # coroutine WITHOUT executing it, so the turn_active broadcast below would have had no
+    # answer at all. Whoever takes the token first announces; the other becomes a no-op.
+    token = _arm_completion(app)
+    turn.task = asyncio.create_task(_run_turn_detached(app, gen, turn, token=token))
+    turn.task.add_done_callback(_completion_watchdog(app, turn, token))
     if hub is not None:
         try:
-            await hub.broadcast_json({"type": "turn_active", "conversation_id": conv_id})
+            # source="user": the sender is watching this turn (their own send). Consumers
+            # that announce results — the desktop notifier, the background-work strip —
+            # must skip it; only "background" work is announced. See _run_turn_detached's
+            # finally for the matching turn_completed on EVERY exit path.
+            await hub.broadcast_json(
+                {"type": "turn_active", "conversation_id": conv_id, "source": "user"}
+            )
         except Exception:
             log.debug("turn_active broadcast failed (conv=%s)", conv_id, exc_info=True)
     return turn
@@ -205,14 +257,27 @@ async def _command_turn_gen(
     yield meta
     if resp.text:
         yield delta
+    user_ok: list[bool] = []
     try:
         user_turn_id = await _persist_user_turn_start(
             request,
             conversation_id=conv_id,
             user_text=body.text,
             lang=body.lang,
+            ok_out=user_ok,
         )
-        if resp.text and _conversation_chat_usable(request.app, conv_id):
+        # An answer with no question is the one loss that keeps causing damage: it is
+        # replayed as LLM history, so the next turn answers — then contradicts — a
+        # request nobody can see. Same rule as the LLM turn paths, and it must match
+        # routes._persist_command_response exactly: an asymmetry between the live and
+        # the drained command path would be worse than either behaviour alone.
+        if not (user_ok and user_ok[0]):
+            log.warning(
+                "queued command turn NOT ARCHIVED (conv=%s): its user turn did not reach "
+                "the store; the reply is delivered anyway",
+                conv_id,
+            )
+        elif resp.text and _conversation_chat_usable(request.app, conv_id):
             settings = getattr(request.app.state, "settings", None)
             await _off_loop(
                 _chatpkg.persist_assistant_turn,
@@ -334,6 +399,28 @@ async def _rescue_dropped_queue_item(
     _ = user_turn_id  # persisted for the log re-fetch; no follower to hand it to
 
 
+def _cleanup_epoch(app: Any, conv_id: str) -> int:
+    """How many times this conversation has been reset/deleted (a monotonic marker).
+
+    A drain that is awaiting its gates holds the popped item in a LOCAL variable; when
+    it wakes it must tell "STOP took my slot" (the item is preserved at the front of the
+    queue) from "a reset/delete emptied this conversation" (the item is gone with it).
+    Both look identical in the registry, so the requeue resurrected a message the user
+    had just cleared — and the next send replayed a pre-reset turn into the empty chat.
+    """
+    reg = getattr(app.state, "chat_cleanup_epochs", None)
+    if not isinstance(reg, dict):
+        reg = {}
+        app.state.chat_cleanup_epochs = reg
+    return int(reg.get(conv_id, 0))
+
+
+def _bump_cleanup_epoch(app: Any, conv_id: str) -> None:
+    _cleanup_epoch(app, conv_id)  # ensure the registry exists
+    reg = app.state.chat_cleanup_epochs
+    reg[conv_id] = int(reg.get(conv_id, 0)) + 1
+
+
 async def _maybe_drain_queue(app: Any, conversation_id: str) -> None:
     """When a turn finishes/after STOP, start the next queued message as a separate turn."""
     from akana_server.api.routes import chat as _chatpkg
@@ -360,6 +447,7 @@ async def _maybe_drain_queue(app: Any, conversation_id: str) -> None:
     reg = _active_turns(app)
     placeholder = _ActiveTurn(conversation_id=conv_id, placeholder=True)
     reg[conv_id] = placeholder
+    epoch_at_pop = _cleanup_epoch(app, conv_id)
 
     def _drop_placeholder() -> None:
         if reg.get(conv_id) is placeholder:
@@ -403,7 +491,11 @@ async def _maybe_drain_queue(app: Any, conversation_id: str) -> None:
     # the queue") and return WITHOUT starting the turn. Otherwise _start_detached_* below
     # would find an empty slot and run the very turn the user just cancelled.
     if reg.get(conv_id) is not placeholder:
-        requeue_front(app, conv_id, item)
+        # …unless a RESET/DELETE took the slot instead of a STOP: that cleared the queue
+        # on purpose, and requeue_front would setdefault-recreate it with the pre-reset
+        # message the user believes is gone.
+        if _cleanup_epoch(app, conv_id) == epoch_at_pop:
+            requeue_front(app, conv_id, item)
         await _broadcast_queue_updated(app, conv_id)
         return
     try:
@@ -438,6 +530,25 @@ async def _maybe_drain_queue(app: Any, conversation_id: str) -> None:
     await _broadcast_queue_updated(app, conv_id)
 
 
+async def _drain_injections_only(app: Any, conversation_id: str) -> None:
+    """Deliver parked background results WITHOUT touching the user message queue.
+
+    The STOP path: the queue is deliberately preserved (K4), but the injection inbox
+    holds already-computed background results whose contract is "delivered right after
+    the turn ends". ``drain_pending`` re-checks busyness per item, so a preserved queued
+    message still holds them back. Never raises."""
+    try:
+        from akana_server.chat_injections import drain_pending
+
+        settings = getattr(app.state, "settings", None)
+        if settings is not None:
+            await drain_pending(app, settings, conversation_id)
+    except Exception:  # noqa: BLE001 - delivery is best-effort, never fatal
+        log.warning(
+            "post-cancel injection drain failed (conv=%s)", conversation_id, exc_info=True
+        )
+
+
 async def _drain_injections_then_queue(app: Any, conversation_id: str) -> None:
     """Post-turn drain, in ORDER: parked background injections FIRST, then the
     next queued user message.
@@ -461,7 +572,79 @@ async def _drain_injections_then_queue(app: Any, conversation_id: str) -> None:
     await _maybe_drain_queue(app, conversation_id)
 
 
-async def _run_turn_detached(app: Any, gen: AsyncIterator[bytes], turn: _ActiveTurn) -> None:
+def _sse_chunk_is_error(chunk: bytes) -> bool:
+    """True when this SSE chunk carries an ``error`` event.
+
+    The turn's OUTCOME is not "did the producer raise": every ordinary LLM failure
+    (rate limit, timeout, unavailable, stream error) is caught inside
+    ``_stream_chat_response``, emitted as an ``error`` SSE tail, and the generator then
+    returns NORMALLY. Reporting those as status="ok" made the background consumer toast
+    "response ready" for a turn that actually failed. Matched on the event LINE (data
+    lines are JSON with escaped newlines, so a reply mentioning the words can't fake it).
+    """
+    if b"event: error" not in chunk:
+        return False
+    try:
+        text = chunk.decode("utf-8")
+    except Exception:
+        return False
+    return any(line.strip() == "event: error" for line in text.splitlines())
+
+
+async def _announce_turn_finished(app: Any, turn: _ActiveTurn, status: str) -> None:
+    """Broadcast this turn's outcome and run the post-turn drain that outcome implies.
+
+    EVERY exit path lands here — success, error AND cancelled. The cancelled path used to
+    announce nothing at all, so every consumer that latches on the paired turn_active (the
+    composer working strip, the sidebar "Responding" badge) waited forever for a clear
+    that would never come: after STOP the chat showed a phantom ticking strip on every
+    revisit. STOP is a real outcome, not a non-event."""
+    hub = getattr(app.state, "event_hub", None)
+    if isinstance(hub, EventHub):
+        payload: dict[str, Any] = {
+            "type": "turn_completed",
+            "conversation_id": turn.conversation_id,
+            "status": status,
+            # The USER's own turn (they sent it and are waiting for it): consumers that
+            # announce results — the desktop notifier — must skip these, or every reply
+            # finishing in a hidden tab pops a notification claiming background work
+            # finished. Background producers stamp "background".
+            "source": "user",
+        }
+        if turn.assistant_turn_id:
+            payload["assistant_turn_id"] = turn.assistant_turn_id
+        try:
+            await hub.broadcast_json(payload)
+        except Exception:  # a broadcast failure can't break the persisted turn
+            log.warning(
+                "turn_completed broadcast failed (conv=%s)",
+                turn.conversation_id,
+                exc_info=True,
+            )
+    # Do NOT SPAWN a drain during shutdown: a completing turn's finally could refill the
+    # drained task set and spawn a NEW turn during shutdown (shutdown_background_tasks
+    # already cancels in-flight ones; the queue is in-memory and does not survive a
+    # restart — see _surface_queue_dropped_at_shutdown).
+    if getattr(app.state, "chat_shutting_down", False):
+        return
+    if status != "cancelled":
+        _spawn_background(app, _drain_injections_then_queue(app, turn.conversation_id))
+        return
+    # STOP preserves the QUEUE (design K4: queued user messages are kept, not auto-run) —
+    # but a parked INJECTION is a finished background result, not a message waiting to
+    # run: delivering it starts no turn, and skipping it stranded the very result the user
+    # was promised ("I'll post it here when it's done").
+    _spawn_background(app, _drain_injections_only(app, turn.conversation_id))
+    await _broadcast_queue_updated(app, turn.conversation_id)
+
+
+async def _run_turn_detached(
+    app: Any,
+    gen: AsyncIterator[bytes],
+    turn: _ActiveTurn,
+    *,
+    token: object | None = None,
+) -> None:
     """The turn producer — writes SSE chunks to the buffer, runs independent of the client.
 
     Cancellation (server shutdown) lands inside the generator as a CancelledError;
@@ -478,6 +661,8 @@ async def _run_turn_detached(app: Any, gen: AsyncIterator[bytes], turn: _ActiveT
     status = "ok"
     try:
         async for chunk in gen:
+            if status == "ok" and _sse_chunk_is_error(chunk):
+                status = "error"
             await _append_chunk(turn, chunk)
     except asyncio.CancelledError:
         status = "cancelled"
@@ -500,39 +685,8 @@ async def _run_turn_detached(app: Any, gen: AsyncIterator[bytes], turn: _ActiveT
         reg = _active_turns(app)
         if reg.get(turn.conversation_id) is turn:
             reg.pop(turn.conversation_id, None)
-        if status != "cancelled":
-            hub = getattr(app.state, "event_hub", None)
-            if isinstance(hub, EventHub):
-                payload: dict[str, Any] = {
-                    "type": "turn_completed",
-                    "conversation_id": turn.conversation_id,
-                    "status": status,
-                    # The USER's own turn (they sent it and are waiting for it): consumers
-                    # that announce results — the desktop notifier — must skip these, or
-                    # every reply finishing in a hidden tab pops a notification claiming
-                    # background work finished. Background producers stamp "background".
-                    "source": "user",
-                }
-                if turn.assistant_turn_id:
-                    payload["assistant_turn_id"] = turn.assistant_turn_id
-                try:
-                    await hub.broadcast_json(payload)
-                except Exception:  # a broadcast failure can't break the persisted turn
-                    log.warning(
-                        "turn_completed broadcast failed (conv=%s)",
-                        turn.conversation_id,
-                        exc_info=True,
-                    )
-            # Do NOT SPAWN a drain during shutdown: a normally-completing turn's
-            # (status != cancelled) finally could refill the drained task set and spawn
-            # a new turn during shutdown. Skip if the flag is set (shutdown_background_tasks
-            # already cancels in-flight ones; the queue is recovered at server startup).
-            if not getattr(app.state, "chat_shutting_down", False):
-                _spawn_background(
-                    app, _drain_injections_then_queue(app, turn.conversation_id)
-                )
-        else:
-            await _broadcast_queue_updated(app, turn.conversation_id)
+        if _take_completion(app, token):
+            await _announce_turn_finished(app, turn, status)
 
 
 async def _follow_turn(turn: _ActiveTurn) -> AsyncIterator[bytes]:
@@ -566,6 +720,12 @@ async def shutdown_active_turns(app: Any) -> None:
     """Lifespan shutdown: cleanly cancel running turns (the partial persist is preserved)."""
     reg = getattr(app.state, "active_turns", None)
     if not isinstance(reg, dict) or not reg:
+        # A STOP leaves a preserved queue behind with NO active turn — those messages
+        # were still acknowledged with 202 and must not vanish unannounced either.
+        await _surface_queue_dropped_at_shutdown(app)
+        clear_all = getattr(app.state, "chat_turn_queues", None)
+        if isinstance(clear_all, dict):
+            clear_all.clear()
         return
     turns = [t for t in reg.values() if isinstance(t, _ActiveTurn)]
     settings = getattr(app.state, "settings", None)
@@ -578,9 +738,46 @@ async def shutdown_active_turns(app: Any) -> None:
         for turn in turns:
             await _close_bridge_session(settings, turn.conversation_id)
     reg.clear()
+    await _surface_queue_dropped_at_shutdown(app)
     clear_all = getattr(app.state, "chat_turn_queues", None)
     if isinstance(clear_all, dict):
         clear_all.clear()
+
+
+#: Shown in place of a queued message the restart threw away.
+_SHUTDOWN_DROP_MESSAGE = (
+    "The server restarted before this message could be answered — please send it again."
+)
+
+
+async def _surface_queue_dropped_at_shutdown(app: Any) -> None:
+    """Persist an error marker for every queued message the shutdown is about to drop.
+
+    The queue is in-memory: a restart clears it. But the client was told **202
+    queued** — the same promise the gate-failure rescue exists to honour — so
+    dropping the message with no trace, no error turn and no sign in the log breaks it
+    silently: the user sees a message they typed simply gone. Best-effort: a persist
+    failure must never stall shutdown."""
+    queues = getattr(app.state, "chat_turn_queues", None)
+    if not isinstance(queues, dict) or not queues:
+        return
+    req = _synthetic_request(app)
+    for conv_id, q in list(queues.items()):
+        for item in list(q or []):
+            try:
+                body = ChatRequest.model_validate(item.payload)
+            except Exception:
+                continue
+            try:
+                await _rescue_dropped_queue_item(
+                    app, req, conv_id, body, RuntimeError(_SHUTDOWN_DROP_MESSAGE)
+                )
+            except Exception:  # noqa: BLE001 - shutdown must not be blocked by a write
+                log.warning(
+                    "could not surface the shutdown-dropped queue item (conv=%s)",
+                    conv_id,
+                    exc_info=True,
+                )
 
 
 async def shutdown_background_tasks(app: Any) -> None:
@@ -692,6 +889,9 @@ async def cleanup_conversation_chat_state(
     conv_id = (conversation_id or "").strip()
     if not conv_id:
         return
+    # Bumped BEFORE the cancel: a queue drain suspended on its gates must see, when it
+    # wakes, that its popped item was cleared by this cleanup and not by a STOP.
+    _bump_cleanup_epoch(app, conv_id)
     if tombstone:
         _chat_cleanup_tombstones(app).add(conv_id)
     # DELETE (tombstone=True): cancel the turn but do NOT WAIT for its finally → the

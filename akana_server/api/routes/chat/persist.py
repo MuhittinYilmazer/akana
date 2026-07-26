@@ -87,27 +87,6 @@ def _conversation_tombstoned(app: Any, conversation_id: str) -> bool:
         return False
 
 
-def _user_turn_persisted(data_dir: Any, turn_id: str) -> bool:
-    """True ONLY if the user turn row is DURABLY present in episodic.
-
-    The write goes through ``turn_writer._persist_turn``, which catches every db error
-    internally (LOUD ``log.error``, then ``return`` — it never raises), so a normal return
-    from ``persist_user_turn`` does NOT prove the row was written. This confirms durability
-    by reading the row back. Conservative on ambiguity: a missing ``data_dir`` (the writer
-    couldn't have written) → False; a verify-read that itself errors is INCONCLUSIVE →
-    True, so a transient read hiccup doesn't force a needless duplicate user write.
-    """
-    if data_dir is None:
-        return False
-    try:
-        return get_memory_core(data_dir).episodic.get_turn(turn_id) is not None
-    except Exception:  # a durability probe must never break the turn — treat as inconclusive
-        log.debug(
-            "user-turn durability probe failed (turn=%s) — assuming written", turn_id, exc_info=True
-        )
-        return True
-
-
 async def _persist_user_turn_start(
     request: Request,
     *,
@@ -130,6 +109,11 @@ async def _persist_user_turn_start(
     when the write was attempted and failed (swallowed). A caller that gates an idempotency
     flag on this must not mark the turn persisted on ``False``, else a failed write leaves a
     dangling answerless assistant turn.
+
+    The RETURN VALUE is the turn's IDENTITY, never a receipt: callers link the assistant
+    turn to it (and some mint none of their own), so it stays a usable id even when the
+    row did not land — otherwise a swallowed failure would silently write the answer with
+    an empty ``user_turn_id``. Durability travels in ``ok_out`` and nowhere else.
     """
     conv_svc = conversation_service(request)
     if not _conversation_chat_usable(request.app, conversation_id):
@@ -168,16 +152,15 @@ async def _persist_user_turn_start(
             data_dir=data_dir,
         )
         if ok_out is not None:
-            # turn_writer._persist_turn swallows ALL db errors internally (LOUD log, then
-            # ``return`` — it never raises), so ``persist_user_turn`` returns a turn id even
-            # when the row was NOT written (lock/disk exhausted the 3 internal retries). A
-            # normal return therefore does not prove durability → confirm the row actually
-            # landed before signalling True, else the caller marks the user turn persisted
-            # and the assistant turn lands with no preceding user turn (dangling turn +
-            # off-by-one counter). Only downgrade to False on a POSITIVE "row missing"; a
-            # verify-read error is inconclusive → keep True (no spurious retry).
-            ok_out.append(await _off_loop(_user_turn_persisted, data_dir, tid))
-        return tid
+            # ``persist_user_turn`` returns "" when nothing was stored — turn_writer asks
+            # the store itself before reporting a loss — so the receipt IS the durability
+            # answer and a read-back would only add a second, weaker opinion (it has to
+            # treat its own read errors as "assume written"). A truthy id means the row is
+            # in episodic; "" means it is not, and the caller must not mark the user turn
+            # persisted, else the assistant turn lands with no preceding user turn
+            # (dangling turn + off-by-one counter).
+            ok_out.append(bool(tid))
+        return tid or user_turn_id or str(ulid.new())
     except Exception:
         log.warning(
             "user turn could not be persisted (conv=%s); the chat stream continues",
@@ -448,6 +431,8 @@ async def _persist_assistant_turn_end(
     stage_captures: bool = True,
     usage: dict[str, Any] | None = None,
     ask_user: dict[str, Any] | None = None,
+    user_turn_ok: bool = True,
+    ok_out: list[bool] | None = None,
 ) -> list[dict[str, str]]:
     """Write assistant message after stream/LLM completes; optional memory capture.
 
@@ -460,8 +445,35 @@ async def _persist_assistant_turn_end(
     background AFTER ``done`` (``_capture_memory_background``); otherwise the "Typing"
     indicator stays stuck until that 2nd LLM call finishes. The blocking surface
     (a one-shot response) keeps capture inline with the default ``True``.
+
+    ``ok_out`` (optional): exactly one bool is appended — ``True`` when the assistant row
+    is durably in ``memory.db`` (or the write was an intentional skip on a deleted
+    conversation), ``False`` when it was attempted and nothing landed. The returned
+    ``memory_writes`` list is a UI payload, not a receipt; a caller that gates its "this
+    turn is safe" flag on the CALL rather than on this signal skips its own rescue
+    re-persist and announces a turn id with no row behind it.
+
+    ``user_turn_ok=False`` means the paired user row is known to be MISSING → the assistant
+    row is NOT written. A turn pair is atomic in meaning: an answer with no question is
+    worse than a lost pair, because ``recent_llm_messages`` feeds it to the next turn as
+    history and the assistant then contradicts a question nobody can see. The caller's
+    rescue path re-writes the PAIR (user first), which is the only way this turn can land.
     """
     if not _conversation_chat_usable(request.app, conversation_id):
+        if ok_out is not None:
+            # Intentional skip (deleted/soft-deleted conv) — durably handled: a retry here
+            # would resurrect a conversation the user removed.
+            ok_out.append(True)
+        return []
+    if not user_turn_ok:
+        log.warning(
+            "assistant turn NOT written (conv=%s turn=%s): its user turn is not in the store"
+            " — an answer with no question would be replayed as LLM history next turn",
+            conversation_id,
+            assistant_turn_id,
+        )
+        if ok_out is not None:
+            ok_out.append(False)
         return []
     settings = getattr(request.app.state, "settings", None)
     from akana_server.api.routes.chat import persist_assistant_turn  # patch surface
@@ -486,9 +498,18 @@ async def _persist_assistant_turn_end(
             conversation_id,
             exc_info=True,
         )
+        if ok_out is not None:
+            ok_out.append(False)
         return []
     if not asst_id:
+        # "" = blank body OR a write the store swallowed; either way there is NO row, which
+        # is the only thing a caller may act on. Reporting the two rows below for an id that
+        # was merely minted is what made the client reload the log and find nothing.
+        if ok_out is not None:
+            ok_out.append(False)
         return []
+    if ok_out is not None:
+        ok_out.append(True)
     writes: list[dict[str, str]] = [
         {"id": user_turn_id, "kind": "episodic"},
         {"id": asst_id, "kind": "episodic"},

@@ -132,12 +132,37 @@ def _mcp_servers(settings: Any, conversation_id: str | None) -> dict[str, Any] |
         return None
 
 
+class TurnPairNotStored(RuntimeError):
+    """The (prompt → result) pair did not reach ``memory.db``.
+
+    RAISED, not returned: the only way this failure has ever gone unnoticed is a
+    caller dropping the writer's receipt on the floor, which is exactly what this
+    function used to invite. A run whose result was never stored was recorded
+    "ok", rolled forward, bound to the thread and toasted as ready — so the user
+    opened an EMPTY conversation and the briefing was gone for good. An exception
+    cannot be discarded by accident, and the delivery block above already turns a
+    thread failure into a failed target + a note.
+    """
+
+
 def _append_turn_pair(
     data_dir: Any, conversation_id: str, prompt: str, result: str
 ) -> None:
     """Write the (prompt → result) pair into a conversation via the SAME single
     writer chat/voice use (``turn_writer``). Factored out as a module function so
-    tests can patch it without a real ``memory.db``."""
+    tests can patch it without a real ``memory.db``.
+
+    The writer returns "" for a turn that did not land, and BOTH receipts are
+    checked: delivery means the exchange is readable afterwards, not that a write
+    was attempted. Raises :class:`TurnPairNotStored` when either row is missing.
+
+    HALF-PAIR: once the prompt row is lost the result row is NOT attempted. An
+    assistant turn with no question is worse than no turn at all — it is fed to the
+    next run as LLM history, so the model answers a request it cannot see and
+    contradicts itself. A dangling prompt row (result lost) is left in place: it is
+    the user's own text, and deleting it would be a second write in a store that
+    just proved it cannot take one.
+    """
     from akana_server.orchestrator.turn_writer import (
         persist_assistant_turn,
         persist_user_turn,
@@ -147,12 +172,19 @@ def _append_turn_pair(
     uid = persist_user_turn(
         conversation_id=conversation_id, user_text=prompt, data_dir=dd
     )
-    persist_assistant_turn(
+    if not uid:
+        raise TurnPairNotStored(
+            f"prompt turn was not stored (conv={conversation_id})"
+        )
+    if not persist_assistant_turn(
         conversation_id=conversation_id,
         assistant_text=result,
         user_turn_id=uid,
         data_dir=dd,
-    )
+    ):
+        raise TurnPairNotStored(
+            f"result turn was not stored (conv={conversation_id})"
+        )
 
 
 def _deliver_thread(
@@ -163,7 +195,11 @@ def _deliver_thread(
     Reuses ``item.delivery.conversation_id`` when it still exists; otherwise
     creates a NEW conversation titled from the schedule (so a recurring schedule
     keeps landing in one growing thread once the id is written back by
-    ``mark_ran``). Returns ``None`` when no conversation service is available."""
+    ``mark_ran``). Returns ``None`` when no conversation service is available.
+
+    Propagates :class:`TurnPairNotStored`: a thread that received no turns is not a
+    delivery. Returning its id would make ``mark_ran`` record "ok", roll the
+    schedule forward and bind it to a conversation that holds nothing."""
     if conversations is None:
         return None
     cid = item.delivery.conversation_id
@@ -240,27 +276,73 @@ def _failure_body(item: ScheduleItem, reason: str) -> str:
     return f"{head}{tail}"
 
 
-async def _report_same_chat_failure(app: Any, settings: Any, item: ScheduleItem, reason: str) -> None:
+async def _report_same_chat_failure(
+    app: Any, settings: Any, item: ScheduleItem, reason: str
+) -> str:
     """Best-effort: tell the originating chat that the run produced nothing. Only for
     SAME-CHAT rows — those are the ones where the user is sitting in the conversation
-    expecting the follow-up. Never raises (a failed report must not break the sweep)."""
+    expecting the follow-up. Never raises (a failed report must not break the sweep).
+
+    Returns the delivery outcome ("delivered"/"queued"/"dropped"): the caller needs it
+    to know whether the announced turn's ONE ``turn_completed`` was already emitted by
+    the delivery path or still has to be emitted by the engine.
+
+    ``status="error"`` is load-bearing: this body is a FAILURE notice, and both the
+    desktop notifier and the sidebar toast refuse to announce "your result is ready"
+    for a non-ok turn. Reporting it as "ok" made that gate unreachable."""
     if app is None or not item.delivery.same_chat or not item.delivery.conversation_id:
-        return
+        return "dropped"
     try:
         from akana_server.chat_injections import deliver_or_queue
 
-        await deliver_or_queue(
+        return await deliver_or_queue(
             app,
             settings,
             str(item.delivery.conversation_id),
             _failure_body(item, reason),
             kind="schedule",
             title=item.title,
+            status="error",
         )
     except asyncio.CancelledError:
         raise
     except Exception:  # noqa: BLE001
         log.debug("schedule %s: failure report could not be delivered", item.id, exc_info=True)
+        return "dropped"
+
+
+class _TurnAnnounce:
+    """The ONE ``turn_completed`` that every ``turn_active`` is owed.
+
+    Consumers latch on ``turn_active`` (the composer's working strip, the sidebar
+    spinner, the desktop notifier); an exit path that emits nothing leaves them
+    spinning forever. So the debt is tracked explicitly and settled on EVERY exit —
+    success, LLM error, empty result, a delivery that could not land, and
+    cancellation. The injection path broadcasts its own completion when it actually
+    delivers (or will, when a parked item drains), so those exits mark the debt
+    SETTLED instead of double-announcing."""
+
+    __slots__ = ("conv", "settled")
+
+    def __init__(self) -> None:
+        self.conv: str | None = None
+        self.settled: bool = False
+
+
+async def _settle_announced(app: Any, ann: _TurnAnnounce, status: str) -> None:
+    """Emit the owed ``turn_completed`` (idempotent, never raises).
+
+    ``status`` must be the REAL outcome ("ok"/"error"/"cancelled") — consumers gate
+    on it, and celebrating a failure is the bug this contract exists to prevent."""
+    if ann.settled or not ann.conv or app is None:
+        return
+    ann.settled = True
+    try:
+        from akana_server.conversation_events import broadcast_turn_completed
+
+        await broadcast_turn_completed(app, ann.conv, status=status)
+    except BaseException:  # noqa: BLE001 - releasing the UI must survive even a cancel
+        log.debug("schedule: turn_completed announce failed (conv=%s)", ann.conv, exc_info=True)
 
 
 async def _run_one(
@@ -275,6 +357,51 @@ async def _run_one(
     app: Any = None,
     advance: bool = True,
 ) -> dict[str, Any]:
+    """Run one schedule, guaranteeing the turn-lifecycle contract around it.
+
+    The wrapper owns the two things that must hold on EVERY exit of the run —
+    including cancellation, which used to emit nothing at all: the announced turn is
+    completed exactly once, and the background-activity record is released."""
+    ann = _TurnAnnounce()
+    try:
+        return await _run_one_impl(
+            settings,
+            store,
+            item,
+            registry=registry,
+            conversations=conversations,
+            now=now,
+            complete=complete,
+            app=app,
+            advance=advance,
+            ann=ann,
+        )
+    except asyncio.CancelledError:
+        await _settle_announced(app, ann, "cancelled")
+        raise
+    finally:
+        if not ann.settled:
+            # Backstop: an exit that forgot to settle still releases the indicator.
+            await _settle_announced(app, ann, "error")
+        if ann.conv:
+            from akana_server.background_activity import clear_background_active
+
+            clear_background_active(app, ann.conv)
+
+
+async def _run_one_impl(
+    settings: Any,
+    store: ScheduleStore,
+    item: ScheduleItem,
+    *,
+    registry: Any,
+    conversations: Any,
+    now,
+    complete: CompleteFn | None,
+    app: Any = None,
+    advance: bool = True,
+    ann: _TurnAnnounce | None = None,
+) -> dict[str, Any]:
     """Run one schedule end-to-end (LLM or verbatim → deliver → record). NEVER
     raises except :class:`asyncio.CancelledError`; every other failure is captured
     into the schedule's ``last_run`` and returned as an outcome dict.
@@ -282,38 +409,49 @@ async def _run_one(
     ``advance`` maps to ``mark_ran(roll_forward=...)``: the sweep advances a
     recurring schedule to its next slot (``True``); the manual 'run now' path fires
     out of band and leaves the slot intact (``False`` — see BUG 8)."""
+    ann = ann if ann is not None else _TurnAnnounce()
     # BUG 9 — verbatim message mode: a plain reminder ("remind me to X") carries a
     # literal ``message`` and MUST NOT run an LLM turn. Running one made the model
     # 'riff' on the reminder text instead of just repeating it (weird output, a
     # wasted + slow provider call). When ``message`` is set we skip the LLM (and its
     # MCP tool payload / persona) entirely and deliver the text as-is.
     verbatim = (item.message or "").strip()
+
+    # LIVE UI: tell the chat that work has STARTED, so the composer shows the
+    # "working…" strip while a background_run job / same-chat reminder thinks. The
+    # frontend machinery for this (turn_active → bgActiveTurns → the strip) existed
+    # but was unreachable: nothing ever emitted turn_active, so background work ran
+    # completely invisibly.
+    # SAME-CHAT ONLY, deliberately: a separate-thread/connector run has no
+    # conversation the user is watching yet. The matching turn_completed is owed on
+    # EVERY exit path and is guaranteed by _run_one's wrapper (_TurnAnnounce).
+    # The registry entry is the SERVER-SIDE half of the same signal: the WS event is
+    # one-shot, so an F5 / reconnect / second tab has nothing to re-derive the
+    # "working" state from and would clear the indicator mid-job.
+    # NOT verbatim-specific: the DELIVERY section below is shared, so a verbatim
+    # reminder's injection emits a turn_completed{source:"background"} either way.
+    # Announcing only the LLM branch made that an UNPAIRED completion, and the client
+    # keeps a per-conversation COUNT of background turns — so a plain reminder firing
+    # decremented (and killed the strip of) a genuine concurrent background_run job.
+    if app is not None and item.delivery.same_chat and item.delivery.conversation_id:
+        ann.conv = str(item.delivery.conversation_id)
+        try:
+            from akana_server.background_activity import mark_background_active
+            from akana_server.conversation_events import broadcast_turn_active
+
+            mark_background_active(app, ann.conv)
+            await broadcast_turn_active(app, ann.conv)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - a UI hint must never block the run
+            log.debug("schedule %s: turn_active announce failed", item.id, exc_info=True)
+
     if verbatim:
         body = verbatim
     else:
         run_complete = complete or llm_dispatch.complete_chat_aggregated
         system_prompt = _build_system_prompt(settings, item)
         mcp = _mcp_servers(settings, item.delivery.conversation_id)
-
-        # LIVE UI: tell the chat that work has STARTED, so the composer shows the
-        # "working…" strip while a background_run job / same-chat reminder thinks. The
-        # frontend machinery for this (turn_active → bgActiveTurns → the strip) existed
-        # but was unreachable: nothing ever emitted turn_active, so background work ran
-        # completely invisibly.
-        # SAME-CHAT ONLY, deliberately: every same-chat exit path ends in a
-        # turn_completed broadcast — success and parked delivery via deliver_or_queue,
-        # failure/empty via _report_same_chat_failure — so the strip can never be left
-        # spinning. A separate-thread/connector run has exits with no broadcast, which
-        # WOULD strand it.
-        if app is not None and item.delivery.same_chat and item.delivery.conversation_id:
-            try:
-                from akana_server.conversation_events import broadcast_turn_active
-
-                await broadcast_turn_active(app, str(item.delivery.conversation_id))
-            except asyncio.CancelledError:
-                raise
-            except Exception:  # noqa: BLE001 - a UI hint must never block the run
-                log.debug("schedule %s: turn_active announce failed", item.id, exc_info=True)
 
         # 1) LLM turn. An unconfigured provider raises LLMCallError (503); any
         #    exception is caught → the schedule is marked failed and rolled forward.
@@ -332,7 +470,11 @@ async def _run_one(
             log.warning("schedule %s: LLM run failed: %s", item.id, exc, exc_info=True)
             store.mark_ran(item.id, status="error", error=str(exc), now=now, roll_forward=advance)
             # Do not leave the user waiting on a promise that will never land.
-            await _report_same_chat_failure(app, settings, item, str(exc))
+            reported = await _report_same_chat_failure(app, settings, item, str(exc))
+            # The report carries the completion when it lands (now, or when the parked
+            # item drains); if it could not be delivered at all, settle it here.
+            ann.settled = ann.settled or reported in ("delivered", "queued")
+            await _settle_announced(app, ann, "error")
             return {"id": item.id, "status": "error", "error": str(exc)}
 
         body = (text or "").strip()
@@ -340,7 +482,9 @@ async def _run_one(
     if not body:
         # Nothing to deliver; still advance the schedule so it does not re-fire.
         store.mark_ran(item.id, status="skipped", error="empty result", now=now, roll_forward=advance)
-        await _report_same_chat_failure(app, settings, item, "empty result")
+        reported = await _report_same_chat_failure(app, settings, item, "empty result")
+        ann.settled = ann.settled or reported in ("delivered", "queued")
+        await _settle_announced(app, ann, "error")
         return {"id": item.id, "status": "skipped", "error": "empty result"}
 
     # 2) Delivery — thread and/or connector, each isolated. Track per-target
@@ -351,6 +495,11 @@ async def _run_one(
     conversation_id: str | None = None
     notes: list[str] = []
     thread_ok = connector_ok = None  # None = not requested; True/False = outcome
+    #: True once the injection path owns the announced turn's completion broadcast.
+    same_chat_injected = False
+    #: True when same-chat delivery failed and the result was rescued into a new thread
+    #: — delivered, but NOT where it was asked for, so the run is only "partial".
+    same_chat_recovered = False
 
     if mode in ("thread", "both"):
         thread_ok = False
@@ -361,7 +510,7 @@ async def _run_one(
                 # pair), busy-safe: if the user's own turn is streaming, the message
                 # parks in the durable inbox and lands the moment that turn ends.
                 # deliver_or_queue broadcasts the live event itself on real delivery.
-                from akana_server.chat_injections import deliver_or_queue
+                from akana_server.chat_injections import FULL, deliver_or_queue
 
                 outcome = await deliver_or_queue(
                     app,
@@ -371,15 +520,41 @@ async def _run_one(
                     kind="schedule",
                     title=item.title,
                 )
-                conversation_id = (
-                    str(item.delivery.conversation_id)
-                    if outcome in ("delivered", "queued")
-                    else None
-                )
-                if conversation_id:
+                if outcome in ("delivered", "queued"):
+                    conversation_id = str(item.delivery.conversation_id)
                     thread_ok = True
+                    same_chat_injected = True
+                    ann.settled = True  # the delivery path carries the completion
+                elif outcome == FULL:
+                    # The origin chat is ALIVE, just backed up. Rehoming here would make
+                    # mark_ran rebind the schedule to the recovery thread and every future
+                    # fire would land there — a permanent redirect caused by a transient
+                    # overflow. Record the miss and leave the binding alone; this fire is
+                    # lost (the inbox already holds MAX_PENDING_PER_CONV undelivered
+                    # results), the schedule is not.
+                    notes.append("same-chat inbox is full — result not delivered")
                 else:
-                    notes.append("same-chat injection dropped (conversation gone?)")
+                    # The origin chat is GONE (deleted). A run that already burned a full
+                    # LLM turn must not throw the result away every fire, forever, while
+                    # schedule_list shows it healthy: fall back to the separate-thread
+                    # delivery, which creates a fresh thread, and let mark_ran write that
+                    # id back so the NEXT fire lands there instead of repeating the drop.
+                    # The note is written AFTER the move lands: the rescue thread can
+                    # itself fail to store the pair, and "moved to a new thread" would
+                    # then be the same false receipt this whole path exists to avoid.
+                    conversation_id = await asyncio.to_thread(
+                        _deliver_thread, settings, conversations, item, body
+                    )
+                    if conversation_id:
+                        thread_ok = True
+                        same_chat_recovered = True
+                        notes.append(
+                            "same-chat delivery failed — result moved to a new thread"
+                        )
+                    else:
+                        notes.append(
+                            "same-chat delivery failed — no conversation service available"
+                        )
             else:
                 conversation_id = await asyncio.to_thread(
                     _deliver_thread, settings, conversations, item, body
@@ -391,6 +566,10 @@ async def _run_one(
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
+            # Includes TurnPairNotStored — a write that never landed is a delivery
+            # failure, so ``conversation_id`` stays unset: the run is recorded with
+            # its real status + this note, the schedule is not rebound to a thread
+            # that holds nothing, and no "your result is ready" toast goes out.
             log.warning("schedule %s: thread delivery failed: %s", item.id, exc, exc_info=True)
             notes.append(f"thread delivery error: {exc}")
 
@@ -409,7 +588,7 @@ async def _run_one(
 
     requested = [x for x in (thread_ok, connector_ok) if x is not None]
     delivered_any = any(requested)
-    all_ok = bool(requested) and all(requested)
+    all_ok = bool(requested) and all(requested) and not same_chat_recovered
     note = "; ".join(notes) or None
     # "ok" only if EVERY requested target succeeded; "partial" if some did; else "skipped".
     status = "ok" if all_ok else "partial" if delivered_any else "skipped"
@@ -427,11 +606,16 @@ async def _run_one(
     # delivery has no thread to surface. Reported as "ok" so the frontend toasts
     # (the thread IS ready regardless of a separate connector outcome).
     # SAME-CHAT deliveries skip this: deliver_or_queue broadcasts on REAL delivery
-    # (a parked/queued injection must not toast before it actually lands).
-    if app is not None and conversation_id and not item.delivery.same_chat:
+    # (a parked/queued injection must not toast before it actually lands) — but a
+    # same-chat run that FELL BACK to a fresh thread must announce that thread.
+    if app is not None and conversation_id and not same_chat_injected:
         from akana_server.conversation_events import broadcast_turn_completed
 
         await broadcast_turn_completed(app, conversation_id, status="ok")
+    # The announced conversation never received the result (its chat is gone): release
+    # its indicator honestly — "error" here, so the notifier does not claim the result
+    # is waiting in a chat that no longer has it.
+    await _settle_announced(app, ann, "error" if status != "ok" else "ok")
     return {
         "id": item.id,
         "status": status,

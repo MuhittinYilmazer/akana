@@ -17,8 +17,19 @@ from akana_server.orchestrator import turn_writer
 
 
 class _FakeEpisodic:
+    """Holds the rows ``remember_turn`` actually wrote.
+
+    It must be a real store, not a constant ``None``: the writer's receipt asks it
+    whether the row landed before reporting a loss. ``is_new`` is still computed once
+    BEFORE the retry loop, so an empty store at entry keeps the "new turn → meta
+    increments once" property the other tests rely on.
+    """
+
+    def __init__(self) -> None:
+        self.rows: dict[str, dict] = {}
+
     def get_turn(self, turn_id: str):  # noqa: ANN201
-        return None  # always a "new turn" → meta increments once
+        return self.rows.get(turn_id)
 
 
 class _FakeMeta:
@@ -45,6 +56,7 @@ class _FakeMem:
         if self._sink["calls"] <= self._fail_times:
             raise RuntimeError("database is locked")
         self._sink["saved"] = kw
+        self.episodic.rows[str(kw.get("turn_id") or "")] = dict(kw)
 
 
 @pytest.fixture(autouse=True)
@@ -77,13 +89,44 @@ def test_persist_user_turn_all_attempts_fail_no_raise(
     monkeypatch.setattr(
         "akana_server.memory_core.get_memory_core", lambda dd: mem
     )
-    # All attempts fail → still does NOT raise (the reply reaches the user), turn_id is returned.
+    # All attempts fail → still does NOT raise: the reply the user is already reading must
+    # not be broken by a storage fault. But the returned id is a RECEIPT, so it is "" —
+    # returning the minted ULID here is what made every caller's "did it reach the store?"
+    # guard dead code and let a lost turn be announced to the user as a success.
     tid = turn_writer.persist_user_turn(
         conversation_id="c1", user_text="x", turn_id="u9", data_dir=tmp_path
     )
-    assert tid == "u9"
+    assert tid == ""
     assert sink["calls"] == turn_writer._PERSIST_ATTEMPTS  # the full attempt count was tried
     assert mem.conversations_meta.user == 0  # no success → meta did not increment
+
+
+def test_persist_reports_success_when_the_row_landed_but_the_meta_bump_kept_failing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A receipt must answer "is the row there?", not "did the last attempt raise?".
+
+    The retry loop repeats the metadata bump too, so an attempt whose episodic write
+    SUCCEEDED but whose meta transaction stayed locked raises on every pass and reaches
+    the exhausted-retry path with the row already written. Reporting that as a loss is a
+    different lie from the one the receipt exists to prevent: the caller would "rescue" a
+    turn that is readable — duplicating it, or re-running a schedule that already delivered.
+    """
+    sink: dict[str, object] = {"calls": 0, "saved": None}
+    mem = _FakeMem(fail_times=0, sink=sink)
+
+    # The row lands on every attempt; only the meta bump fails, forever.
+    def _boom(*_a: object, **_k: object) -> None:
+        raise RuntimeError("database is locked")
+
+    mem.conversations_meta.on_user_message = _boom  # type: ignore[method-assign]
+    monkeypatch.setattr("akana_server.memory_core.get_memory_core", lambda dd: mem)
+
+    tid = turn_writer.persist_user_turn(
+        conversation_id="c1", user_text="x", turn_id="u9", data_dir=tmp_path
+    )
+    assert tid == "u9", "the turn IS in the store — the caller must not be told it was lost"
+    assert mem.episodic.get_turn("u9") is not None
 
 
 def test_persist_assistant_turn_retries(

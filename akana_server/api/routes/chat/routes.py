@@ -67,6 +67,7 @@ from akana_server.api.routes.chat._base import (
     _off_loop,
     build_context_assembler,
     guard_nonstreaming_turn,
+    set_turn_outcome,
     voice_turn_suffix,
 )
 from akana_server.api.routes.chat.models import (
@@ -77,6 +78,7 @@ from akana_server.api.routes.chat.models import (
 from akana_server.api.routes.chat.persist import (
     _mirror_cursor_agent_meta,
     _persist_assistant_turn_end,
+    _persist_error_turn_end,
     _persist_user_turn_start,
     _record_tool_calls,
 )
@@ -127,6 +129,7 @@ async def _persist_command_response(
     if not conv_id:
         return
     settings = getattr(request.app.state, "settings", None)
+    user_ok: list[bool] = []
     try:
         # _persist_user_turn_start ensures a fresh (not-yet-ensured) conversation before
         # writing → the usability gate below then sees it as usable (same order as
@@ -137,8 +140,18 @@ async def _persist_command_response(
             user_text=body.text,
             lang=body.lang,
             file_ids=body.effective_file_ids,
+            ok_out=user_ok,
         )
-        if resp.text and _conversation_chat_usable(request.app, conv_id):
+        # An answer with no question is the one loss that keeps causing damage: it is
+        # replayed as LLM history, so the next turn answers — then contradicts — a
+        # request nobody can see. Same rule as the LLM turn paths.
+        if not (user_ok and user_ok[0]):
+            log.warning(
+                "live gate/command response NOT ARCHIVED (conv=%s): its user turn did not "
+                "reach the store; reply delivered anyway",
+                conv_id,
+            )
+        elif resp.text and _conversation_chat_usable(request.app, conv_id):
             await _off_loop(
                 _chatpkg.persist_assistant_turn,
                 conversation_id=conv_id,
@@ -306,6 +319,11 @@ async def post_chat(
 
         # LLM succeeded: write the user turn NOW (orphan-turn #5 is avoided) — then the
         # assistant turn. In order → user.ts < assistant.ts (list/preview ordered correctly).
+        # ``ok_out`` is not optional here even though the response is already in hand: the
+        # streaming producer probes durability and this endpoint did not, so a swallowed
+        # write was answered with HTTP 200 + a turn id for an exchange that is not in
+        # memory.db (and this helper also serves voice-routed turns).
+        user_ok: list[bool] = []
         await _persist_user_turn_start(
             request,
             conversation_id=conv_id,
@@ -313,8 +331,10 @@ async def post_chat(
             lang=body.lang,
             user_turn_id=user_turn_id,
             file_ids=body.effective_file_ids,
+            ok_out=user_ok,
         )
 
+        asst_ok: list[bool] = []
         memory_writes = await _persist_assistant_turn_end(
             request,
             conversation_id=conv_id,
@@ -326,7 +346,36 @@ async def post_chat(
             latency_ms=latency_ms,
             intent=intent,
             tool_calls=tool_calls,
+            user_turn_ok=bool(user_ok) and user_ok[0],
+            ok_out=asst_ok,
         )
+        turn_persisted = bool(asst_ok) and asst_ok[0]
+        if not turn_persisted and text.strip():
+            # One-shot surface: there is no stream to correct and no rescue to reach, so the
+            # only honest thing left is to record the loss where the user can see it. The
+            # marker takes the SAME turn id the response returns, so the id still resolves
+            # to a row — an error card explaining the missing reply — instead of pointing
+            # the client at nothing after it reloads the log.
+            log.error(
+                "blocking turn LOST (conv=%s turn=%s): the reply was returned but no row"
+                " reached memory.db",
+                conv_id,
+                turn_id,
+            )
+            await _persist_error_turn_end(
+                request,
+                conversation_id=conv_id,
+                error_text=(
+                    "The reply was generated but could not be saved (storage error). Copy "
+                    "anything you need from it — it will not be here after a reload."
+                ),
+                turn_id=turn_id,
+                lang=body.lang,
+            )
+            # The guard announces this turn's completion and reads "ok" from anything that
+            # did not RAISE — and this must not raise, the reply is already on its way
+            # back. Record the real outcome so the ONE completion reports it.
+            set_turn_outcome(request, "error")
         # The recount runs AFTER persist_agent_id stored THIS turn's fresh session id,
         # which flips bootstrap_needed to False → for a bootstrap turn the recount reads 0
         # even though this turn actually truncated history to chat_max_turns. Reconcile
@@ -375,6 +424,9 @@ async def post_chat(
             client_ip=_client_ip(request),
             data={
                 "mode": "blocking",
+                # The audit is the only durable trace of a turn whose rows are missing —
+                # this surface recorded no status at all, so the loss left nothing behind.
+                "status": "ok" if turn_persisted or not text.strip() else "persist_failed",
                 "intent": intent,
                 "approval_required": approval_required,
                 "skill_used": [
@@ -783,6 +835,12 @@ async def get_chat_active(
 
     If there's NO active turn, it returns 204 — the frontend falls back to a
     normal `messages` fetch.
+
+    A turn with no replayable buffer — a blocking/voice/connector turn, or a background
+    job (schedule fire / background_run) — cannot be followed, but it IS running: it
+    answers **202** with ``started_at`` instead of 204. 204 there meant the client
+    concluded "idle" after F5 while the server still refused new sends as busy (or ran
+    minutes of promised background work completely invisibly).
     """
     conv_id = (conversation_id or "").strip()
     turn = _active_turns(request.app).get(conv_id) if conv_id else None
@@ -792,6 +850,36 @@ async def get_chat_active(
     # would await ``cond.wait()`` forever (only STOP marks a placeholder done). Treat it like
     # "no active turn": return 204 so the FE falls back to a normal messages fetch (b2h-#8).
     if turn is None or turn.done or turn.placeholder:
+        from akana_server.api.routes.chat.turn_gate import nonstreaming_turn_started_at
+        from akana_server.background_activity import background_started_at
+
+        started = nonstreaming_turn_started_at(request.app, conv_id)
+        kind = "nonstreaming"
+        background = background_started_at(request.app, conv_id)
+        if started is None:
+            started = background
+            kind = "background"
+        if started is not None:
+            return JSONResponse(
+                status_code=202,
+                content={
+                    "running": True,
+                    "followable": False,
+                    # ``kind`` is the FOLLOWABILITY hint and reports one probe in a fixed
+                    # priority, so a background job running behind a blocking/voice/
+                    # connector turn is not visible in it. ``background`` is the
+                    # independent flag the marker rebuild after an F5 keys off — the
+                    # client's marker map is wiped by the reload, so keying it off
+                    # ``kind`` meant it took neither branch and never rebuilt the strip.
+                    "kind": kind,
+                    "conversation_id": conv_id,
+                    "started_at": int(started * 1000),
+                    "background": background is not None,
+                    "background_started_at": (
+                        int(background * 1000) if background is not None else None
+                    ),
+                },
+            )
         return Response(status_code=204)
     return StreamingResponse(
         _follow_turn(turn),

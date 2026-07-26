@@ -652,7 +652,12 @@ class ScheduleStore:
                 if conversation_id:
                     last_run["conversation_id"] = conversation_id
                 delivery = item.delivery
-                if conversation_id and not delivery.conversation_id:
+                # OVERWRITE, not fill-once: when the delivery thread is deleted the
+                # engine creates a fresh one, and a fill-once guard kept the STALE id →
+                # every later fire found it missing and spawned yet another one-message
+                # thread, forever. Writing the id the run ACTUALLY used restores the
+                # "one growing thread" contract after a deletion.
+                if conversation_id and conversation_id != delivery.conversation_id:
                     delivery = Delivery(
                         mode=delivery.mode,
                         channel=delivery.channel,
