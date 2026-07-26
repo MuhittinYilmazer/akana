@@ -50,6 +50,25 @@ def _hermetic_provider_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _hermetic_data_dir(monkeypatch: pytest.MonkeyPatch, tmp_path_factory) -> None:
+    """No test may resolve to the DEVELOPER'S REAL data dir.
+
+    ``LLM_PROVIDER`` was pinned above so the repo ``.env`` cannot leak in, but
+    ``AKANA_DATA_DIR`` was not — so any code path that falls back to the default
+    (``~/.akana``) instead of taking an explicit ``data_dir`` argument reached the real
+    one. That is not theoretical: a CLI test drove ``setup``'s post-install step and
+    OVERWROTE the developer's own ``~/.akana/llm_settings.json``, silently switching
+    their active provider. Losing a machine's real vault/memory/settings to a test run
+    is the worst failure this suite can have, and "the test author remembered to
+    isolate" is not a mechanism.
+
+    A test that wants a specific data dir still sets it (or passes ``data_dir=``)
+    itself — monkeypatch.setenv in the test runs after this autouse fixture and wins.
+    """
+    monkeypatch.setenv("AKANA_DATA_DIR", str(tmp_path_factory.mktemp("akana-data")))
+
+
+@pytest.fixture(autouse=True)
 def _reset_network_registry():
     """Reset the process-global circuit-breaker registry around EVERY test.
 

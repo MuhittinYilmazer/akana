@@ -255,7 +255,10 @@ class MemoryOrchestrator:
         # Time bounds are resolved in one place (parse_time_bound: ISO / relative /
         # Turkish natural-language expression). as_of takes the "end" edge — "dün" = the
         # memory state as of the end of yesterday; observed_* are the two ends of the observation window.
-        _time_hint = "use ISO-8601, 'relative:<n><h|d|w>' or Turkish ('dün', 'geçen hafta', 'mart ayında')"
+        _time_hint = (
+            "use ISO-8601, 'relative:<n><h|d|w>', English ('yesterday', 'last week', "
+            "'in March') or Turkish ('dün', 'geçen hafta', 'mart ayında')"
+        )
         as_of: str | None = None
         if req.as_of:
             as_of = parse_time_bound(req.as_of, edge="end")

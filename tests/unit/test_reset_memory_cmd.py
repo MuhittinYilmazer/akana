@@ -74,7 +74,7 @@ def test_reset_memory_actually_clears_every_store(
         f"seeding failed to create rows: {seeded}"
     )
 
-    rc = reset_memory_cmd.run_reset_memory()
+    rc = reset_memory_cmd.run_reset_memory(assume_yes=True)
 
     assert rc == 0
     after = _counts(data_dir)
@@ -104,11 +104,65 @@ def test_reset_memory_surfaces_store_failure_as_nonzero(
 
     monkeypatch.setattr(StagingStore, "clear", _boom)
 
-    rc = reset_memory_cmd.run_reset_memory()
+    rc = reset_memory_cmd.run_reset_memory(assume_yes=True)
 
     assert rc == 1
     out = capsys.readouterr().out
     assert "could not reset" in out.lower()
+
+
+def test_reset_memory_asks_before_deleting_anything(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """It is one keystroke (or a tab-completion) away from erasing everything Akana ever
+    learned. Answering "no" must leave every store exactly as it was."""
+    _seed(data_dir)
+    before = _counts(data_dir)
+
+    asked: list[str] = []
+    monkeypatch.setattr(reset_memory_cmd, "_stdin_is_interactive", lambda: True)
+    monkeypatch.setattr(
+        reset_memory_cmd.io,
+        "ask_yes_no",
+        lambda prompt, **kw: (asked.append(prompt), False)[1],
+    )
+
+    rc = reset_memory_cmd.run_reset_memory()
+
+    assert rc == 0
+    assert asked, "reset-memory deleted the user's facts without asking"
+    assert str(data_dir) in asked[0], f"the prompt does not name what it will wipe: {asked[0]!r}"
+    assert _counts(data_dir) == before, "answering 'no' still cleared the stores"
+    assert "cancel" in capsys.readouterr().out.lower()
+
+
+def test_reset_memory_refuses_unattended_without_yes(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A scheduled run / pipeline has no terminal: the command must fail fast with the
+    --yes hint, never block on input() and never destroy anything unasked."""
+    _seed(data_dir)
+    before = _counts(data_dir)
+
+    def _must_not_prompt(*a, **k):  # noqa: ANN002, ANN003
+        raise AssertionError("reset-memory prompted with no terminal attached")
+
+    monkeypatch.setattr(reset_memory_cmd, "_stdin_is_interactive", lambda: False)
+    monkeypatch.setattr(reset_memory_cmd.io, "ask_yes_no", _must_not_prompt)
+
+    rc = reset_memory_cmd.run_reset_memory()
+
+    assert rc == 1
+    assert _counts(data_dir) == before
+    assert "--yes" in capsys.readouterr().out
+
+
+def test_reset_memory_yes_flag_is_accepted(data_dir: Path) -> None:
+    """`--yes` is the documented escape hatch for scripts — it must exist on the parser."""
+    from akana_cli.main import build_parser
+
+    assert build_parser().parse_args(["reset-memory", "--yes"]).yes is True
+    assert build_parser().parse_args(["reset-memory"]).yes is False
 
 
 def test_reset_memory_import_resolves_to_src_package() -> None:

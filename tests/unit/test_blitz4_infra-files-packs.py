@@ -2,7 +2,7 @@
 
 Covers five verified bugs:
   1. PersonasAdapter._load path-traversal / absolute-path file read (adapters.py)
-  2. screenshot() monitor origin not added back to click coords (computer_mcp)
+  2. screenshot() monitor origin vs. click coords — now ONE absolute space (computer_mcp)
   3. open_application routes through ``cmd /c start`` → metacharacter injection
   4. GET /skills applies type/source filters AFTER the top_k cap (skills route)
   5. computer-control screenshots accumulate forever with no retention (computer_mcp)
@@ -58,7 +58,17 @@ def test_persona_load_accepts_plain_id(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Finding 2 — screenshot monitor origin added back before clicking            #
+# Finding 2 — a monitor-scoped screenshot must not misdirect a click          #
+#                                                                             #
+# The original fix made the click tools ADD the last capture's origin. That    #
+# solved the pixel loop but created a SECOND coordinate space on one surface:  #
+# find_element boxes / screen_info + list_windows bounds are absolute, so a    #
+# coordinate taken from any of those got the origin added a second time and    #
+# landed a monitor-width away. The convention is now absolute everywhere and   #
+# the capture REPORTS its origin instead (screenshot's `origin` + a spelled-   #
+# out instruction; round-trip covered in test_computer_perception.py). What    #
+# these tests still guard is the half that matters here: the click tools apply #
+# NO hidden translation of their own.                                          #
 # --------------------------------------------------------------------------- #
 
 
@@ -85,28 +95,29 @@ def _call(server, name, args):
     return asyncio.run(server.call_tool(name, args))
 
 
-def test_click_adds_monitor_origin(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake = _FakePG()
-    monkeypatch.setattr(cm, "_pyautogui", lambda: fake)
-    server = build_server()  # build resets _LAST_ORIGIN to [0, 0]
-    # Emulate a screenshot of a secondary monitor at virtual origin (1920, 0).
-    cm._LAST_ORIGIN[:] = [1920, 0]
-    _call(server, "left_click", {"x": 500, "y": 300})
-    assert fake.calls == [("click", {"x": 2420, "y": 300, "button": "left"})]
-
-
-def test_drag_adds_monitor_origin(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_click_takes_absolute_coordinates_verbatim(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A point on a secondary monitor at virtual x=1920 is passed to pyautogui exactly as
+    # given — the value screen_info/list_windows/find_element would have reported.
     fake = _FakePG()
     monkeypatch.setattr(cm, "_pyautogui", lambda: fake)
     server = build_server()
-    cm._LAST_ORIGIN[:] = [1920, 0]
-    _call(server, "drag", {"x1": 10, "y1": 20, "x2": 30, "y2": 40})
+    _call(server, "left_click", {"x": 2420, "y": 300})
+    assert fake.calls == [("click", {"x": 2420, "y": 300, "button": "left"})]
+
+
+def test_drag_takes_absolute_coordinates_verbatim(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _FakePG()
+    monkeypatch.setattr(cm, "_pyautogui", lambda: fake)
+    server = build_server()
+    _call(server, "drag", {"x1": 1930, "y1": 20, "x2": 1950, "y2": 40})
     assert ("moveTo", (1930, 20)) in fake.calls
     assert any(c[0] == "dragTo" and c[1] == (1950, 40) for c in fake.calls)
 
 
-def test_click_origin_zero_is_identity(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Primary monitor at the virtual origin: coords pass through unchanged.
+def test_no_module_state_can_shift_a_click(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Drift guard: the one coordinate space only holds while no per-capture origin state
+    # exists to rebase against. A reintroduced module-level origin would re-split it.
+    assert not hasattr(cm, "_LAST_ORIGIN") and not hasattr(cm, "_abs_xy")
     fake = _FakePG()
     monkeypatch.setattr(cm, "_pyautogui", lambda: fake)
     server = build_server()

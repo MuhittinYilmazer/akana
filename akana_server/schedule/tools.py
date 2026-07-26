@@ -12,7 +12,7 @@ Names follow the MCP charset (underscores); descriptions are model-facing
 Datetime input: for a one-shot (``kind="once"``) schedule the ``when`` field
 accepts an ISO-8601 datetime OR a short natural phrase — English ("tomorrow
 09:00", "today 18:00") and Turkish ("yarın 09:00", "pazartesi 08:30") — resolved
-in Turkey local time (+03:00, no DST). Recurring kinds take structured values
+in the user's local zone (``store.local_tz``). Recurring kinds take structured values
 (``interval`` = seconds, ``daily``/``weekly`` = ``"HH:MM"`` [+ ``weekday``]), so
 there is no ambiguity to parse.
 
@@ -38,10 +38,10 @@ from akana_server.schedule.model import (
     Delivery,
 )
 from akana_server.schedule.store import (
-    TR_TZ,
     ScheduleStore,
     ScheduleValidationError,
-    now_tr,
+    local_tz,
+    now_local,
     parse_iso,
     to_iso,
 )
@@ -265,7 +265,7 @@ def resolve_once_when(when: str, *, now: datetime | None = None) -> str:
         return to_iso(parse_iso(raw))
     except ScheduleValidationError:
         pass
-    ref = (now or now_tr()).astimezone(TR_TZ)
+    ref = (now or now_local()).astimezone(local_tz())
     folded = _fold(raw)
     has_digit = any(c.isdigit() for c in raw)
 
@@ -338,20 +338,44 @@ def _as_bool(value: Any) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _telegram_enabled(data_dir: Path | str) -> bool:
-    """Best-effort 'is the telegram connector enabled' — runtime store OR env.
+def _stored_flag(key: str, data_dir: Path | str) -> bool | None:
+    """The runtime store's own opinion on ``key`` — ``None`` ONLY when the key is
+    ABSENT from ``runtime_settings.json``.
 
-    Used for the CREATE-time safety gate. Reads the runtime store first
-    (where the UI persists the toggle) and falls back to the env kill switch, so
-    the check is right whether the channel was enabled from Settings or ``.env``.
-    """
+    Distinguishing "no opinion" from "explicitly false" is the whole point: the
+    store's value has to win over env, and a plain truthiness test cannot tell those
+    two apart. (``runtime_override`` does exactly this but resolves against the
+    process-wide bound data_dir, which the ``akana_schedule`` MCP child never binds —
+    this variant is data_dir-explicit.)"""
     try:
-        from akana_server.runtime_settings import get_runtime
+        from akana_server.runtime_settings import SCHEMA, _coerce_runtime, get_store
 
-        if bool(get_runtime("telegram_enabled", SimpleNamespace(data_dir=data_dir))):
-            return True
+        spec = SCHEMA.get(key)
+        if spec is None:
+            return None
+        stored = get_store(data_dir).load()
+        if spec.key not in stored:
+            return None
+        value = _coerce_runtime(spec, stored[spec.key])
+        return None if value is None else bool(value)
     except Exception:  # pragma: no cover - resolution failure → env fallback
-        pass
+        return None
+
+
+def _telegram_enabled(data_dir: Path | str) -> bool:
+    """Whether the telegram connector is enabled — runtime store, THEN env.
+
+    Used for the CREATE-time safety gate. STORE > ENV, strictly: the user turning
+    Telegram off in Settings → Channels writes ``telegram_enabled: false``, and that
+    is the same value ``build_registry`` builds the live registry from. A gate that
+    ORed the ``AKANA_TELEGRAM_ENABLED`` kill switch on top accepted a connector
+    reminder for a channel that no longer exists — it then burned a full LLM turn on
+    every fire and was dropped undelivered, with the miss recorded only in the run
+    history the user never opens.
+    """
+    stored = _stored_flag("telegram_enabled", data_dir)
+    if stored is not None:
+        return stored
     return os.environ.get("AKANA_TELEGRAM_ENABLED", "").strip().lower() in {
         "1", "true", "yes", "on",
     }
@@ -657,7 +681,7 @@ class ScheduleTools:
         * within the grace window (a hair in the past, or 'right now') → nudge to
           now + 5s so it fires cleanly on the next poll instead of racing the write.
         """
-        now = now_tr()
+        now = now_local()
         resolved_iso = resolve_once_when(when_raw, now=now)
         resolved = parse_iso(resolved_iso)
         delta = (resolved - now).total_seconds()
@@ -696,7 +720,7 @@ class ScheduleTools:
         # Explicit near-future stamp: skip the natural-language `when` parser entirely —
         # there is nothing to interpret here, and the past-guard would have to nudge it
         # anyway. now + a few seconds = due on the next sweep.
-        when = to_iso(now_tr() + timedelta(seconds=_BACKGROUND_START_DELAY_S))
+        when = to_iso(now_local() + timedelta(seconds=_BACKGROUND_START_DELAY_S))
         item = self._store.create(
             title=title,
             prompt=instruction,

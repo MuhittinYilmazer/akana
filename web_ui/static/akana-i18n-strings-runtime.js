@@ -324,6 +324,36 @@ window.AkanaI18nStrings = Object.assign(window.AkanaI18nStrings || {}, {
     tr: "Akışsız (tek-atış) bir LLM çağrısı en fazla bu kadar saniye sürer (uçtan uca). Aşılırsa temiz «LLM_TIMEOUT» (504); köprü süreci öldürülür. Yalnız bloklayan yolu (complete_chat) etkiler; akış idle tavanını kullanır. 0 = kapalı (yalnız mevcut bridge_timeout geçerli).",
   },
 
+  // ── ollama_timeout ────────────────────────────────────────────────────────
+  "runtime.ollama_timeout.label": {
+    en: "Ollama generation timeout (seconds)",
+    tr: "Ollama üretim zaman aşımı (saniye)",
+  },
+  "runtime.ollama_timeout.desc": {
+    en: "For the local Ollama provider, the maximum seconds to wait for the model to produce the NEXT token while streaming a reply. A cold model load or a slow CPU can exceed the old fixed 300 s and end the turn with «ollama request timed out». 0 = no limit (never time out — the default): a slow but progressing reply is always allowed to finish. The connection-open timeout is separate and always short, so an unreachable Ollama server still fails fast.",
+    tr: "Yerel Ollama sağlayıcısında, yanıt akarken modelin BİR SONRAKİ jetonu üretmesi için en fazla bu kadar saniye beklenir. Soğuk model yükleme ya da yavaş CPU eski sabit 300 sn'yi aşıp turu «ollama request timed out» ile bitirebiliyordu. 0 = sınırsız (asla zaman aşımı yok — varsayılan): yavaş ama ilerleyen bir yanıtın bitmesine her zaman izin verilir. Bağlantı-açma zaman aşımı ayrıdır ve her zaman kısadır, yani erişilemeyen bir Ollama sunucusu yine hızlıca hata verir.",
+  },
+
+  // ── openai_timeout ────────────────────────────────────────────────────────
+  "runtime.openai_timeout.label": {
+    en: "OpenAI generation timeout (seconds)",
+    tr: "OpenAI üretim zaman aşımı (saniye)",
+  },
+  "runtime.openai_timeout.desc": {
+    en: "For the OpenAI provider, the maximum seconds to wait for the model to produce the NEXT token while streaming a reply (and the per-request ceiling on one-shot calls). A deep-reasoning model can be silent for minutes before its first token; if it exceeds this, the turn ends with «openai request timed out». 0 = no limit (never time out): a slow but progressing reply is always allowed to finish. The connection-open timeout is separate and always short, so an unreachable endpoint still fails fast. Default preserves the historical fixed 300 s.",
+    tr: "OpenAI sağlayıcısında, yanıt akarken modelin BİR SONRAKİ jetonu üretmesi için en fazla bu kadar saniye beklenir (tek-atış çağrılarda istek başına tavan). Derin akıl-yürüten bir model ilk jetonundan önce dakikalarca sessiz kalabilir; bunu aşarsa tur «openai request timed out» ile biter. 0 = sınırsız (asla zaman aşımı yok): yavaş ama ilerleyen bir yanıtın bitmesine her zaman izin verilir. Bağlantı-açma zaman aşımı ayrıdır ve her zaman kısadır, yani erişilemeyen bir uç nokta yine hızlıca hata verir. Varsayılan, tarihsel sabit 300 sn'yi korur.",
+  },
+
+  // ── schedule_poll_seconds ─────────────────────────────────────────────────
+  "runtime.schedule_poll_seconds.label": {
+    en: "Schedule check interval (seconds)",
+    tr: "Zamanlama kontrol aralığı (saniye)",
+  },
+  "runtime.schedule_poll_seconds.desc": {
+    en: "How often the schedule engine checks for due reminders / recurring prompts and fires them. Lower = more punctual firing but more frequent wake-ups; the default (30s) is a good balance. Firing itself is unaffected — a due schedule runs on the next check.",
+    tr: "Zamanlama motorunun, vakti gelen hatırlatmaları / yinelenen istemleri ne sıklıkla kontrol edip tetikleyeceği. Düşük = daha dakik tetikleme ama daha sık uyanma; varsayılan (30 sn) iyi bir denge. Tetiklemenin kendisi etkilenmez — vakti gelen bir zamanlama bir sonraki kontrolde çalışır.",
+  },
+
   // ── network_max_retries ───────────────────────────────────────────────────
   "runtime.network_max_retries.label": {
     en: "Maximum retry attempts",
@@ -442,6 +472,16 @@ window.AkanaI18nStrings = Object.assign(window.AkanaI18nStrings || {}, {
   "runtime.vault_tools_enabled.desc": {
     en: "Exposes akana_vault MCP read tools (vault_list/vault_get/vault_get_credential) to the model so it can discover and use stored secrets. When disabled, the model cannot read the vault via tools.",
     tr: "akana_vault MCP okuma araçlarını (vault_list/vault_get/vault_get_credential) modele sunar; böylece saklanan sırları keşfedip kullanabilir. Kapatılırsa model kasayı araçla okuyamaz.",
+  },
+
+  // ── schedule_tools_enabled ────────────────────────────────────────────────
+  "runtime.schedule_tools_enabled.label": {
+    en: "Schedule tools (MCP) active",
+    tr: "Zamanlama araçları (MCP) aktif",
+  },
+  "runtime.schedule_tools_enabled.desc": {
+    en: "Exposes the akana_schedule tools (schedule_create/list/cancel/update) to the model, so it can set reminders and recurring scheduled prompts on your behalf. When disabled, the model cannot create schedules (existing ones still fire; you can still manage them yourself).",
+    tr: "akana_schedule araçlarını (schedule_create/list/cancel/update) modele sunar; böylece senin adına hatırlatmalar ve yinelenen zamanlanmış istemler kurabilir. Kapatılırsa model zamanlama oluşturamaz (mevcut olanlar yine tetiklenir; kendin yönetmeye devam edebilirsin).",
   },
 
   // ── computer_control_approval ─────────────────────────────────────────────

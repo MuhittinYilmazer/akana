@@ -27,6 +27,21 @@ from akana_server.schedule.store import (
 # A fixed reference instant (Turkey local time) — no wall clock is read.
 T0 = datetime(2026, 7, 11, 10, 0, tzinfo=TR_TZ)
 
+@pytest.fixture(autouse=True)
+def _pin_schedule_zone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the schedule zone so these assertions test RECURRENCE MATH, not the host clock.
+
+    ``store.local_tz()`` now follows AKANA_TIMEZONE, then the host's own offset, instead
+    of the hardcoded +03:00 it used to be. That is the fix for "daily 09:00 fires at the
+    wrong hour for every user outside UTC+3" — but it also means every ``+03:00`` literal
+    below silently became an assertion about the DEVELOPER'S MACHINE. They passed here and
+    would have failed in CI (UTC) and for every contributor in another zone. Pinning the
+    zone keeps these tests about what they are named for; zone RESOLUTION itself is covered
+    separately in tests/unit/test_hunt6_schedule_mcp.py.
+    """
+    monkeypatch.setenv("AKANA_TIMEZONE", "+03:00")
+
+
 
 # --- compute_next_run (all four kinds) --------------------------------------
 

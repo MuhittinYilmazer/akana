@@ -34,36 +34,52 @@
     }
   }
 
-  const ARG_KEY_TR = {
-    path: window.AkanaI18n.t("msg.arg_file"),
-    file_path: window.AkanaI18n.t("msg.arg_file"),
-    filePath: window.AkanaI18n.t("msg.arg_file"),
-    target_file: window.AkanaI18n.t("msg.arg_file"),
-    target_notebook: window.AkanaI18n.t("msg.arg_notebook"),
-    command: window.AkanaI18n.t("msg.arg_command"),
-    cmd: window.AkanaI18n.t("msg.arg_command"),
-    query: window.AkanaI18n.t("msg.arg_query"),
-    q: window.AkanaI18n.t("msg.arg_query"),
-    search_term: window.AkanaI18n.t("msg.arg_search"),
-    pattern: window.AkanaI18n.t("msg.arg_pattern"),
-    glob_pattern: window.AkanaI18n.t("msg.arg_glob"),
-    url: window.AkanaI18n.t("msg.arg_url"),
-    description: window.AkanaI18n.t("msg.arg_description"),
-    explanation: window.AkanaI18n.t("msg.arg_description"),
-    old_string: window.AkanaI18n.t("msg.arg_old_text"),
-    new_string: window.AkanaI18n.t("msg.arg_new_text"),
-    input: window.AkanaI18n.t("msg.arg_input"),
-    server: window.AkanaI18n.t("msg.arg_server"),
-    toolName: window.AkanaI18n.t("msg.arg_tool"),
-    key: window.AkanaI18n.t("msg.arg_key"),
-    text: window.AkanaI18n.t("msg.arg_text"),
-    contents: window.AkanaI18n.t("msg.arg_content"),
-    content: window.AkanaI18n.t("msg.arg_content"),
-    target_directory: window.AkanaI18n.t("msg.arg_directory"),
-    target_id: window.AkanaI18n.t("msg.arg_target"),
-    recursive: window.AkanaI18n.t("msg.arg_recursive"),
-    is_background: window.AkanaI18n.t("msg.arg_background"),
+  // Tool-card argument labels: arg name → i18n KEY, resolved per render (argLabel below).
+  // Resolving the STRINGS here instead froze them at script-eval time, which happens before
+  // akana-i18n.js has reconciled with the backend: on a first visit in a fresh browser
+  // (empty localStorage → language falls back to "en") every tool card kept English labels
+  // for the whole session inside an otherwise Turkish UI, healing only on the next reload.
+  const ARG_LABEL_KEYS = {
+    path: "msg.arg_file",
+    file_path: "msg.arg_file",
+    filePath: "msg.arg_file",
+    target_file: "msg.arg_file",
+    target_notebook: "msg.arg_notebook",
+    command: "msg.arg_command",
+    cmd: "msg.arg_command",
+    query: "msg.arg_query",
+    q: "msg.arg_query",
+    search_term: "msg.arg_search",
+    pattern: "msg.arg_pattern",
+    glob_pattern: "msg.arg_glob",
+    url: "msg.arg_url",
+    description: "msg.arg_description",
+    explanation: "msg.arg_description",
+    old_string: "msg.arg_old_text",
+    new_string: "msg.arg_new_text",
+    input: "msg.arg_input",
+    server: "msg.arg_server",
+    toolName: "msg.arg_tool",
+    key: "msg.arg_key",
+    text: "msg.arg_text",
+    contents: "msg.arg_content",
+    content: "msg.arg_content",
+    target_directory: "msg.arg_directory",
+    target_id: "msg.arg_target",
+    recursive: "msg.arg_recursive",
+    is_background: "msg.arg_background",
   };
+
+  /** "" for an unmapped arg name — callers fall back to the raw key. */
+  function argLabel(name) {
+    const key = ARG_LABEL_KEYS[name];
+    if (!key) return "";
+    try {
+      return window.AkanaI18n.t(key);
+    } catch {
+      return "";
+    }
+  }
 
   const INTERNAL_ARG_KEYS = new Set([
     "provideridentifier",
@@ -619,7 +635,7 @@
           rest.push({ k: window.AkanaI18n.t("msg.record_ids_label"), v: window.AkanaI18n.t("msg.record_ids_n", { n: val.length }) });
           continue;
         }
-        const label = ARG_KEY_TR[key] || key.replace(/_/g, " ");
+        const label = argLabel(key) || key.replace(/_/g, " ");
         rest.push({ k: label, v: formatArgValue(val) });
       }
       if (rest.length) blocks.push({ type: "kv", items: rest });
@@ -690,7 +706,7 @@
     const items = [];
     for (const [k, v] of Object.entries(obj || {})) {
       if (items.length >= maxKeys) break;
-      items.push({ k: ARG_KEY_TR[k] || k.replace(/_/g, " "), v: formatArgValue(v, 320) });
+      items.push({ k: argLabel(k) || k.replace(/_/g, " "), v: formatArgValue(v, 320) });
     }
     if (Object.keys(obj || {}).length > maxKeys) {
       items.push({ k: "…", v: window.AkanaI18n.t("msg.more_fields", { n: Object.keys(obj).length - maxKeys }) });
@@ -3798,6 +3814,17 @@
   }
 
   /* ── Clock formatting (timestamp badges) ──────────────────────────────── */
+  /** Timestamps follow the APP language, not the browser's and not a literal: a hardcoded
+   *  "tr-TR" showed every English user the 24-hour Turkish form on every message forever.
+   *  Same resolution the archive module's date formatters use. */
+  function uiLocale() {
+    try {
+      return window.AkanaI18n?.getLanguage?.() === "en" ? "en-US" : "tr-TR";
+    } catch {
+      return "en-US";
+    }
+  }
+
   function formatClock(value) {
     let d = null;
     if (value instanceof Date) d = value;
@@ -3807,7 +3834,7 @@
     }
     if (!d) d = new Date();
     try {
-      return d.toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit" });
+      return d.toLocaleTimeString(uiLocale(), { hour: "2-digit", minute: "2-digit" });
     } catch {
       const hh = String(d.getHours()).padStart(2, "0");
       const mm = String(d.getMinutes()).padStart(2, "0");

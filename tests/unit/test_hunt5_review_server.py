@@ -245,10 +245,15 @@ def test_connector_turn_drains_parked_injections_when_it_ends(tmp_path) -> None:
         await router.handle(_msg("ikinci"))
         for _ in range(60):
             await asyncio.sleep(0.05)
-            if "job finished: 42" in _texts(tmp_path, conv):
+            # The drain is DELIVER-then-remove (two separate thread hops), so waiting on
+            # the text alone races the inbox pop — wait for both halves of the handoff.
+            if "job finished: 42" in _texts(tmp_path, conv) and not _load(tmp_path)[
+                "pending"
+            ].get(conv):
                 return conv
         raise AssertionError(
-            f"parked result stranded after the connector turn: {_texts(tmp_path, conv)}"
+            f"parked result stranded after the connector turn: {_texts(tmp_path, conv)} "
+            f"pending={_load(tmp_path)['pending'].get(conv)}"
         )
 
     conv = asyncio.run(main())

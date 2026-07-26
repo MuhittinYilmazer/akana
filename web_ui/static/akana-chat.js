@@ -44,6 +44,12 @@
   // is global → would wrongly block parallel chats), so a rapid double-submit to the SAME
   // existing conversation is caught during the upload/provider await window and does not run twice.
   const _submitSetupConvs = new Set();
+  // Conversations currently inside the Stop→send SERVER-CANCEL window. forceImmediate is
+  // exempt from BOTH send guards (#16 new-conv + per-conv busy), so this window is the one
+  // place where nothing else can stop a second submit of the SAME draft — see submitChatText.
+  // Keyed by conversation id ("" = the not-yet-created chat) so a Stop→send in ANOTHER
+  // conversation is never collateral.
+  const _forceImmediateConvs = new Set();
 
   // ── Reasoning-effort control (provider-aware, two vocabularies) ─────────────
   // The composer's effort menu speaks ONE of two vocabularies, chosen by the active
@@ -1595,6 +1601,16 @@
     // (do not wait for the aborted stream's promise to settle).
     if (convId) _submitSetupConvs.delete(convId);
     if (!chatInFlight) {
+      // The composer offers Stop whenever chatInFlight OR queueDepth > 0 (and the queue chip
+      // literally reads "press Stop to send immediately"), but only a LIVE stream of ours can
+      // be cancelled. With a queued message and no stream this returned in silence and every
+      // further click was a no-op with no error, toast or state change. Re-read the queue
+      // (it may already have drained → the button flips back to Send on its own) and, if the
+      // message is still waiting, say why Stop did nothing instead of doing nothing quietly.
+      if (queueDepth > 0) {
+        void refreshQueueState(convId);
+        hooks.showToast?.(window.AkanaI18n.t("chat.stop_nothing_running"), "info");
+      }
       syncSendButtonMode();
       return;
     }
@@ -1692,6 +1708,18 @@
     }
     if (forceImmediate) {
       const convId = conversationIdForMemory();
+      // RE-ENTRANCY: cancelActiveTurnOnServer waits for the server to unwind the cancelled
+      // turn (partial persist + bridge abort — seconds). Across that window NOTHING visible
+      // changes: the composer still holds the draft (cleared only after the await) and the
+      // button still reads Stop, so a user who sees a dead UI clicks again and re-enters here
+      // with the SAME text. forceImmediate skips both send guards above and the setup latch is
+      // only taken after the await, so nothing else stops it — the transport dedups the cancel
+      // itself, so both calls resume together and the message is echoed, persisted and BILLED
+      // twice. The latch is taken SYNCHRONOUSLY, before the first await, and released on every
+      // exit path.
+      const _fiKey = convId || "";
+      if (_forceImmediateConvs.has(_fiKey)) return;
+      _forceImmediateConvs.add(_fiKey);
       try {
         abortActiveChatStream(convId); // abort the ACTIVE conv's stream, not the foreground plan
       } catch {
@@ -1704,6 +1732,8 @@
         await cancelActiveTurnOnServer(convId);
       } catch {
         /* ignore */
+      } finally {
+        _forceImmediateConvs.delete(_fiKey);
       }
     }
     if (!voiceTurn && tryHandleChatDeleteCommand(text)) {
@@ -1927,6 +1957,21 @@
     );
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
+      // CONSUME THE STOP LATCH FIRST — before the upload await and before BOTH early returns
+      // below. It is set by the Stop-with-draft click above, and a submit that never reaches
+      // submitChatText used to leave it set: the next ordinary Enter then ran as forceImmediate
+      // and silently aborted + server-cancelled whatever turn was running in the displayed
+      // conversation (a background job, a turn resumed in another tab) while skipping the
+      // single-turn guards. Whatever happens below, this click's intent is settled here.
+      const forceImmediate = stopThenSendRequested;
+      stopThenSendRequested = false;
+      // A Stop click routed through the form must ALWAYS stop the running turn — a send that
+      // is rejected below (nothing to send / over the provider's attachment budget) may not
+      // swallow the user's emergency brake and leave the reply streaming with only an
+      // attachment toast as feedback.
+      const stopIfRejected = () => {
+        if (forceImmediate) requestStopActiveStream();
+      };
       const text = msg.value.trim();
       // EC1: if submitted while uploading, do not drop attachments — wait for uploads to
       // finish so pending is populated (10 s max safety). NOTE: empty-check must come AFTER
@@ -1941,12 +1986,16 @@
       }
       // EC3: attachment-only message — can be sent if text is empty but an attachment
       // exists; drop if both are absent.
-      if (!text && !pendingAttachments.length) return;
+      if (!text && !pendingAttachments.length) {
+        stopIfRejected();
+        return;
+      }
       // EC6: re-validate the active provider's per-message limit at send time
       // (pending attachments may exceed the limit after a provider switch).
-      if (await pendingExceedsMsgLimits()) return;
-      const forceImmediate = stopThenSendRequested;
-      stopThenSendRequested = false;
+      if (await pendingExceedsMsgLimits()) {
+        stopIfRejected();
+        return;
+      }
       await submitChatText(text, { forceImmediate });
     });
   }

@@ -24,6 +24,12 @@ What it does carefully:
 Restore HARD-REFUSES while the server is running (its in-process caches would make a
 file-level restore partially invisible / corrupt), verifies the manifest hashes, moves any
 existing data dir aside first, and re-hardens the secret dirs to owner-only after extract.
+
+Both directions treat the user's existing artifact as sacred until the new one is proven:
+``backup`` builds a ``*.partial-<pid>`` and os.replace()s it over the target only once the
+manifest is in (so a failed nightly run never eats last night's archive), and ``restore``
+copies the verified tree to a SIBLING of the data dir before touching anything, so the
+only remaining step is a same-filesystem rename it can roll back.
 """
 
 from __future__ import annotations
@@ -53,6 +59,10 @@ _SKIP_FILES = frozenset({"db/skills.db"})
 
 _MANIFEST_NAME = "manifest.json"
 _ARCHIVE_ROOT = "akana-data"  # everything under the data dir goes here in the tar
+#: Archive layout version. Restore REFUSES anything else: the field only earns its keep
+#: if the reader enforces it, otherwise the first format bump silently mis-restores on
+#: every already-shipped CLI instead of saying "made by a newer Akana".
+_BACKUP_FORMAT = 1
 
 
 def _resolve_data_dir() -> Path:
@@ -110,6 +120,74 @@ def _rel_excluded(rel: str, *, include_voices: bool) -> bool:
     return rel.endswith(_EXCLUDE_SUFFIXES)
 
 
+def _active_keyfile() -> Path | None:
+    """The keyfile the vault will actually READ, or None if it can't be resolved.
+
+    ``AKANA_VAULT_KEYFILE`` wins over the default location (``AKANA_VAULT_KEY`` and
+    keyring are not files at all — see _vault_key_source_mismatch for those).
+    """
+    env = os.environ.get("AKANA_VAULT_KEYFILE", "").strip()
+    if env:
+        return expand_user_path(env)
+    try:
+        from akana_server.vault_crypto import default_keyfile
+
+        return default_keyfile()
+    except Exception:  # noqa: BLE001 — an unimportable server package is not fatal here
+        return None
+
+
+def _vault_key_source_mismatch(default_key: Path) -> str:
+    """Env var whose key the vault would use INSTEAD of ``default_key`` ("" = none).
+
+    Key resolution is AKANA_VAULT_KEY → AKANA_VAULT_KEYFILE → keyring → default keyfile.
+    ``--include-vault-key`` can only bundle the default FILE, so on a machine using any
+    of the first three the bundled key may be a stale leftover that decrypts nothing on
+    the target machine — the one failure this flag exists to prevent.
+    """
+    if os.environ.get("AKANA_VAULT_KEY", "").strip():
+        return "AKANA_VAULT_KEY"
+    kf = os.environ.get("AKANA_VAULT_KEYFILE", "").strip()
+    if kf:
+        try:
+            same = expand_user_path(kf).resolve() == default_key.resolve()
+        except OSError:
+            same = False
+        if not same:
+            return "AKANA_VAULT_KEYFILE"
+    if os.environ.get("AKANA_VAULT_KEYRING", "").strip().lower() in ("1", "true", "yes", "on"):
+        return "AKANA_VAULT_KEYRING"
+    return ""
+
+
+def _readable_credential_paths(data_dir: Path) -> list[str]:
+    """Reasons this archive is NOT the ciphertext-only blob the closing note promises.
+
+    Two SUPPORTED states put readable credentials in the tar and must suppress that
+    note: a legacy plaintext ``secrets.json`` (secret_store still reads pre-vault1
+    files and only re-encrypts on the next write, so it can persist for years), and a
+    vault keyfile resolving to a path INSIDE the data dir — where the denylist sweeps
+    it in, shipping the master key next to the ciphertext it opens.
+    """
+    hits: list[str] = []
+    sj = data_dir / "secrets.json"
+    try:
+        if sj.is_file() and not sj.read_bytes().lstrip().startswith(b"vault1:"):
+            hits.append("secrets.json")
+    except OSError:
+        pass
+    key = _active_keyfile()
+    if key is not None:
+        try:
+            resolved_key = key.resolve()
+            resolved_dir = data_dir.resolve()
+            if resolved_key.is_file() and resolved_dir in resolved_key.parents:
+                hits.append(str(resolved_key.relative_to(resolved_dir)))
+        except (OSError, ValueError):
+            pass
+    return hits
+
+
 def _iter_data_files(data_dir: Path, *, include_voices: bool):
     """Yield (abs_path, rel_posix) for every file to back up (denylist-filtered)."""
     for abs_path in sorted(data_dir.rglob("*")):
@@ -145,7 +223,7 @@ def run_backup(
         archive = out / f"akana-backup-{stamp}.tar.gz"
 
     manifest: dict = {
-        "akana_backup_format": 1,
+        "akana_backup_format": _BACKUP_FORMAT,
         "created_at": stamp,
         "data_dir": str(data_dir),
         "include_voices": include_voices,
@@ -153,8 +231,14 @@ def run_backup(
         "files": {},
     }
 
+    # NEVER destroy the previous good archive until the new one is COMPLETE. A nightly
+    # `akana backup D:/backups/akana.tar.gz` reuses one filename, and opening the final
+    # path "w:gz" truncates last night's archive the instant this run STARTS — so a run
+    # that then fails (or is interrupted) leaves the user with neither. Build into a
+    # sibling partial and os.replace() it into place only once the manifest is in.
+    partial = archive.with_name(archive.name + f".partial-{os.getpid()}")
     try:
-        with tempfile.TemporaryDirectory(prefix="akana-backup-") as tmp, tarfile.open(archive, "w:gz") as tar:
+        with tempfile.TemporaryDirectory(prefix="akana-backup-") as tmp, tarfile.open(partial, "w:gz") as tar:
             tmp_dir = Path(tmp)
             for abs_path, rel in _iter_data_files(data_dir, include_voices=include_voices):
                 arc = f"{_ARCHIVE_ROOT}/{rel}"
@@ -179,6 +263,11 @@ def run_backup(
                 from akana_server.vault_crypto import default_keyfile
 
                 key = default_keyfile()
+                override = _vault_key_source_mismatch(key)
+                if override:
+                    # The bundled file is NOT provably the key the vault reads — say so
+                    # here, not on the target machine after the source machine is gone.
+                    io.warn(i18n.t("backup.vault_key_not_active", var=override, path=key))
                 if key.is_file():
                     io.warn(i18n.t("backup.vault_key_warning"))
                     manifest["includes_vault_key"] = True
@@ -194,17 +283,23 @@ def run_backup(
             import io as _io
 
             tar.addfile(info, _io.BytesIO(man_bytes))
+        os.replace(partial, archive)  # the only step that touches the user's target path
     except (OSError, sqlite3.Error, tarfile.TarError) as exc:
         io.fail(i18n.t("backup.failed", exc=exc))
         try:
-            archive.unlink(missing_ok=True)  # don't leave a half-written archive
+            partial.unlink(missing_ok=True)  # only the partial — never the good archive
         except OSError:
             pass
         return 1
 
     size_mb = archive.stat().st_size / (1024 * 1024)
     io.ok(i18n.t("backup.done", path=archive, count=len(manifest["files"]), mb=f"{size_mb:.1f}"))
-    if not include_vault_key:
+    # The ciphertext note is a claim the user makes an off-machine STORAGE decision on
+    # ("it's encrypted, Dropbox is fine"), so it may only be printed after looking.
+    readable = _readable_credential_paths(data_dir)
+    if readable:
+        io.warn(i18n.t("backup.plaintext_secrets", files=", ".join(readable)))
+    elif not include_vault_key:
         print("  " + i18n.t("backup.ciphertext_note"))
     return 0
 
@@ -228,17 +323,23 @@ def _reharden_secret_dirs(data_dir: Path) -> None:
                 os.chmod(d, 0o700)
             except OSError:
                 pass
-        # NOTE: we deliberately do NOT icacls-harden the secret DIRECTORY on Windows —
-        # `icacls /inheritance:r` on the dir strips the traversal ACEs the files need and
-        # can make the secrets unreadable to the owner. The FILES inside are individually
-        # ACL-hardened below (that is what actually protects the ciphertext); a slightly
-        # loose dir ACL only affects enumeration, not the contents.
-        for p in d.rglob("*"):
+        # The DIRECTORY is hardened too, not just the files: a tar round-trip leaves the
+        # secret trees carrying whatever the parent profile hands down (on Windows that
+        # includes Administrators/SYSTEM and full enumeration). This used to be skipped
+        # because `icacls <dir> /inheritance:r /grant:r <user>:F` — a NON-inheritable
+        # replacement grant — makes NTFS propagate the inheritance removal downward and
+        # leaves every descendant with an EMPTY DACL, locking the owner out of their own
+        # secrets. vault_crypto._restrict_to_owner now emits `(OI)(CI)F` for directories
+        # and the plain grant for leaves, so hardening top-down is safe: each child either
+        # inherits full control from its parent or gets its own explicit grant.
+        if _restrict_to_owner is not None:
+            _restrict_to_owner(d)
+        for p in sorted(d.rglob("*")):  # parents before children (top-down grants)
             try:
                 os.chmod(p, 0o700 if p.is_dir() else 0o600)
             except OSError:
                 pass
-            if _restrict_to_owner is not None and p.is_file():
+            if _restrict_to_owner is not None:
                 _restrict_to_owner(p)
     # secrets.json at the root is also owner-only
     sj = data_dir / "secrets.json"
@@ -277,6 +378,12 @@ def run_restore(archive: Path, *, force: bool = False) -> int:
                 io.fail(i18n.t("restore.bad_archive"))
                 return 1
             manifest = json.loads(man_path.read_text(encoding="utf-8"))
+            fmt = manifest.get("akana_backup_format")
+            if fmt != _BACKUP_FORMAT:
+                # Forward-compat refusal: a newer layout restored under today's rules
+                # produces a wrong data dir with no error at all.
+                io.fail(i18n.t("restore.bad_format", got=fmt, want=_BACKUP_FORMAT))
+                return 1
             bad = _verify_hashes(root, manifest)
             if bad:
                 io.fail(i18n.t("restore.hash_mismatch", files=", ".join(bad[:5])))
@@ -291,27 +398,72 @@ def run_restore(archive: Path, *, force: bool = False) -> int:
                 io.fail(i18n.t("restore.unlisted", files=", ".join(sorted(extra)[:5])))
                 return 1
 
-            # 2) clear the way so the verified tree lands AT data_dir (not nested inside it).
-            if data_dir.exists():
-                if any(data_dir.iterdir()):
-                    if not force:
-                        io.fail(i18n.t("restore.exists", path=data_dir))
-                        return 1
-                    aside = data_dir.with_name(data_dir.name + f".pre-restore-{time.strftime('%Y%m%d-%H%M%S')}")
-                    data_dir.rename(aside)
-                    io.warn(i18n.t("restore.moved_aside", path=aside))
-                else:
-                    data_dir.rmdir()  # empty → remove, else shutil.move would nest inside it
-            data_dir.parent.mkdir(parents=True, exist_ok=True)
+            # 2) refuse a populated target BEFORE any destructive step (unchanged rule).
+            occupied = data_dir.is_dir() and any(data_dir.iterdir())
+            if occupied and not force:
+                io.fail(i18n.t("restore.exists", path=data_dir))
+                return 1
+
             man_path.unlink(missing_ok=True)  # the manifest itself is not restored
             vault_key_blob = root / "__vault_key__"
             restored_key = vault_key_blob.is_file()
             if restored_key:
                 vault_key_blob.unlink()  # handled separately below, not under data_dir
-            # shutil.move, not Path.rename: the temp dir (system temp, e.g. C:) and the
-            # data dir can live on DIFFERENT filesystems, where rename() raises — move
-            # falls back to copy+delete across a filesystem boundary.
-            shutil.move(str(root), str(data_dir))
+
+            # 3) Land the verified tree NEXT TO the data dir FIRST. The extract lives in
+            # system temp, which can be a DIFFERENT filesystem: shutil.move then degrades
+            # to copytree+delete and can die halfway (ENOSPC, a Windows-illegal name from
+            # a Linux-made archive, a >260-char path, Ctrl+C). Doing that copy while the
+            # data dir is still untouched is what makes a failure here a NO-OP — the old
+            # code did it after the rename-aside, leaving an arbitrary PREFIX of the
+            # archive in place that the server boots on without complaint.
+            data_dir.parent.mkdir(parents=True, exist_ok=True)
+            staging = data_dir.with_name(f"{data_dir.name}.restoring-{os.getpid()}")
+            shutil.rmtree(staging, ignore_errors=True)  # leftover from an earlier crash
+            try:
+                shutil.move(str(root), str(staging))  # shutil.Error subclasses OSError
+            except OSError as exc:
+                shutil.rmtree(staging, ignore_errors=True)
+                io.fail(i18n.t("restore.failed", exc=exc))
+                print("  " + i18n.t("restore.unchanged", path=data_dir))
+                return 1
+
+            # 4) Swap it in. Both renames are SIBLINGS on one filesystem, so the window
+            # where the data dir is missing is one rename wide; if it still fails, the
+            # aside dir goes straight back — the user must never be left depending on
+            # noticing a .pre-restore-* directory.
+            aside: Path | None = None
+            try:
+                if data_dir.exists():
+                    if occupied:
+                        aside = data_dir.with_name(
+                            data_dir.name + f".pre-restore-{time.strftime('%Y%m%d-%H%M%S')}"
+                        )
+                        data_dir.rename(aside)
+                        io.warn(i18n.t("restore.moved_aside", path=aside))
+                    else:
+                        data_dir.rmdir()  # empty → remove, else the rename would nest
+                staging.rename(data_dir)
+            except OSError as exc:
+                io.fail(i18n.t("restore.failed", exc=exc))
+                shutil.rmtree(staging, ignore_errors=True)
+                if aside is None:
+                    try:
+                        # only an EMPTY dir can have been removed above — put it back so
+                        # "nothing was changed" is literally true.
+                        data_dir.mkdir(parents=True, exist_ok=True)
+                    except OSError:
+                        pass
+                    print("  " + i18n.t("restore.unchanged", path=data_dir))
+                else:
+                    try:
+                        aside.rename(data_dir)
+                        print("  " + i18n.t("restore.rolled_back", path=data_dir))
+                    except OSError:
+                        # Nothing left but to name BOTH paths: the data dir is incomplete
+                        # and the real data is in a directory the user has never heard of.
+                        io.fail(i18n.t("restore.rollback_failed", aside=aside, path=data_dir))
+                return 1
 
             if restored_key and manifest.get("includes_vault_key"):
                 _restore_vault_key(archive)  # re-extract the key to its real location
@@ -364,6 +516,12 @@ def _restore_vault_key(archive: Path) -> None:
         os.close(fd)
     _restrict_to_owner(dest)
     io.warn(i18n.t("restore.vault_key_written", path=dest))
+    # The key only helps if the TARGET machine resolves to this path — an
+    # AKANA_VAULT_KEY/KEYFILE/keyring configuration makes the write a silent no-op and
+    # every secret undecryptable despite the reassuring line above.
+    override = _vault_key_source_mismatch(dest)
+    if override:
+        io.warn(i18n.t("restore.vault_key_not_read", var=override, path=dest))
 
 
 def _safe_extract(tar: tarfile.TarFile, dest: Path) -> None:

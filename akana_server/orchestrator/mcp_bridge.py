@@ -19,6 +19,7 @@ turn. Failures are logged and skipped; a tool error is returned to the model as 
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import AsyncExitStack
 from datetime import timedelta
@@ -39,6 +40,11 @@ _READ_TIMEOUT = timedelta(seconds=60)
 #: ``mcp__<server>__<tool>`` — the namespace prefix that marks a bridged tool so the
 #: provider routes its dispatch here instead of to the in-process native tools.
 TOOL_PREFIX = "mcp__"
+
+#: How long ``__aexit__`` waits for the session-owner task to finish unwinding. The
+#: transports terminate their child process tree inside that unwind; past this the turn
+#: stops waiting on it (the task keeps running and still reaps the children).
+_TEARDOWN_TIMEOUT_S = 15.0
 
 
 def _to_openai_decl(qualified_name: str, tool: Any) -> dict[str, Any]:
@@ -92,18 +98,53 @@ class McpToolBridge:
             result = await bridge.dispatch("mcp__filesystem__read_file", {"path": ...})
 
     With an empty ``servers`` mapping it is a pure no-op: no ``mcp`` import, no subprocess,
-    empty ``decls``."""
+    empty ``decls``.
+
+    ONE TASK OWNS THE SESSIONS. The transports underneath (``stdio_client``,
+    ``ClientSession``) are anyio task groups, and anyio requires a cancel scope to be
+    exited by the task that entered it. Every native-function-calling provider holds this
+    bridge open ACROSS the yields of an async generator, and ``chat_producer`` drives that
+    generator with a fresh ``asyncio.Task`` per ``__anext__`` — so entering and exiting
+    inline meant setup ran in one task and teardown in another, and anyio raised
+    "Attempted to exit cancel scope in a different task than it was entered in" on every
+    external-MCP turn. So the exit stack lives entirely inside :meth:`_own_sessions`,
+    running in a task this class creates; ``__aenter__``/``__aexit__`` only signal it.
+    Dispatch is unaffected — the SDK's request/response streams are cross-task safe; only
+    scope entry/exit is task-bound."""
 
     def __init__(self, servers: dict[str, dict[str, Any]] | None) -> None:
         self._servers = servers or {}
         self._stack: AsyncExitStack | None = None
         self._decls: list[dict[str, Any]] = []
         self._routes: dict[str, tuple[Any, str]] = {}  # qualified name → (session, tool)
+        self._owner: "asyncio.Task[None] | None" = None
+        self._ready: asyncio.Event | None = None
+        self._closing: asyncio.Event | None = None
 
     @property
     def decls(self) -> list[dict[str, Any]]:
         """OpenAI tool declarations for every successfully-listed external tool ([] = none)."""
         return self._decls
+
+    async def _own_sessions(self) -> None:
+        """Set up every server, publish readiness, then hold the stack open until
+        ``__aexit__`` asks for it back. Enter AND exit happen here, in one task."""
+        assert self._ready is not None and self._closing is not None
+        try:
+            async with AsyncExitStack() as stack:
+                self._stack = stack
+                for name, cfg in self._servers.items():
+                    try:
+                        await self._add_server(name, cfg)
+                    except Exception:  # one bad server must not sink the others / the turn
+                        log.warning("MCP server %r failed to start — skipped", name, exc_info=True)
+                self._ready.set()
+                await self._closing.wait()
+        finally:
+            # Unblock a caller waiting on setup even when setup itself blew up or was
+            # cancelled — otherwise __aenter__ waits for a readiness that never comes.
+            self._ready.set()
+            self._stack = None
 
     async def __aenter__(self) -> "McpToolBridge":
         if not self._servers:
@@ -116,30 +157,41 @@ class McpToolBridge:
                 "external MCP tools skipped (pip install mcp)"
             )
             return self
-        self._stack = AsyncExitStack()
-        await self._stack.__aenter__()
+        self._ready = asyncio.Event()
+        self._closing = asyncio.Event()
+        self._owner = asyncio.create_task(self._own_sessions())
         try:
-            for name, cfg in self._servers.items():
-                try:
-                    await self._add_server(name, cfg)
-                except Exception:  # one bad server must not sink the others / the turn
-                    log.warning("MCP server %r failed to start — skipped", name, exc_info=True)
+            await self._ready.wait()
         except BaseException:
             # A BaseException (e.g. CancelledError on STOP/timeout mid-setup) escapes
             # __aenter__, so Python never calls __aexit__ → any transports already entered
-            # on the stack (spawned MCP subprocesses) would leak. Tear the stack down here
-            # before re-raising so those subprocesses are closed.
+            # (spawned MCP subprocesses) would leak. Tear down before re-raising.
             await self.__aexit__(None, None, None)
             raise
+        if self._owner.done():
+            # Setup died outright: surface nothing to the turn (the per-server guard above
+            # already logged), but do not leave a failed task unretrieved.
+            exc = None if self._owner.cancelled() else self._owner.exception()
+            if exc is not None:
+                log.warning("MCP bridge setup failed — external tools skipped", exc_info=exc)
+            self._owner = None
         return self
 
     async def __aexit__(self, *exc: Any) -> bool:
-        if self._stack is not None:
+        owner, self._owner = self._owner, None
+        if self._closing is not None:
+            self._closing.set()
+        if owner is not None and not owner.done():
             try:
-                await self._stack.__aexit__(*exc)
+                # Shielded: the unwind owns the child-process teardown, so a cancelled
+                # turn must not abandon it half-done.
+                await asyncio.wait_for(asyncio.shield(owner), _TEARDOWN_TIMEOUT_S)
+            except asyncio.TimeoutError:
+                log.warning("MCP sessions did not close within %.0fs", _TEARDOWN_TIMEOUT_S)
+            except asyncio.CancelledError:
+                raise
             except Exception:  # pragma: no cover - teardown noise must not mask the turn
                 log.warning("error while closing MCP sessions", exc_info=True)
-            self._stack = None
         return False
 
     async def _add_server(self, name: str, cfg: dict[str, Any]) -> None:

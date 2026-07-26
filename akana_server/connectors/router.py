@@ -518,8 +518,17 @@ class InboundRouter:
             # indicator of whichever turn IS still live in this conversation.
             if conversation_id and register_turn is not None:
                 ann.conv = str(conversation_id)
-            history = self._history_for(conversation_id)
-            system_prompt = self._system_prompt_for(msg, conversation_id)
+            # OFF THE LOOP, both of them. _history_for reads memory.db (busy_timeout up
+            # to 10s, so it waits on any web turn holding the write lock) and re-reads
+            # llm_settings.json per message; _system_prompt_for resolves the persona
+            # registry and walks the skill catalog off disk. On the loop each inbound
+            # channel message froze the whole server for that duration — the same b26
+            # failure the persist paths above were moved off the loop for, and the same
+            # fan-out the web-side ContextAssembler already uses.
+            history, system_prompt = await asyncio.gather(
+                asyncio.to_thread(self._history_for, conversation_id),
+                asyncio.to_thread(self._system_prompt_for, msg, conversation_id),
+            )
             turn_task: "asyncio.Task[str] | None" = None
             try:
                 if callable(register_turn):

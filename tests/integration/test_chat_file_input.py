@@ -1,6 +1,6 @@
 """MultimodalEngine PHASE2 — multi-type file attachment in chat (file_ids).
 
-* claude + cursor → provider-native [Dosya: <path>] / [Görsel: <path>] block
+* claude + cursor → provider-native [File: <path>] / [Image: <path>] block
   (both agents read the path themselves — empirically verified),
 * file_ids ↔ image_ids alias union (effective_file_ids).
 """
@@ -63,8 +63,8 @@ def test_claude_injects_file_path_block_for_text_file(
         )
         assert r.status_code == 200, r.text
         assert len(prompts) == 1
-        # text file → [Dosya: <absolute-path>] (claude reads it via Read).
-        assert "[Dosya: " in prompts[0]
+        # text file → [File: <absolute-path>] (claude reads it via Read).
+        assert "[File: " in prompts[0]
         assert str(tmp_path / "uploads") in prompts[0]
 
 
@@ -83,8 +83,8 @@ def test_cursor_injects_file_path_block_for_text_file(
         )
         assert r.status_code == 200, r.text
         assert len(prompts) == 1
-        # text file → [Dosya: <absolute-path>] (the cursor agent reads the path too).
-        assert "[Dosya: " in prompts[0]
+        # text file → [File: <absolute-path>] (the cursor agent reads the path too).
+        assert "[File: " in prompts[0]
         assert str(tmp_path / "uploads") in prompts[0]
 
 
@@ -102,7 +102,7 @@ def test_file_ids_alias_merges_with_image_ids(
             json={"text": "oku", "file_ids": [fid], "image_ids": [fid]},
         )
         assert r.status_code == 200, r.text
-        assert prompts[0].count("[Dosya: ") == 1
+        assert prompts[0].count("[File: ") == 1
 
 
 def test_unknown_file_id_returns_400(
@@ -127,4 +127,4 @@ def test_empty_file_ids_is_noop(
         prompts = _mock_llm(monkeypatch)
         r = client.post("/api/v1/chat", json={"text": "selam", "file_ids": []})
         assert r.status_code == 200
-        assert "[Dosya:" not in prompts[0]
+        assert "[File:" not in prompts[0]

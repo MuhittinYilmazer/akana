@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -75,14 +76,50 @@ _MAX_ENTRIES = 256
 _MAX_TRIGGERS = 8
 _MAX_CHARS = 20_000
 
+#: Per-FIELD ceilings. Without them one skill's metadata sets the prompt size: the
+#: char budget admits the first entry line unconditionally, so a multi-megabyte title
+#: would ride into every system prompt.
+_MAX_LABEL_CHARS = 120
+_MAX_TRIGGER_CHARS = 40
+
+#: Control characters (C0/C1) + the Unicode line/paragraph separators, i.e. everything
+#: that can start a new line inside a field.
+_CONTROL_RE = re.compile("[\x00-\x1f\x7f-\x9f\u2028\u2029]+")
+
+
+def _clean(text: Any, limit: int) -> str:
+    """Make a pack-supplied string safe to substitute into the system prompt.
+
+    Titles/triggers/pack names come from a downloaded or shared pack's frontmatter —
+    semi-trusted content that auto-registers with no consent step and is rendered on
+    EVERY turn. Two structural properties must hold no matter what a pack ships:
+
+    * **one entry = one line.** Any newline (or other control char) in a field would
+      otherwise let the metadata continue on its own line — the block's header/footer
+      is the only thing scoping this text, and a forged ``[/INSTALLED CAPABILITIES]``
+      line puts attacker prose at top level in the system prompt, unconditionally.
+    * **no square brackets.** The block delimiters are the ONLY bracketed tokens in
+      this text, in either language, so neutralising ``[``/``]`` makes a forged
+      delimiter unrepresentable without having to enumerate (or guess) their spellings.
+
+    Plus a length bound so one field cannot dominate the prompt. This sanitizes the
+    PROMPT boundary only — the registry/UI keep the author's original strings.
+    """
+    s = _CONTROL_RE.sub(" ", str(text or ""))
+    s = s.replace("[", "(").replace("]", ")")
+    s = " ".join(s.split())
+    if len(s) > limit:
+        s = s[: limit - 1].rstrip() + "…"  # crops stay visible, never silent
+    return s
+
 
 def _entry_line(entry: SkillEntry, language: str = "en") -> str:
-    label = (entry.title or entry.id or "").strip() or entry.id
+    label = _clean(entry.title, _MAX_LABEL_CHARS) or _clean(entry.id, _MAX_LABEL_CHARS)
     trigs: list[str] = []
     seen: set[str] = set()
     capped = False
     for t in entry.triggers:
-        t = (t or "").strip()
+        t = _clean(t, _MAX_TRIGGER_CHARS)
         key = t.lower()
         if t and key not in seen:
             seen.add(key)
@@ -116,9 +153,12 @@ def list_catalog_skills(registry: SkillRegistry) -> list[dict[str, str]]:
 
 
 def _pack_display(pack_id: str) -> str:
-    """Human-facing pack name for a sub-header: the part after the last '/' (or the id)."""
+    """Human-facing pack name for a sub-header: the part after the last '/' (or the id).
+
+    Pack-supplied like the titles, so it goes through the same prompt sanitizer.
+    """
     pid = (pack_id or "").strip()
-    return pid.rsplit("/", 1)[-1] or pid
+    return _clean(pid.rsplit("/", 1)[-1] or pid, _MAX_LABEL_CHARS)
 
 
 def build_capability_catalog(

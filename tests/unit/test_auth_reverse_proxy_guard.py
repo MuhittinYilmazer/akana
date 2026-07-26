@@ -12,11 +12,12 @@ import logging
 import types
 
 import pytest
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from starlette.datastructures import Headers
 
 from akana_server.api.deps import (
+    HostHeaderGuard,
     authorize_websocket,
     request_is_proxied,
     require_akana_bearer,
@@ -108,6 +109,32 @@ def test_token_trusts_loopback_but_requires_it_for_remote_and_proxied():
         )
 
 
+def test_non_ascii_credentials_are_refused_not_crashed():
+    """Headers/query strings arrive latin-1-decoded, so a client can put a byte >= 0x80
+    in them; ``hmac.compare_digest`` on *str* raises TypeError on those → the gate used
+    to answer an unhandled 500 with a traceback instead of a clean refusal."""
+    from starlette.requests import Request
+
+    from akana_server.api.deps import require_akana_bearer_strict
+
+    app = _bearer_app("secret")
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/probe",
+        "query_string": b"",
+        "headers": [(b"authorization", "Bearer \xe9".encode("latin-1"))],
+        "client": ("1.2.3.4", 5000),
+        "app": app,
+    }
+    for gate in (require_akana_bearer, require_akana_bearer_strict):
+        with pytest.raises(HTTPException) as exc:
+            gate(Request(scope))
+        assert exc.value.status_code == 401
+    # WebSocket side: the ?token= query param is the same latin-1 surface.
+    assert authorize_websocket(_ws(api_token="secret", peer_host="1.2.3.4"), token="é") is False
+
+
 def test_valid_token_passes_even_when_proxied():
     with TestClient(_bearer_app("secret")) as c:
         r = c.get(
@@ -166,6 +193,110 @@ def test_ws_token_trusts_loopback_but_gates_proxied():
     assert authorize_websocket(proxied, token=None) is False
     proxied_ok = _ws(api_token="secret", headers={"x-forwarded-for": "1.2.3.4"})
     assert authorize_websocket(proxied_ok, token="secret") is True
+
+
+# --- Host header guard (DNS rebinding) ----------------------------------------
+#
+# "the peer is loopback ⇒ the owner" is the whole trust model. A page on
+# http://evil.example that re-resolves its OWN name to 127.0.0.1 becomes a loopback
+# peer whose origin the browser considers same-origin — SOP/CORS no longer keeps it
+# off the API, and the peer address cannot tell it apart from the owner's UI. The
+# Host header still carries the attacker's domain; that is the one usable signal.
+
+
+def _host_app(*, api_token=None, server_host="127.0.0.1"):
+    app = FastAPI()
+    app.state.settings = _settings(api_token=api_token, server_host=server_host)
+    app.add_middleware(HostHeaderGuard)
+
+    @app.get("/probe")
+    def probe():
+        return {"ok": True}
+
+    @app.websocket("/sock")
+    async def sock(ws):
+        await ws.accept()
+        await ws.close()
+
+    return app
+
+
+def _get(app, host, headers=None):
+    with TestClient(app) as c:
+        return c.get("/probe", headers={"Host": host, **(headers or {})})
+
+
+def test_rebinding_host_is_rejected():
+    r = _get(_host_app(), "evil.example.com")
+    assert r.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "localhost:8766",
+        "127.0.0.1:8766",
+        "127.0.0.1",
+        "[::1]:8766",  # split(":")[0] would mangle this into "["
+        "[::1]",
+        "192.168.1.40:8766",  # LAN bind, reached by address
+        "testserver",  # every TestClient in the suite
+        "akana-box",  # single-label intranet name (not registrable in public DNS)
+        "akana-box.local",  # mDNS
+        "my-laptop.tail1a2b.ts.net:443",  # what `tailscale serve` puts in Host
+    ],
+)
+def test_legitimate_hosts_pass(host):
+    assert _get(_host_app(), host).status_code == 200
+
+
+def test_configured_hostname_bind_is_allowed():
+    app = _host_app(server_host="akana.example.com")
+    assert _get(app, "akana.example.com:8766").status_code == 200
+    assert _get(app, "other.example.com").status_code == 400
+
+
+def test_valid_token_passes_any_host():
+    """A rebinding page cannot read the owner's localStorage, so it never has the
+    token — an authenticated proxy under a custom domain keeps working."""
+    app = _host_app(api_token="secret")
+    assert _get(app, "akana.example.com").status_code == 400
+    assert (
+        _get(app, "akana.example.com", headers={"Authorization": "Bearer secret"}).status_code
+        == 200
+    )
+    assert (
+        _get(app, "akana.example.com", headers={"Authorization": "Bearer wrong"}).status_code
+        == 400
+    )
+
+
+def test_empty_token_is_not_a_free_pass():
+    """compare_digest("Bearer ", "Bearer ") must not let a no-token instance through."""
+    with TestClient(_host_app(api_token=None)) as c:
+        r = c.get("/probe", headers={"Host": "evil.example.com", "Authorization": "Bearer "})
+    assert r.status_code == 400
+
+
+def test_websocket_on_a_rebound_host_is_closed():
+    from starlette.websockets import WebSocketDisconnect
+
+    with TestClient(_host_app()) as c:
+        with pytest.raises(WebSocketDisconnect):
+            with c.websocket_connect("/sock", headers={"Host": "evil.example.com"}):
+                pass
+
+
+def test_real_app_installs_the_guard(tmp_path, monkeypatch):
+    """Wiring: the guard is on the actual application, not just testable in isolation."""
+    from akana_server.api.app import create_app
+
+    monkeypatch.setenv("AKANA_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AKANA_TOKEN", "")
+    monkeypatch.setenv("CURSOR_API_KEY", "")
+    with TestClient(create_app()) as c:
+        assert c.get("/health").status_code == 200
+        assert c.get("/health", headers={"Host": "evil.example.com"}).status_code == 400
 
 
 # --- request_is_proxied helper -----------------------------------------------

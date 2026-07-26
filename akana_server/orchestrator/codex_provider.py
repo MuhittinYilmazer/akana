@@ -162,12 +162,12 @@ def _codex_env(settings: Settings, mcp_env: dict[str, str]) -> dict[str, str]:
     foreign-provider secrets are stripped too (the codex process + its MCP children have
     no business seeing them), mirroring the claude env denylist.
 
-    ``mcp_env`` is merged in LAST: the MCP server env dicts are forwarded through the
+    ``mcp_env`` is merged in LAST: those MCP server env vars are forwarded through the
     child's inherited process environment (Codex stdio MCP servers inherit the parent
     environment) so secret-bearing values (e.g. the vault master key) never have to ride
-    the ``-c`` overrides on argv. Non-secret keys are ALSO passed via ``-c`` for
-    determinism (see :func:`_mcp_overrides`); this env path is the belt-and-suspenders
-    that also covers the secret ones.
+    the ``-c`` overrides on argv. It is deliberately NOT every server's env —
+    :func:`_mcp_overrides` decides what may be shared, because this one environment is
+    handed to EVERY MCP child codex spawns.
     """
     # Auth-defeating keys that MUST NOT survive into the codex process env: the CLI
     # reads OPENAI_API_KEY/CODEX_API_KEY from its own environment and would silently
@@ -189,7 +189,9 @@ def _codex_env(settings: Settings, mcp_env: dict[str, str]) -> dict[str, str]:
         LEGACY_ENV_PREFIX + "TOKEN",
     ):
         env.pop(key, None)
-    # Forward every MCP server env var so a Codex-spawned stdio child inherits it...
+    # Forward the MCP server env vars _mcp_overrides cleared for the SHARED process env
+    # (see its ISOLATION note — this environment reaches every stdio child codex spawns,
+    # so an external server's secrets never appear here) ...
     for key, value in mcp_env.items():
         if value:
             env[key] = value
@@ -339,6 +341,14 @@ def _looks_secret_env_key(key: str) -> bool:
     return any(t in upper for t in ("KEY", "TOKEN", "SECRET", "PASSWORD", "PASS", "CREDENTIAL"))
 
 
+#: Akana's OWN built-in MCP children (``memory_tools.mcp_servers_payload``). Their env is
+#: Akana's own (``AKANA_*``, the vault master key) and they are first-party processes, so
+#: the shared-process-env forwarding below is scoped to exactly these names.
+_BUILTIN_MCP_SERVERS = frozenset(
+    {"akana_memory", "akana_vault", "akana_schedule", "akana_tasks"}
+)
+
+
 def _mcp_overrides(mcp_servers: dict[str, Any] | None) -> tuple[list[str], dict[str, str]]:
     """Build the ``-c`` MCP override argv + the env to forward via the process env.
 
@@ -346,25 +356,70 @@ def _mcp_overrides(mcp_servers: dict[str, Any] | None) -> tuple[list[str], dict[
 
       * ``argv_overrides`` — repeatable ``["-c", "mcp_servers.<name>.command=…", "-c",
         "mcp_servers.<name>.args=[…]", "-c", "mcp_servers.<name>.env.<KEY>=…", …]``. The
-        command + args + NON-secret env keys are inlined here (deterministic — memory's
-        ``AKANA_DATA_DIR`` works even if Codex does not propagate the process env to the
-        child). Codex's ``type`` field is not emitted (stdio is inferred from ``command``).
-      * ``process_env`` — EVERY server env var (secret + non-secret), for
-        :func:`_codex_env` to merge into the codex subprocess environment so a
-        Codex-spawned stdio child inherits it. Secret-bearing values reach the child ONLY
-        through this path (never argv).
+        command + args + NON-secret env keys are inlined here. This path IS per-server:
+        codex applies ``mcp_servers.<name>.env`` only to that server's child.
+      * ``process_env`` — merged by :func:`_codex_env` into the ONE codex subprocess
+        environment, which codex then hands to EVERY stdio MCP child it spawns. It is
+        therefore shared, not per-server, and only built-in Akana servers' env goes here.
 
-    LIMITATION (documented): a server whose env carries a secret (e.g. akana_vault's
-    ``AKANA_VAULT_KEY``) therefore works only if Codex forwards its process environment to
-    the stdio MCP child — the common MCP convention, but unverified here without a live
-    login. Memory tools (non-secret env) work unconditionally. ``AKANA_VAULT_TOOLS=0``
-    sidesteps the vault path entirely.
+    ISOLATION (the reason for the split): ``mcp_config`` promises that "the server's own
+    environment variables are NOT forwarded automatically to external MCP processes —
+    only the ``env`` explicitly written in the yaml reaches the child". Flattening every
+    server's env into one process environment broke that promise three ways: a
+    third-party ``npx`` server pulled in for one narrow purpose received the owner's
+    OTHER service tokens (and, in env/keyring vault setups, ``AKANA_VAULT_KEY`` — the key
+    that decrypts every stored secret); two servers using the same variable name silently
+    shared one value, so server A authenticated to its service with server B's
+    credential; and none of it was visible to the owner, who reads per-server ``env`` as
+    an isolation boundary.
+
+    So a SECRET-bearing value only ever reaches ``process_env`` when it belongs to a
+    built-in server AND no external server is mounted to read it; otherwise it is
+    forwarded on neither path (argv would leak it to ``ps``/``tasklist`` instead) and the
+    drop is reported at mount time. Non-secret values ride the per-server ``-c`` path,
+    plus the shared env for built-ins only — that redundancy is what makes memory's
+    ``AKANA_DATA_DIR`` work even if Codex ignores ``-c … .env``. A key two servers claim
+    with different values is dropped rather than silently resolved by dict order.
+
+    LIMITATION (documented): a BUILT-IN server whose env carries a secret (akana_vault's
+    ``AKANA_VAULT_KEY``) still relies on Codex forwarding its process environment to the
+    stdio child — the common MCP convention, unverified here without a live login.
+    ``AKANA_VAULT_TOOLS=0`` sidesteps the vault path entirely.
     """
+    servers = {
+        name: cfg for name, cfg in (mcp_servers or {}).items() if isinstance(cfg, dict)
+    }
+    # One external server is enough to make the shared process env a third-party
+    # audience: codex spawns every stdio child from it.
+    has_external = any(name not in _BUILTIN_MCP_SERVERS for name in servers)
     overrides: list[str] = []
     process_env: dict[str, str] = {}
-    for name, cfg in (mcp_servers or {}).items():
-        if not isinstance(cfg, dict):
-            continue
+    #: key → the server that claimed it, so a second claimant is a detectable collision.
+    claimed: dict[str, str] = {}
+    #: keys two servers disagreed on — dropped for good, never re-added by a third.
+    conflicted: set[str] = set()
+
+    def _share(key: str, value: str, owner: str) -> None:
+        """Put one value into the SHARED codex process env, collision-guarded."""
+        if key in conflicted:
+            return
+        first = claimed.get(key)
+        if first is not None and process_env.get(key) != value:
+            # One shared env cannot hold two values: the last writer used to win and BOTH
+            # children silently got it — server A authenticating with server B's
+            # credential. Give neither of them the wrong one.
+            log.warning(
+                "codex: MCP servers %r and %r both define %r with different values — it "
+                "was dropped (codex cannot give them separate environments)",
+                first, owner, key,
+            )
+            process_env.pop(key, None)
+            conflicted.add(key)
+            return
+        claimed[key] = owner
+        process_env[key] = value
+
+    for name, cfg in servers.items():
         command = cfg.get("command")
         if command:
             overrides += ["-c", f"mcp_servers.{name}.command={_toml_value(command)}"]
@@ -375,17 +430,38 @@ def _mcp_overrides(mcp_servers: dict[str, Any] | None) -> tuple[list[str], dict[
         if cwd:
             overrides += ["-c", f"mcp_servers.{name}.cwd={_toml_value(cwd)}"]
         env = cfg.get("env")
-        if isinstance(env, dict):
-            for key, value in env.items():
-                if value is None:
-                    continue
-                process_env[str(key)] = str(value)
-                # Secret-bearing values stay OFF argv → process-env inheritance only.
-                if not _looks_secret_env_key(str(key)):
-                    overrides += [
-                        "-c",
-                        f"mcp_servers.{name}.env.{key}={_toml_value(value)}",
-                    ]
+        if not isinstance(env, dict):
+            continue
+        builtin = name in _BUILTIN_MCP_SERVERS
+        for raw_key, value in env.items():
+            if value is None:
+                continue
+            key = str(raw_key)
+            if not _looks_secret_env_key(key):
+                # Non-secret → the per-server (isolated) argv path always.
+                overrides += ["-c", f"mcp_servers.{name}.env.{key}={_toml_value(value)}"]
+                if builtin:
+                    _share(key, str(value), name)
+                continue
+            if not builtin:
+                log.warning(
+                    "codex: %r for external MCP server %r was NOT forwarded — codex gives "
+                    "every MCP child ONE shared process environment, so passing it would "
+                    "hand this secret to every other MCP server too (use the claude or "
+                    "cursor provider for secret-bearing MCP servers)",
+                    key, name,
+                )
+                continue
+            if has_external:
+                log.warning(
+                    "codex: %r for built-in server %r was NOT forwarded because external "
+                    "MCP servers are also mounted — codex would give them the same "
+                    "process environment, and this value decrypts the owner's secrets. "
+                    "Remove the external servers, or use the claude/cursor provider.",
+                    key, name,
+                )
+                continue
+            _share(key, str(value), name)
     return overrides, process_env
 
 

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import sqlite3
 import threading
 import time
@@ -50,6 +51,31 @@ RRF_K_CONST = 60  # §11.3 option A default
 #: After a transient embed failure the vector layer stays off this long —
 #: one failed 10s call must not become a per-query retry storm.
 EMBED_COOLDOWN_S = 120.0
+
+#: Cosine floor a vector hit must clear to count as memory at all. Without one,
+#: ``store.search`` top-k is just "the k least-unrelated facts", so an off-topic
+#: question pushes the user's whole distilled fact store (address, blood type,
+#: salary, therapist) into a prompt they thought was off-topic — a relevance bug
+#: AND a privacy one, since every recalled block goes out to the provider.
+#:
+#: Model-dependent, hence keyed by embedder family. Calibrated for the shipped
+#: local model (fastembed paraphrase-multilingual-MiniLM-L12-v2) over 18 relevant
+#: EN+TR query/fact pairs and 96 off-topic ones: relevant cosines bottom out at
+#: 0.248 (p10 0.392, median 0.588) while off-topic pairs top out at 0.328 — the
+#: distributions overlap, so no floor separates them perfectly. At 0.20 all 18
+#: relevant pairs survive and only 5 of 96 off-topic pairs do (5 of 8 off-topic
+#: queries return nothing at all); at 0.25 a genuine hit ("kan grubum ne" → blood
+#: type, 0.248) starts dying. An over-tight floor is the worse failure — it
+#: empties recall silently — so the floor sits below the worst real hit.
+_MIN_SCORE_BY_FAMILY: dict[str, float] = {"fastembed": 0.20}
+#: Any other family (ollama/bge-m3, HashingEmbedder, a custom Embedder) has no
+#: calibration here, and inventing a positive floor would silently break its
+#: recall. Only the model-independent rule applies: a cosine at or below zero
+#: points away from the query and is never evidence of relatedness.
+_MIN_SCORE_UNCALIBRATED = 0.0
+#: Operator override when a different model is wired in (the floor is a property
+#: of the embedding space, not of this code).
+_MIN_SCORE_ENV = "AKANA_MEMORY_VECTOR_MIN_SCORE"
 _DEFAULT_MIN_TRUST = "inferred"  # K15, same floor as recall.py
 # Candidate collection must see the *full* keyword ranking; the budget is
 # applied once, after fusion (§11.4), not inside each source.
@@ -75,6 +101,28 @@ def _fact_text(key: str, value: str) -> str:
 
 def _text_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _resolve_min_score(embedder_name: str) -> float:
+    """The cosine floor for ``embedder_name`` — env override, else its family's.
+
+    ``Embedder.name`` is ``"<family>:<model>"`` (``fastembed:…``, ``ollama:…``,
+    ``hashing:…``), and only the family decides the scale of a cosine. A
+    malformed env value is ignored rather than fatal: a typo in a knob must not
+    take recall down.
+    """
+    raw = os.environ.get(_MIN_SCORE_ENV, "").strip()
+    if raw:
+        try:
+            return float(raw)
+        except ValueError:
+            log.warning(
+                "%s=%r is not a number; falling back to the calibrated floor",
+                _MIN_SCORE_ENV,
+                raw,
+            )
+    family = embedder_name.split(":", 1)[0].strip().lower()
+    return _MIN_SCORE_BY_FAMILY.get(family, _MIN_SCORE_UNCALIBRATED)
 
 
 class _EmbeddingMeta:
@@ -468,20 +516,30 @@ def _vector_blocks(
     *,
     min_trust: str | None,
     limit: int,
+    min_score: float | None = None,
 ) -> tuple[list[RecallBlock], int]:
-    """Cosine hits → trust-gated semantic blocks (best first).
+    """Cosine hits → relevance- and trust-gated semantic blocks (best first).
 
     Returns ``(blocks, hits_examined)``. The store knows nothing about trust,
     so the gate applies here, from the fact's own fields. The search is pinned
     to ``embedder.name`` — vectors from other models share a table (and
     possibly a dimension) but never a space.
+
+    The relevance gate is the other half: ``store.search`` returns a top-k with
+    no minimum, so on an unrelated query the top-k is simply the k
+    least-unrelated facts. Anything under ``min_score`` (and anything at or
+    below zero cosine, for every model) is noise and never becomes a block —
+    see :data:`_MIN_SCORE_BY_FAMILY` for how the floor was calibrated.
     """
+    floor = _resolve_min_score(embedder.name) if min_score is None else min_score
     hits = store.search(
         embedder.embed([query])[0], limit=max(limit * 3, 10), model=embedder.name
     )
     allow = set(_trust_allowset(min_trust)) if min_trust else None
     blocks: list[RecallBlock] = []
     for fact_id, score in hits:
+        if score <= 0.0 or score < floor:
+            continue
         fact = memory.get_fact(fact_id)
         if fact is None or not fact.is_valid:
             continue
@@ -506,12 +564,15 @@ def make_vector_strategy(
     embedder: Embedder,
     *,
     health: VectorHealth | None = None,
+    min_score: float | None = None,
 ) -> _StrategyFn:
     """Build the ``vector_first`` strategy: embed the query, cosine-rank facts.
 
     Degrade contract: when the embedder is unavailable (health gate tripped)
     or the embed call fails, the query is answered by plain keyword recall —
-    the caller always gets a result, never an exception.
+    the caller always gets a result, never an exception. ``min_score``
+    overrides the calibrated cosine floor (``None`` = resolve from the
+    embedder's family).
     """
     _health = health if health is not None else VectorHealth()
 
@@ -528,7 +589,7 @@ def make_vector_strategy(
             try:
                 vector_out = _vector_blocks(
                     memory, store, embedder, query,
-                    min_trust=min_trust, limit=limit,
+                    min_trust=min_trust, limit=limit, min_score=min_score,
                 )
                 _health.record_success()
             except Exception as e:  # embed must never break recall
@@ -569,12 +630,16 @@ def make_rrf_strategy(
     *,
     k_const: int = RRF_K_CONST,
     health: VectorHealth | None = None,
+    min_score: float | None = None,
 ) -> _StrategyFn:
     """Build the ``rrf`` strategy: fuse keyword + vector rankings (§11.3 A).
 
     Degrade contract: an unavailable/failing embedder contributes an empty
     vector ranking — fusion then preserves the keyword order, so the result
     *is* the lexical answer (budget applied as usual), never an exception.
+    The same degrade shape covers an off-topic query: every vector hit falls
+    under the cosine floor, so the vector leg contributes nothing rather than
+    rank-fusing the whole fact table into the answer.
     """
     _health = health if health is not None else VectorHealth()
 
@@ -599,7 +664,7 @@ def make_rrf_strategy(
             try:
                 vec_blocks, vec_examined = _vector_blocks(
                     memory, store, embedder, query,
-                    min_trust=min_trust, limit=limit,
+                    min_trust=min_trust, limit=limit, min_score=min_score,
                 )
                 _health.record_success()
             except Exception as e:  # embed must never break recall
@@ -647,6 +712,7 @@ def enable_vector_recall(
     *,
     store: VectorStore | None = None,
     health: VectorHealth | None = None,
+    min_score: float | None = None,
 ) -> VectorIndexer | None:
     """Opt in to vector recall: register strategies + attach the live indexer.
 
@@ -672,10 +738,11 @@ def enable_vector_recall(
         store = VectorStore(db_path)
     shared = health if health is not None else VectorHealth()
     orchestrator.register_strategy(
-        "vector_first", make_vector_strategy(memory, store, embedder, health=shared)
+        "vector_first",
+        make_vector_strategy(memory, store, embedder, health=shared, min_score=min_score),
     )
     orchestrator.register_strategy(
-        "rrf", make_rrf_strategy(memory, store, embedder, health=shared)
+        "rrf", make_rrf_strategy(memory, store, embedder, health=shared, min_score=min_score)
     )
     indexer = VectorIndexer(store, embedder, health=shared)
     # Store the unsubscribe callable so that on a rebuild over the same Memory,

@@ -13,13 +13,20 @@ from __future__ import annotations
 
 import hmac
 import ipaddress
+import logging
 import threading
+from urllib.parse import parse_qs
 
 from fastapi import HTTPException, Request, WebSocket
+from starlette.datastructures import Headers
+from starlette.responses import PlainTextResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from akana_server.config import Settings, allow_unauthenticated
 from akana_server.files.service import FileService
 from akana_server.multimodal.store import UploadStore
+
+log = logging.getLogger(__name__)
 
 #: A request carrying any of these reached us THROUGH a reverse proxy (Tailscale
 #: Serve, nginx, caddy…) — i.e. potentially from outside the host. A direct
@@ -41,6 +48,22 @@ def request_is_proxied(headers) -> bool:
     return any(k.startswith("tailscale-user-") for k in headers.keys())
 
 
+def _token_matches(candidate: str, expected: str) -> bool:
+    """Constant-time token comparison the client cannot crash.
+
+    ``hmac.compare_digest`` on *str* RAISES TypeError the moment either side holds a
+    non-ASCII character — and headers/query strings reach us latin-1-decoded, so a
+    remote client putting a single byte ≥ 0x80 in ``Authorization`` (or ``?token=``)
+    turned the gate into an unhandled 500 with a traceback instead of a clean 401.
+    Comparing UTF-8 bytes has no such restriction and keeps the timing property that
+    made ``compare_digest`` the choice here (a plain ``!=`` leaks the common prefix
+    length through its duration).
+    """
+    return hmac.compare_digest(
+        candidate.encode("utf-8", "replace"), expected.encode("utf-8", "replace")
+    )
+
+
 def _peer_is_loopback(conn) -> bool:
     """True only when the DIRECT peer address is loopback (127.0.0.0/8, ::1).
 
@@ -57,6 +80,141 @@ def _peer_is_loopback(conn) -> bool:
         return ipaddress.ip_address(host).is_loopback
     except ValueError:
         return False
+
+
+#: Suffixes no third party can point at this machine through public DNS: the reserved
+#: / non-registrable namespaces (RFC 6762 ``.local``, RFC 8375 ``.home.arpa``, RFC 6761
+#: ``.localhost``, the de-facto ``.internal``) plus ``.ts.net`` — Tailscale MagicDNS,
+#: which resolves only inside the owner's own tailnet and is exactly the name
+#: ``tailscale serve``/``funnel`` puts in the Host header.
+_RESERVED_HOST_SUFFIXES = (".localhost", ".local", ".internal", ".home.arpa", ".ts.net")
+
+
+def _host_name(host_header: str) -> str:
+    """Hostname from a ``Host`` header — lowercased, port stripped, IPv6-literal aware.
+
+    ``header.split(":")[0]`` (what starlette's TrustedHostMiddleware does) turns
+    ``[::1]:8766`` into ``"["``, so a genuine IPv6 loopback browser would be refused.
+    """
+    h = host_header.strip().lower()
+    if h.startswith("["):  # [::1] / [::1]:8766 — the port is outside the brackets
+        end = h.find("]")
+        return h[: end + 1] if end != -1 else h
+    h = h.rsplit(":", 1)[0] if h.count(":") == 1 else h
+    # Absolute-FQDN form ("localhost.", "box.example.") names the same host.
+    return h[:-1] if h.endswith(".") else h
+
+
+def _is_ip_literal(host: str) -> bool:
+    h = host[1:-1] if host.startswith("[") and host.endswith("]") else host
+    h = h.split("%", 1)[0]  # link-local zone id (fe80::1%eth0)
+    try:
+        ipaddress.ip_address(h)
+        return True
+    except ValueError:
+        return False
+
+
+def host_header_allowed(host_header: str, settings: Settings | None) -> bool:
+    """Could this ``Host`` be a name an attacker resolved to our address?
+
+    Everything a rebinding page can put here is a name it OWNS in public DNS, so the
+    allowlist is "names that cannot be obtained that way", derived from the running
+    configuration rather than a fixed list:
+
+    * no Host at all — an HTTP/1.0 client, never a browser, so never a rebind;
+    * an IP literal — reaching us by address means no name was resolved to get here
+      (and a page whose origin is an IP literal cannot be re-pointed elsewhere);
+    * a single-label name (``localhost``, ``akana-box``, ``testserver``) — not
+      registrable in public DNS, only reachable via a local/intranet resolver;
+    * a reserved suffix (:data:`_RESERVED_HOST_SUFFIXES`) — mDNS + MagicDNS;
+    * the host this instance was configured to bind (``AKANA_HOST``), when that is a
+      name rather than an address.
+    """
+    host = _host_name(host_header or "")
+    if not host:
+        return True
+    if _is_ip_literal(host):
+        return True
+    if "." not in host:
+        return True
+    if host.endswith(_RESERVED_HOST_SUFFIXES):
+        return True
+    configured = _host_name((getattr(settings, "server_host", "") or ""))
+    return bool(configured) and host == configured
+
+
+def _carries_valid_token(scope: Scope, headers: Headers, settings: Settings | None) -> bool:
+    """True when the request presents the configured ``AKANA_TOKEN``.
+
+    A rebinding page reaches us from its OWN origin, so it cannot read the token out
+    of the owner's ``localStorage`` — a request that proves knowledge of it is not the
+    attack this guard exists for, and letting it through keeps an authenticated
+    reverse-proxy deployment under a custom domain working. Both channels the app
+    already uses are accepted: the bearer header (HTTP) and ``?token=`` (WebSocket).
+    An UNSET token must never satisfy this (``Bearer `` == ``Bearer `` is True).
+    """
+    token = (getattr(settings, "api_token", "") or "").strip()
+    if not token:
+        return False
+    auth = (headers.get("authorization") or "").strip()
+    if _token_matches(auth, f"Bearer {token}"):
+        return True
+    query = parse_qs(scope.get("query_string", b"").decode("latin-1", "replace"))
+    return any(_token_matches(v, token) for v in query.get("token", []))
+
+
+class HostHeaderGuard:
+    """Reject requests whose ``Host`` names a domain that could have been rebound here.
+
+    DNS REBINDING is the standing hole under "a loopback peer IS the owner"
+    (:func:`_peer_is_loopback`, and the loopback skip in :func:`require_akana_bearer`).
+    A page served from ``http://evil.example`` re-resolves its own name to 127.0.0.1
+    after the first load and then talks to this server from that origin: the browser
+    treats it as same-origin, so the SOP/CORS wall that normally stops a web page from
+    reading a localhost API is gone, and every route answers as the trusted owner. The
+    peer address really is loopback, so no peer-side check can tell them apart — the
+    Host header, which still carries the attacker's domain, is the only signal left.
+
+    Outermost middleware (added last) so a rejected Host never reaches a route,
+    static file or WebSocket handler. Settings are read per request off ``app.state``
+    because the middleware is constructed before the lifespan populates them.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] in ("http", "websocket"):
+            state = getattr(scope.get("app"), "state", None)
+            settings = getattr(state, "settings", None)
+            headers = Headers(scope=scope)
+            host = headers.get("host", "")
+            if not host_header_allowed(host, settings) and not _carries_valid_token(
+                scope, headers, settings
+            ):
+                log.warning(
+                    "rejected request with untrusted Host header %r (possible DNS "
+                    "rebinding; a reverse proxy under a custom domain must send AKANA_TOKEN)",
+                    host[:128],
+                )
+                await self._reject(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+    async def _reject(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "websocket":
+            # Closing BEFORE accept is the ASGI way to refuse a handshake (the server
+            # turns it into an HTTP rejection); an http.response.start would be invalid here.
+            await send({"type": "websocket.close", "code": 1008})
+            return
+        response = PlainTextResponse(
+            "Invalid Host header. Akana only answers on its own address/hostname; "
+            "if you reach it through a reverse proxy under a custom domain, set "
+            "AKANA_TOKEN and send it with the request.",
+            status_code=400,
+        )
+        await response(scope, receive, send)
 
 
 def require_akana_bearer(request: Request) -> None:
@@ -96,10 +254,8 @@ def require_akana_bearer(request: Request) -> None:
     if _peer_is_loopback(request) and not proxied:
         return
     auth = (request.headers.get("authorization") or "").strip()
-    # Constant-time comparison (against a timing oracle) — same discipline as
-    # ``hmac.compare_digest`` on the webhook paths. A plain ``!=`` short-circuits
-    # at the first differing byte → the duration leaks the common-prefix length.
-    if not hmac.compare_digest(auth, f"Bearer {settings.api_token}"):
+    # Constant-time comparison (against a timing oracle) — see :func:`_token_matches`.
+    if not _token_matches(auth, f"Bearer {settings.api_token}"):
         raise HTTPException(
             status_code=401,
             detail={
@@ -134,7 +290,7 @@ def require_akana_bearer_strict(request: Request) -> None:
         return
     # Token configured: require it on EVERY origin, including a direct loopback peer.
     auth = (request.headers.get("authorization") or "").strip()
-    if not hmac.compare_digest(auth, f"Bearer {settings.api_token}"):
+    if not _token_matches(auth, f"Bearer {settings.api_token}"):
         # Dedicated code/message (distinct from the generic AUTH_INVALID): a loopback owner
         # whose browser has no token gets EVERY other route via the loopback skip, so a bare
         # "invalid/missing" here is baffling ("the rest of the app works"). Tell them WHERE to
@@ -169,8 +325,8 @@ def authorize_websocket(websocket: WebSocket, token: str | None) -> bool:
     TOKEN CONFIGURED: a DIRECT request from a LOOPBACK peer (no proxy headers) is
     trusted (the local UI "just works"); ANY other origin — proxied, OR a non-loopback
     peer connecting DIRECTLY to a non-loopback bind — MUST present the token via the
-    ``token`` query parameter. Constant-time comparison against a timing oracle;
-    ``token`` may be ``None`` → ``compare_digest`` needs the same type, so default to "".
+    ``token`` query parameter. Constant-time comparison against a timing oracle
+    (:func:`_token_matches`); ``token`` may be ``None`` → default to "".
 
     Returns ``True`` when the connection is authorized; ``False`` when the caller
     should ``close(1008)``. The caller is responsible for ``accept()``/``close()``.
@@ -183,7 +339,7 @@ def authorize_websocket(websocket: WebSocket, token: str | None) -> bool:
         return True
     if _peer_is_loopback(websocket) and not proxied:
         return True
-    return hmac.compare_digest(token or "", settings.api_token)
+    return _token_matches(token or "", settings.api_token)
 
 
 # -- lazy services (build-once, cache on app.state) -------------------------------

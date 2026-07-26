@@ -137,7 +137,7 @@ for (const id of [
 let listCalls = 0;
 const FACTS = [
   { id: "f1", key: "coffee", value: "likes espresso", ts_last: 0 },
-  { id: "f2", key: "city", value: "Osmaniye", ts_last: 0 },
+  { id: "f2", key: "city", value: "Springfield", ts_last: 0 },
 ];
 win.AkanaMemoryApi = {
   listFacts: async () => { listCalls += 1; return { items: FACTS, total: FACTS.length }; },

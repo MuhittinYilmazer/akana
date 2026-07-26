@@ -10,6 +10,9 @@ The expansion is deliberately generous (recall favours recall): it keeps the raw
 query, a boilerplate-stripped form, a rough possessive stem (``adım`` → ``ad``,
 meaning "my name" → "name"), the subject of "… ne?" ("what is …?") questions,
 and a few hand-tuned key aliases (``ad`` ↔ ``isim`` ↔ ``name``).
+
+It is also the home of the shared bilingual :data:`STOPWORDS` set — vocabulary
+belongs in one module, and the episodic FTS query builder needs the same list.
 """
 
 from __future__ import annotations
@@ -34,6 +37,33 @@ _STOP = frozenset(
     {
         "ne", "mi", "mı", "mu", "mü", "bir", "bu", "şu", "benim", "ben",
         "the", "about", "for", "ile", "için", "hakkında",
+    }
+)
+
+#: Function words that carry no retrieval signal, in BOTH shipped languages.
+#: Kept separate from ``_STOP`` (which shapes the LIKE term expansion and is
+#: calibrated against the recall gold-set) because it serves a different job:
+#: episodic FTS ORs its tokens together, so a single stopword in the query
+#: matches every turn that happens to contain "how"/"do"/"my" — an off-topic
+#: question then recalls unrelated private turns. Content words only here; an
+#: over-wide set silently deletes recall, which is the worse failure.
+STOPWORDS = _STOP | frozenset(
+    {
+        # English
+        "a", "an", "am", "and", "any", "are", "as", "at", "be", "been", "being",
+        "but", "by", "can", "could", "did", "do", "does", "from", "had", "has",
+        "have", "he", "her", "hers", "him", "his", "how", "i", "if", "in", "into",
+        "is", "it", "its", "may", "me", "might", "must", "my", "no", "not", "of",
+        "on", "or", "our", "ours", "shall", "she", "should", "so", "some", "than",
+        "that", "the", "their", "theirs", "them", "then", "there", "these", "they",
+        "this", "those", "to", "was", "we", "were", "what", "when", "where",
+        "which", "while", "who", "whom", "why", "will", "with", "would", "you",
+        "your", "yours",
+        # Turkish
+        "ama", "bana", "bize", "biz", "da", "de", "daha", "den", "dan", "gibi",
+        "hangi", "ise", "ki", "kim", "kime", "kimi", "nasil", "nasıl", "neden",
+        "nedir", "neydi", "niye", "o", "onlar", "onu", "sen", "siz", "ve", "veya",
+        "ya", "çok", "cok",
     }
 )
 

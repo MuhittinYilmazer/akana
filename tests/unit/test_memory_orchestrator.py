@@ -349,8 +349,14 @@ def test_parse_time_point():
     assert rel is not None and rel.endswith("Z")
 
 
-def test_parse_time_range_turkish():
-    """Turkish natural-language expressions: TR-local (+03:00) day boundaries → ISO-UTC pair."""
+def test_parse_time_range_turkish(monkeypatch):
+    """Turkish natural-language expressions: local day boundaries → ISO-UTC pair.
+
+    Day boundaries follow the USER's zone, so every expected value below is
+    +03:00-specific — pin it rather than inheriting whatever zone the test host
+    happens to sit in (these assertions passed in Istanbul and failed in CI).
+    """
+    monkeypatch.setenv("AKANA_TIMEZONE", "+03:00")
     # Thursday, 11 June 2026, 15:00 Istanbul (12:00 UTC)
     now = datetime(2026, 6, 11, 12, 0, tzinfo=UTC)
     assert parse_time_range(None) is None
@@ -398,7 +404,8 @@ def test_parse_time_range_turkish():
     )
 
 
-def test_parse_time_bound_edges():
+def test_parse_time_bound_edges(monkeypatch):
+    monkeypatch.setenv("AKANA_TIMEZONE", "+03:00")  # the "dün" edges below are +03:00 boundaries
     now = datetime(2026, 6, 11, 12, 0, tzinfo=UTC)
     assert parse_time_bound(None) is None
     assert parse_time_bound("garbage", now=now) is None

@@ -60,16 +60,29 @@ def _tool_name(call: dict[str, Any]) -> str:
     return "?"
 
 
-def _audit_payload(call: dict[str, Any], *, mode: str) -> dict[str, Any]:
+def _call_summary(call: dict[str, Any]) -> dict[str, Any]:
+    """The ONLY shape of a tool call this module is allowed to retain.
+
+    ``args`` and ``result`` are dropped: a tool call's payload routinely IS a secret
+    (``vault_set(name, value)``, a shell line with a token, the contents of a read
+    ``.env``), and both sinks here outlive the turn — ``audit.jsonl`` on disk and the
+    process-wide ``_recent`` deque that ``GET /tools/recent`` serves. That route is
+    gated by ``require_akana_bearer``, which trusts ANY direct loopback peer, so a
+    retained payload is readable by every other local account/process on the box —
+    exactly the neighbour the vault's at-rest crypto and strict reveal gate defend
+    against. Identity/phase/outcome is what observability needs; the live payload
+    still reaches the owner's own session over SSE/WS.
+    """
     return {
-        "mode": mode,
-        "tool": {
-            "id": call.get("id") or call.get("call_id"),
-            "name": _tool_name(call),
-            "phase": call.get("phase"),
-            "status": call.get("status"),
-        },
+        "id": call.get("id") or call.get("call_id"),
+        "name": _tool_name(call),
+        "phase": call.get("phase"),
+        "status": call.get("status"),
     }
+
+
+def _audit_payload(call: dict[str, Any], *, mode: str) -> dict[str, Any]:
+    return {"mode": mode, "tool": _call_summary(call)}
 
 
 def record_tool_call(
@@ -86,6 +99,12 @@ def record_tool_call(
 
     Pure observability: the call is recorded and never blocked. The return value
     is the entry written to the record (legacy callers may ignore the return value).
+
+    Redaction happens HERE, at the point of recording (:func:`_call_summary`), not at
+    the endpoint — so a secret argument never sits in the buffer to begin with and
+    every future consumer of it inherits the guarantee. ``call`` is the caller's live
+    dict (also streamed to the client and persisted with the turn) — it is READ, never
+    mutated.
     """
     if not isinstance(call, dict) or not call:
         return None
@@ -98,7 +117,7 @@ def record_tool_call(
         "conv_id": conv_id,
         "task_id": task_id,
         "mode": mode,
-        "call": dict(call),
+        "call": _call_summary(call),
     }
     with _recent_lock:
         _recent.append(entry)
@@ -116,7 +135,10 @@ def record_tool_call(
 
 
 def list_recent_tool_calls(*, limit: int = 20) -> list[dict[str, Any]]:
-    """Return the most recent tool call records (newest last)."""
+    """Return the most recent tool call records (newest last).
+
+    Records carry identity/phase/status only — see :func:`_call_summary`.
+    """
     cap = max(1, min(limit, _RECENT_MAX))
     with _recent_lock:
         items = list(_recent)

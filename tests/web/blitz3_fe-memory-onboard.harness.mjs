@@ -152,7 +152,7 @@ const tick = () => new Promise((r) => setTimeout(r, 10));
 
   const FACTS = [
     { id: "f1", key: "coffee", value: "likes espresso" },
-    { id: "f2", key: "city", value: "Osmaniye" },
+    { id: "f2", key: "city", value: "Springfield" },
   ];
   let listFactsCalls = 0;
   let lastOffset = null;

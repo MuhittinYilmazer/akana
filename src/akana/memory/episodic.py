@@ -18,6 +18,12 @@ Design notes:
   keeps re-writes of the same id idempotent. ``INSERT OR REPLACE`` is *not* used:
   its implicit delete bypasses the ``AFTER DELETE`` FTS trigger and duplicates
   rows in ``turns_fts``; the UPSERT's UPDATE path fires ``turns_fts_au`` instead.
+* **Redaction is a search gate, not a delete.** ``memory.forget`` invalidates a
+  durable fact, but the turn the fact came from still states the value; without
+  a gate the next recall hands the "forgotten" secret straight back to the LLM.
+  :meth:`EpisodicStore.redact_turns` flags such turns out of
+  :meth:`~EpisodicStore.search_keyword` while leaving the transcript itself
+  intact — see that method for why the history is not rewritten.
 """
 
 from __future__ import annotations
@@ -33,10 +39,18 @@ from pathlib import Path
 from typing import Any, Literal
 
 from akana.memory._time import iso_now
+from akana.memory.terms import STOPWORDS, fold_text
 
 log = logging.getLogger(__name__)
 
 _FTS_MIN_TERM_LEN = 2
+
+#: :meth:`EpisodicStore._fts_match_query` verdict: the query DID have word
+#: tokens, but every one of them was a stopword — there is nothing to search
+#: for. Distinct from ``None`` ("no FTS-usable token at all"), which still earns
+#: the LIKE fallback: a LIKE scan for "how" would match half the transcript,
+#: which is exactly the over-matching the stopword filter exists to stop.
+_NO_SEARCHABLE_TERMS = ""
 
 # "error" marks a FAILED turn (LLM unavailable / empty response): stored so the UI can
 # re-render the error card after a reload, but EXCLUDED from the LLM history window
@@ -59,7 +73,8 @@ CREATE TABLE IF NOT EXISTS turns (
     duration_ms INTEGER,
     tool_calls TEXT,
     file_ids TEXT,
-    ask_user TEXT
+    ask_user TEXT,
+    redacted INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_turns_conv_ts ON turns(conversation_id, ts);
 CREATE INDEX IF NOT EXISTS idx_turns_ts ON turns(ts);
@@ -116,6 +131,11 @@ class EpisodicStore:
         #: keeping auto timestamps strictly increasing per instance keeps turns ordered by ts
         #: in creation order.
         self._last_auto_ts: str | None = None
+        #: False once a build without the FTS5 module has been detected — the
+        #: documented degrade (see the module docstring) is keyword search via
+        #: LIKE, not a dead memory stack. Latched so the failing CREATE is not
+        #: retried (and re-logged) on every subsequent search.
+        self._fts_available = True
         self._init_db()
 
     @classmethod
@@ -152,6 +172,10 @@ class EpisodicStore:
         for col in _TURN_JSON_COLUMNS:
             if col not in existing:
                 conn.execute(f"ALTER TABLE turns ADD COLUMN {col} TEXT")
+        if "redacted" not in existing:
+            # Old memory.db files predate the forget-redaction flag; rows land
+            # at 0 (searchable), which is the historic behaviour.
+            conn.execute("ALTER TABLE turns ADD COLUMN redacted INTEGER NOT NULL DEFAULT 0")
         # Dropped column migration: the island concept was removed (recall is now global).
         # Best-effort drop — if the column is absent or SQLite <3.35 doesn't know DROP
         # COLUMN, the OperationalError is swallowed and open() never blows up.
@@ -162,6 +186,8 @@ class EpisodicStore:
                 pass  # column already absent or DROP COLUMN unsupported (SQLite <3.35)
 
     def _ensure_fts(self, conn: sqlite3.Connection) -> None:
+        if not self._fts_available:
+            return  # FTS5-less build: search_keyword answers via LIKE instead
         row = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='turns_fts'",
         ).fetchone()
@@ -190,8 +216,15 @@ class EpisodicStore:
                 """
             )
             return
-        conn.executescript(
-            """
+        # The module contract is "FTS5 with a LIKE fallback": on a SQLite built
+        # without the FTS5 module this CREATE raises, and unguarded it propagated
+        # out of __init__ → Memory.for_data_dir → the whole memory stack (chat
+        # persistence, facts, staging, the MCP child) failed to come up. The
+        # fallback in search_keyword already exists; the only thing missing was
+        # letting construction reach it.
+        try:
+            conn.executescript(
+                """
             CREATE VIRTUAL TABLE turns_fts USING fts5(
                 turn_id UNINDEXED,
                 conversation_id UNINDEXED,
@@ -214,7 +247,13 @@ class EpisodicStore:
                 VALUES (new.id, new.conversation_id, new.text);
             END;
             """
-        )
+            )
+        except sqlite3.OperationalError as e:
+            self._fts_available = False
+            log.warning(
+                "SQLite build has no FTS5 (%s); episodic keyword search degrades to LIKE", e
+            )
+            return
         conn.execute(
             """
             INSERT INTO turns_fts(turn_id, conversation_id, text)
@@ -225,13 +264,26 @@ class EpisodicStore:
 
     @staticmethod
     def _fts_match_query(query: str) -> str | None:
-        terms = [
+        """Query text → an FTS5 MATCH expression, or a no-search verdict.
+
+        The tokens are OR'd, so every token that survives widens the result set.
+        Function words must therefore be dropped: with them in, "how do I bake
+        sourdough bread" matches any turn containing "how" or "do" — the user's
+        unrelated private turns (loans, therapy) get recalled into a prompt
+        about baking. Content words only; ``None`` when the query has no
+        FTS-usable token at all (LIKE fallback), :data:`_NO_SEARCHABLE_TERMS`
+        when it had only stopwords (search nothing).
+        """
+        words = [
             t
             for t in re.findall(r"[\wğüşöçıİĞÜŞÖÇ]+", query, flags=re.IGNORECASE)
             if len(t) >= _FTS_MIN_TERM_LEN
         ]
-        if not terms:
+        if not words:
             return None
+        terms = [t for t in words if fold_text(t) not in STOPWORDS]
+        if not terms:
+            return _NO_SEARCHABLE_TERMS
         return " OR ".join(f'"{t}"' for t in terms[:16])
 
     @staticmethod
@@ -521,14 +573,25 @@ class EpisodicStore:
             return []
         lim = max(1, min(limit, 100))
         fts_q = self._fts_match_query(q)
+        if fts_q == _NO_SEARCHABLE_TERMS and fts_q is not None:
+            # Every token was a function word — the query asks for nothing, so it
+            # gets nothing. Neither FTS (it would OR-match half the transcript)
+            # nor LIKE (same, by substring) is a legitimate answer here.
+            return []
         # audit C24 (mirrors list_conversation_recent): window by role IN SQL —
         # BEFORE the LIMIT — so a caller wanting only user turns isn't starved by
         # a top-bm25 window filled entirely with assistant/tool turns it will then
         # discard. NULL/empty roles keeps the historic all-roles behaviour.
         role_list = tuple(r for r in roles if r) if roles else ()
         role_ph = ",".join("?" * len(role_list))
-        role_fts = f" AND t.role IN ({role_ph})" if role_list else ""
-        role_like = f" AND role IN ({role_ph})" if role_list else ""
+        # Redaction gate (see redact_turns): a turn the user asked to forget is
+        # not keyword-searchable, on BOTH the FTS and the LIKE path — the flag
+        # would be worthless if either branch could still surface the value.
+        gate_fts = " AND COALESCE(t.redacted, 0) = 0"
+        gate_like = " AND COALESCE(redacted, 0) = 0"
+        if role_list:
+            gate_fts += f" AND t.role IN ({role_ph})"
+            gate_like += f" AND role IN ({role_ph})"
         role_params = list(role_list)
         with self._lock:
             conn = self._connect()
@@ -538,8 +601,8 @@ class EpisodicStore:
                 # LIKE is the *error* fallback (FTS5 missing/broken), plus the
                 # only path when the query has no FTS-usable token. A legitimate
                 # zero-hit FTS result stays zero — no second LIKE table scan.
-                fallback_to_like = fts_q is None
-                if fts_q:
+                fallback_to_like = fts_q is None or not self._fts_available
+                if fts_q and self._fts_available:
                     try:
                         if conversation_id:
                             rows = conn.execute(
@@ -549,10 +612,10 @@ class EpisodicStore:
                                 FROM turns_fts f
                                 INNER JOIN turns t ON t.id = f.turn_id
                                 WHERE turns_fts MATCH ?
-                                  AND f.conversation_id = ?{role_fts}
+                                  AND f.conversation_id = ?{gate_fts}
                                 ORDER BY bm25(turns_fts)
                                 LIMIT ?
-                                """,  # noqa: S608 - role_fts is a static ?-placeholder clause
+                                """,  # noqa: S608 - gate_fts is a static ?-placeholder clause
                                 (fts_q, conversation_id, *role_params, lim),
                             ).fetchall()
                         else:
@@ -562,10 +625,10 @@ class EpisodicStore:
                                        t.lang, t.importance
                                 FROM turns_fts f
                                 INNER JOIN turns t ON t.id = f.turn_id
-                                WHERE turns_fts MATCH ?{role_fts}
+                                WHERE turns_fts MATCH ?{gate_fts}
                                 ORDER BY bm25(turns_fts)
                                 LIMIT ?
-                                """,  # noqa: S608 - role_fts is a static ?-placeholder clause
+                                """,  # noqa: S608 - gate_fts is a static ?-placeholder clause
                                 (fts_q, *role_params, lim),
                             ).fetchall()
                     except sqlite3.OperationalError as e:
@@ -580,10 +643,10 @@ class EpisodicStore:
                             f"""
                             SELECT id, conversation_id, ts, role, text, lang, importance
                             FROM turns
-                            WHERE conversation_id = ? AND text LIKE ? ESCAPE '\\'{role_like}
+                            WHERE conversation_id = ? AND text LIKE ? ESCAPE '\\'{gate_like}
                             ORDER BY ts DESC
                             LIMIT ?
-                            """,  # noqa: S608 - role_like is a static ?-placeholder clause
+                            """,  # noqa: S608 - gate_like is a static ?-placeholder clause
                             (conversation_id, pattern, *role_params, lim),
                         ).fetchall()
                     else:
@@ -591,15 +654,76 @@ class EpisodicStore:
                             f"""
                             SELECT id, conversation_id, ts, role, text, lang, importance
                             FROM turns
-                            WHERE text LIKE ? ESCAPE '\\'{role_like}
+                            WHERE text LIKE ? ESCAPE '\\'{gate_like}
                             ORDER BY ts DESC
                             LIMIT ?
-                            """,  # noqa: S608 - role_like is a static ?-placeholder clause
+                            """,  # noqa: S608 - gate_like is a static ?-placeholder clause
                             (pattern, *role_params, lim),
                         ).fetchall()
             finally:
                 conn.close()
         return [self._row_to_turn(r) for r in rows]
+
+    def find_turn_ids_containing(self, needle: str, *, limit: int = 500) -> list[str]:
+        """Ids of turns whose text literally states ``needle`` (Turkish-aware fold).
+
+        The by-value arm of :meth:`redact_turns`: a fact promoted without a
+        ``source_turn_id`` still has turns that state it verbatim, and those are
+        what a later recall hands back after the fact itself was forgotten.
+        Both sides go through ``fold_text`` for the same reason
+        ``ConversationStore.search`` does — SQLite ``LIKE`` only case-folds
+        ASCII, so an 'İstanbul' turn would never match '%istanbul%'.
+        """
+        text = (needle or "").strip()
+        if not text:
+            return []
+        pattern = "%" + fold_text(text).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.create_function("akana_fold", 1, fold_text, deterministic=True)
+                rows = conn.execute(
+                    "SELECT id FROM turns WHERE akana_fold(text) LIKE ? ESCAPE '\\' LIMIT ?",
+                    (pattern, max(1, min(limit, 1000))),
+                ).fetchall()
+            finally:
+                conn.close()
+        return [str(r["id"]) for r in rows]
+
+    def redact_turns(self, turn_ids: list[str], *, redacted: bool = True) -> int:
+        """Exclude turns from keyword search / recall; returns rows changed.
+
+        NOT a delete and NOT a text rewrite. The turn stays in the transcript
+        (``get_turn``/``list_conversation_recent``/``recent_llm_messages`` are
+        unaffected) — that history is the user's own and rewriting it silently
+        would be the more destructive answer. What changes is that
+        :meth:`search_keyword` stops returning it, so memory recall can no
+        longer lift a forgotten value out of an old turn and put it back in
+        front of the LLM. Reversible (``redacted=False``), because forget is
+        soft and replay-safe through the ledger.
+        """
+        ids = [i for i in dict.fromkeys(turn_ids) if i]
+        if not ids:
+            return 0
+        flag = 1 if redacted else 0
+        changed = 0
+        with self._lock:
+            conn = self._connect()
+            try:
+                # Chunked so a large forget cannot exceed SQLite's variable limit.
+                for start in range(0, len(ids), 400):
+                    chunk = ids[start : start + 400]
+                    ph = ",".join("?" * len(chunk))
+                    cur = conn.execute(
+                        f"UPDATE turns SET redacted = ? "  # noqa: S608 - ph is ?-placeholders
+                        f"WHERE id IN ({ph}) AND COALESCE(redacted, 0) != ?",
+                        (flag, *chunk, flag),
+                    )
+                    changed += int(cur.rowcount)
+                conn.commit()
+            finally:
+                conn.close()
+        return changed
 
     def list_conversation_ids(self, *, limit: int = 50) -> list[dict[str, Any]]:
         with self._lock:

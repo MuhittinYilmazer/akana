@@ -246,19 +246,21 @@ def parse_time_point(value: str | None, *, now: datetime | None = None) -> str |
     return dt.isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-# The Turkish natural-language time-expression parser (bugün/dün/geçen hafta/
-# mart ayında/…) lives in time_expressions.py; parse_time_range is re-exported
-# above (via the module import) so existing "from akana.memory.tools import
-# parse_time_range" call sites are unaffected by the split.
+# The bilingual natural-language time-expression parser (today/yesterday/last
+# week/in March and bugün/dün/geçen hafta/mart ayında/…) lives in
+# time_expressions.py; parse_time_range is re-exported above (via the module
+# import) so existing "from akana.memory.tools import parse_time_range" call
+# sites are unaffected by the split.
 
 
 def parse_time_bound(
     value: str | None, *, edge: TimeEdge = "start", now: datetime | None = None
 ) -> str | None:
-    """A single time bound: an ISO / ``relative:`` point, or an end of a Turkish range.
+    """A single time bound: an ISO / ``relative:`` point, or an end of an EN/TR range.
 
-    ``edge`` says which end of a Turkish expression to take — ``observed_from=
-    "geçen hafta"`` the start of the range, ``observed_to="geçen hafta"`` the end.
+    ``edge`` says which end of a natural-language expression to take —
+    ``observed_from="last week"`` the start of the range, ``observed_to="last
+    week"`` the end.
     A date-only ISO (``2026-03-05``) expands at ``edge="end"`` to the last millisecond
     of the day (inclusive day; ``as_of=date`` = "as of the end of that day").
     ``None``/an unrecognized expression → ``None``.
@@ -321,7 +323,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "properties": {
                         "from": {
                             "type": "string",
-                            "description": "ISO, 'relative:7d', or Turkish natural language ('dün', 'geçen hafta', 'mart ayında')",
+                            "description": (
+                                "ISO, 'relative:7d', or natural language in English "
+                                "('yesterday', 'last week', 'last 7 days', 'in March') "
+                                "or Turkish ('dün', 'geçen hafta', 'mart ayında')"
+                            ),
                         },
                         "to": {"type": "string"},
                     },
@@ -347,7 +353,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "type": "string",
                     "description": (
                         "time-travel — search memory AS OF this date (supported). "
-                        "ISO date ('2026-01-01'), 'relative:7d', or Turkish natural language "
+                        "ISO date ('2026-01-01'), 'relative:7d', or natural language in "
+                        "English ('yesterday', 'last week', 'in March') or Turkish "
                         "('dün', 'geçen hafta', 'mart ayında'); returns the values that were "
                         "valid on that date (even if later changed/superseded)."
                     ),
@@ -356,16 +363,18 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "type": "string",
                     "description": (
                         "bi-temporal observation filter start — only records observed/learned "
-                        "AFTER this moment. ISO, 'relative:7d', or Turkish natural language "
-                        "('dün', 'geçen hafta', 'mart ayında')."
+                        "AFTER this moment. ISO, 'relative:7d', or natural language in English "
+                        "('yesterday', 'last week', 'in March') or Turkish ('dün', "
+                        "'geçen hafta', 'mart ayında')."
                     ),
                 },
                 "observed_to": {
                     "type": "string",
                     "description": (
                         "bi-temporal observation filter end — only records observed UP TO "
-                        "this moment. ISO, 'relative:7d', or Turkish natural language; for "
-                        "natural language the END of the range is used ('dün' → end of yesterday)."
+                        "this moment. ISO, 'relative:7d', or English/Turkish natural language; "
+                        "for natural language the END of the range is used "
+                        "('yesterday'/'dün' → end of yesterday)."
                     ),
                 },
                 "rerank": {"type": "string", "enum": ["off", "cross_encoder"], "default": "off"},
@@ -412,7 +421,13 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "To forget ONLY PART of a record (when it holds several facts — e.g. value "
             "'Ali, 30 years old, Istanbul' but you only want to forget the city): "
             "mode=supersede + new_value=the remaining content ('Ali, 30 years old'). That way "
-            "the other facts are KEPT and only that part is removed — do not delete the whole record."
+            "the other facts are KEPT and only that part is removed — do not delete the whole "
+            "record. SCOPE, state it honestly if the user asks: retract/soft_delete/quarantine "
+            "also stop the conversation turns that state the value from coming back in memory "
+            "search (the answer reports how many), but those turns REMAIN in the chat transcript "
+            "the user can scroll back to, and messages already in the current conversation stay "
+            "in context. supersede edits the record only and leaves every turn searchable. "
+            "Never tell the user a value was erased everywhere."
         ),
         "input_schema": {
             "type": "object",

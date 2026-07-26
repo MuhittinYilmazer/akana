@@ -1,9 +1,15 @@
-"""Reset Inbox/staging/semantic/graph caches — conversations preserved."""
+"""Permanently delete the Inbox, learned facts, the memory graph and the vector index.
+
+NOT a cache flush: ``SemanticStore.clear_all`` is ``DELETE FROM facts`` — everything
+Akana has learned about the user, unrecoverable without a prior ``akana backup``. Only
+the conversation archive and episodic.db survive. Hence the confirmation gate below.
+"""
 
 from __future__ import annotations
 
 import os
 import sqlite3
+import sys
 from pathlib import Path
 
 from akana_cli import i18n, io
@@ -45,7 +51,19 @@ def _server_might_be_running() -> bool:
         return False
 
 
-def run_reset_memory() -> int:
+def _stdin_is_interactive() -> bool:
+    """True only when a human can actually answer a prompt.
+
+    A scheduled run, a pipeline, or a test has no terminal — prompting there would
+    either hang or raise, so the caller refuses with a --yes hint instead.
+    """
+    try:
+        return bool(sys.stdin is not None and sys.stdin.isatty())
+    except (AttributeError, ValueError):  # detached/closed stream
+        return False
+
+
+def run_reset_memory(*, assume_yes: bool = False) -> int:
     data_dir = _resolve_data_dir()
     io.step(i18n.t("reset.resetting", path=data_dir))
     print("  " + i18n.t("reset.preserved_note"))
@@ -59,6 +77,18 @@ def run_reset_memory() -> int:
         print("  " + i18n.t("reset.restart_hint"))
         print("  " + i18n.t("reset.browser_hint"))
         return 0
+
+    # Ask BEFORE destroying anything. The sibling destructive command (`restore`)
+    # already refuses an occupied data dir without --force; this one deletes strictly
+    # more (every learned fact, the graph, the Inbox) and used to do it on one keystroke.
+    # The check sits AFTER the "nothing to reset" exit so a no-op never prompts.
+    if not assume_yes:
+        if not _stdin_is_interactive():
+            io.fail(i18n.t("reset.needs_yes"))
+            return 1
+        if not io.ask_yes_no(i18n.t("reset.confirm", path=data_dir), default=False):
+            io.warn(i18n.t("reset.aborted"))
+            return 0
 
     # Import at call time (not module scope) so `python akana.py --help` and the
     # other subcommands never pay for the memory stack. This import MUST NOT be

@@ -26,6 +26,11 @@ FAILURE ISOLATION is the load-bearing property: an unconfigured provider
 run is marked failed/skipped, and the loop keeps going — a scheduled turn can
 never crash the engine or the server.
 
+DELIVERY IS AT-MOST-ONCE. A reminder the user already read is not made better by
+arriving again; a duplicate costs a real LLM turn and destroys trust in the
+schedule ("it keeps nagging me"). So when the store cannot record a run, the row is
+HELD by this process rather than retried: see :data:`_PENDING_ADVANCE`.
+
 Schedules run SEQUENTIALLY (one LLM turn at a time) — the engine does not fan
 out concurrent provider calls.
 """
@@ -33,6 +38,7 @@ out concurrent provider calls.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -47,7 +53,7 @@ from akana_server.schedule.model import ScheduleItem
 from akana_server.schedule.store import (
     ScheduleStore,
     get_schedule_store,
-    now_tr,
+    now_local,
 )
 
 log = logging.getLogger(__name__)
@@ -62,6 +68,108 @@ _MIN_POLL_SECONDS = 5.0
 
 #: The LLM call signature the engine drives. Returns (text, usage, agent_id).
 CompleteFn = Callable[..., Awaitable[tuple[str, dict[str, Any], str | None]]]
+
+#: Ceiling on ONE ``ScheduleStore`` call made off the loop. ``json_store``'s own
+#: cross-process acquire deadline is 10s and the Windows ``os.replace`` retry adds
+#: ~1.5s on top, so anything past this is a wedged peer, not contention. The wait is
+#: capped because moving an UNBOUNDED wait off the loop only relocates the freeze —
+#: the sweep (and, when polls stack up, the thread pool) would hang there instead.
+_STORE_CALL_TIMEOUT_S = 15.0
+
+#: Delivered runs whose store advance could NOT be persisted, keyed by
+#: ``(schedules.json path, schedule id)`` → the ``mark_ran`` kwargs still owed.
+#:
+#: DELIVERY IS IRREVERSIBLE: the reminder is already in the user's chat or on their
+#: phone. ``mark_ran`` is the one step that can fail on its own (an AV/indexer holding
+#: schedules.json, a full disk, the akana_schedule MCP child sitting on the sidecar
+#: lock), and it is also the step that disables a spent ``once`` / rolls a recurring row
+#: forward. Left unhandled the row stayed enabled with ``next_run_at`` in the past, so
+#: every poll re-delivered the same briefing and burned a fresh paid LLM turn — while
+#: ``last_run`` stayed empty and the Schedule panel showed it as never-run and healthy.
+#: A row parked here is withheld from the sweep and its advance is retried at the head
+#: of each sweep until it lands.
+_PENDING_ADVANCE: dict[tuple[str, str], dict[str, Any]] = {}
+
+
+def _drain(task: "asyncio.Future[Any]") -> None:
+    """Retrieve an abandoned call's outcome so it never surfaces as a stray
+    "exception was never retrieved" warning."""
+    if not task.cancelled():
+        task.exception()
+
+
+async def _off_loop_store(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """Run a ``ScheduleStore`` call in a worker thread, bounded.
+
+    The store guards EVERY read and write with ``json_store.cross_process_lock``: a
+    threading lock plus an OS advisory lock that a PEER PROCESS — the ``akana_schedule``
+    MCP child, which read-modify-writes the same ``schedules.json`` — can legitimately
+    hold, and whose acquire path is a synchronous ``time.sleep`` poll loop. Called
+    straight from a coroutine that is a whole-server stall: every HTTP request, every
+    SSE/WS stream, voice audio, all frozen for as long as the peer holds it. This is the
+    invariant ``concurrency.off_loop`` exists to enforce; the schedule engine was the
+    one consumer of ``cross_process_lock`` that ignored it.
+
+    A worker thread cannot be cancelled, so on timeout the call is ABANDONED (it still
+    finishes and releases the lock) and :class:`TimeoutError` is raised to the caller.
+    """
+    call = asyncio.ensure_future(asyncio.to_thread(functools.partial(fn, *args, **kwargs)))
+    try:
+        return await asyncio.wait_for(asyncio.shield(call), _STORE_CALL_TIMEOUT_S)
+    except asyncio.TimeoutError as exc:
+        raise TimeoutError(
+            f"schedule store call {getattr(fn, '__name__', fn)!r} did not finish within "
+            f"{_STORE_CALL_TIMEOUT_S:.0f}s — another process is holding the store lock"
+        ) from exc
+    finally:
+        if not call.done():
+            call.add_done_callback(_drain)
+
+
+async def _record_run(store: ScheduleStore, schedule_id: str, **fields: Any) -> bool:
+    """Persist a run outcome + the schedule advance. ``True`` when it landed.
+
+    On failure the owed write is parked in :data:`_PENDING_ADVANCE` (the row is then
+    withheld from the sweep) instead of propagating: the alternative — an exception out
+    of the run, caught and merely logged by the sweep — left the row due and replayed
+    the delivery on every poll."""
+    key = (str(store.path), schedule_id)
+    try:
+        await _off_loop_store(store.mark_ran, schedule_id, **fields)
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 - a bookkeeping failure must not replay a delivery
+        _PENDING_ADVANCE[key] = dict(fields)
+        log.error(
+            "schedule %s: the run outcome could not be written to the store — the "
+            "schedule is HELD (not re-fired) and the advance will be retried each "
+            "sweep; the result was already delivered",
+            schedule_id, exc_info=True,
+        )
+        return False
+    _PENDING_ADVANCE.pop(key, None)
+    return True
+
+
+async def _flush_pending_advances(store: ScheduleStore) -> None:
+    """Retry the advances owed for THIS store. Never raises.
+
+    Retrying the bookkeeping is not the same as retrying the run: nothing is
+    re-delivered and no LLM turn is spent — the row simply becomes spendable again
+    once the store can take the write."""
+    owner = str(store.path)
+    for key in [k for k in _PENDING_ADVANCE if k[0] == owner]:
+        fields = _PENDING_ADVANCE.get(key)
+        if fields is None:
+            continue
+        try:
+            await _off_loop_store(store.mark_ran, key[1], **fields)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - still broken; keep holding the row
+            continue
+        _PENDING_ADVANCE.pop(key, None)
+        log.warning("schedule %s: the held run outcome was finally persisted", key[1])
 
 
 # --------------------------------------------------------------------------- #
@@ -468,7 +576,9 @@ async def _run_one_impl(
             raise
         except Exception as exc:  # noqa: BLE001 - a scheduled turn must never crash the loop
             log.warning("schedule %s: LLM run failed: %s", item.id, exc, exc_info=True)
-            store.mark_ran(item.id, status="error", error=str(exc), now=now, roll_forward=advance)
+            await _record_run(
+                store, item.id, status="error", error=str(exc), now=now, roll_forward=advance
+            )
             # Do not leave the user waiting on a promise that will never land.
             reported = await _report_same_chat_failure(app, settings, item, str(exc))
             # The report carries the completion when it lands (now, or when the parked
@@ -481,7 +591,9 @@ async def _run_one_impl(
 
     if not body:
         # Nothing to deliver; still advance the schedule so it does not re-fire.
-        store.mark_ran(item.id, status="skipped", error="empty result", now=now, roll_forward=advance)
+        await _record_run(
+            store, item.id, status="skipped", error="empty result", now=now, roll_forward=advance
+        )
         reported = await _report_same_chat_failure(app, settings, item, "empty result")
         ann.settled = ann.settled or reported in ("delivered", "queued")
         await _settle_announced(app, ann, "error")
@@ -592,7 +704,8 @@ async def _run_one_impl(
     note = "; ".join(notes) or None
     # "ok" only if EVERY requested target succeeded; "partial" if some did; else "skipped".
     status = "ok" if all_ok else "partial" if delivered_any else "skipped"
-    store.mark_ran(
+    await _record_run(
+        store,
         item.id,
         status=status,
         error=note if status != "ok" else None,
@@ -639,21 +752,30 @@ async def run_due_schedules(
     number fired. A per-item failure never aborts the sweep. ``app`` (when given)
     lets a fired schedule broadcast a live turn event so its thread appears in the
     UI + toasts without a page refresh."""
-    ref = now or now_tr()
+    ref = now or now_local()
     store = get_schedule_store(getattr(settings, "data_dir"))
+    # A run that was delivered but could not be recorded owes the store an advance.
+    # Settle those FIRST: until one lands its row stays held, and holding a row that
+    # the store could now take would silently stop a live schedule.
+    await _flush_pending_advances(store)
     # BUG 4b — self-cleaning history: prune spent (disabled, aged-out) one-shot rows
     # each sweep so a lifetime of reminders never accumulates unbounded tombstones.
     # Defensive: a prune failure must never stop the due sweep.
     try:
-        store.prune_spent(now=ref)
+        await _off_loop_store(store.prune_spent, now=ref)
     except Exception:  # noqa: BLE001 - housekeeping must not block firing
         log.warning("schedule_engine: prune_spent failed (continuing)", exc_info=True)
-    due = store.due(ref)
+    due = await _off_loop_store(store.due, ref)
+    held = {k[1] for k in _PENDING_ADVANCE if k[0] == str(store.path)}
     fired = 0
     for item in due:
+        if item.id in held:
+            # Its last run WAS delivered; only the bookkeeping is missing. Firing it
+            # again would post the same result and bill another turn.
+            continue
         try:
             # ``now`` (NOT ``ref``) is threaded to mark_ran: in production it is
-            # None, so mark_ran re-samples ``now_tr()`` at COMPLETION time. This is
+            # None, so mark_ran re-samples ``now_local()`` at COMPLETION time. This is
             # load-bearing for interval schedules — anchoring the roll-forward on the
             # sweep-start ``ref`` means a turn that runs longer than its own interval
             # produces a next_run_at already in the past → the item is due again on
@@ -693,7 +815,7 @@ async def run_schedule_now(
     manual 'run now' path (REST ``POST /schedule/{id}/run`` and the UI test
     button). Returns the outcome dict, or ``None`` if the id is unknown."""
     store = get_schedule_store(getattr(settings, "data_dir"))
-    item = store.get(schedule_id)
+    item = await _off_loop_store(store.get, schedule_id)
     if item is None:
         return None
     return await _run_one(

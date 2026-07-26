@@ -413,6 +413,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "ollama provider (local) — ensure it is running",
         "tr": "ollama sağlayıcısı (yerel) — çalıştığından emin ol",
     },
+    "doctor.ollama_missing": {
+        "en": "ollama not found on PATH — install it from https://ollama.com, run `ollama serve`, then `ollama pull <model>`",
+        "tr": "ollama PATH'te bulunamadı — https://ollama.com adresinden kur, `ollama serve` çalıştır, sonra `ollama pull <model>`",
+    },
     "doctor.provider_generic": {"en": "provider: {provider}", "tr": "sağlayıcı: {provider}"},
     "doctor.provider_pkg_missing": {
         "en": "{provider} provider package not installed (chat will fail)",
@@ -491,6 +495,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "skipped or failed (Node/npm may be missing). Retry with: python akana.py add {id}",
         "tr": "{id}: CLI PATH'te değil — global npm kurulumu atlanmış ya da başarısız "
         "olmuş olabilir (Node/npm eksik olabilir). Yeniden dene: python akana.py add {id}",
+    },
+    "add.verify_failed_external": {
+        "en": "{id}: not on PATH — it is installed outside Akana, so do that first "
+        "(see the hint above), then re-run: python akana.py add {id}",
+        "tr": "{id}: PATH'te değil — Akana dışında kurulur, önce onu yap "
+        "(yukarıdaki ipucuna bak), sonra yeniden çalıştır: python akana.py add {id}",
     },
     "add.oww_preinstall_failed": {
         "en": "openwakeword preinstall (--no-deps) failed — skipping the voice install "
@@ -600,6 +610,18 @@ _STRINGS: dict[str, dict[str, str]] = {
         "tr": "Akana sunucusu çalışıyor olabilir — sıfırlamadan önce 'python akana.py stop' önerilir.",
     },
     "reset.nothing": {"en": "No files to reset.", "tr": "Sıfırlanacak dosya yok."},
+    "reset.confirm": {
+        "en": "PERMANENTLY delete every learned fact, the memory graph, the vector index and the Inbox in {path}? This cannot be undone (take a backup first: python akana.py backup)",
+        "tr": "{path} içindeki öğrenilmiş TÜM bilgiler, hafıza grafiği, vektör dizini ve Gelen Kutusu KALICI olarak silinsin mi? Geri alınamaz (önce yedek al: python akana.py backup)",
+    },
+    "reset.aborted": {
+        "en": "Cancelled — nothing was deleted.",
+        "tr": "İptal edildi — hiçbir şey silinmedi.",
+    },
+    "reset.needs_yes": {
+        "en": "reset-memory permanently deletes learned facts and there is no terminal to confirm on — re-run with --yes if you really mean it.",
+        "tr": "reset-memory öğrenilmiş bilgileri kalıcı olarak siler ve onay alınacak bir terminal yok — gerçekten istiyorsan --yes ile yeniden çalıştır.",
+    },
     "reset.restart_hint": {
         "en": "Restart the server: python akana.py start",
         "tr": "Sunucuyu yeniden başlat: python akana.py start",
@@ -652,6 +674,14 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Secrets are encrypted with a key stored OUTSIDE this archive — restore on the SAME machine, or use --include-vault-key for another machine.",
         "tr": "Sırlar bu arşivin DIŞINDA saklanan bir anahtarla şifreli — AYNI makinede geri yükle, ya da başka makine için --include-vault-key kullan.",
     },
+    "backup.plaintext_secrets": {
+        "en": "NOT ciphertext: {files} — this archive contains READABLE credentials. Do not upload or sync it anywhere; open Akana and re-save your keys (Settings → Identity) to encrypt them, then back up again.",
+        "tr": "ŞİFRELİ DEĞİL: {files} — bu arşiv OKUNABİLİR kimlik bilgileri içeriyor. Hiçbir yere yükleme/senkronize etme; Akana'yı açıp anahtarlarını yeniden kaydet (Ayarlar → Kimlik), sonra tekrar yedekle.",
+    },
+    "backup.vault_key_not_active": {
+        "en": "{var} is set — the key the vault actually uses may not be {path}; the bundled key can be a stale leftover that decrypts nothing on the target machine.",
+        "tr": "{var} ayarlı — kasanın gerçekten kullandığı anahtar {path} olmayabilir; paketlenen anahtar, hedef makinede hiçbir şeyi çözemeyen eski bir kalıntı olabilir.",
+    },
     "restore.no_archive": {"en": "No such archive: {path}", "tr": "Böyle bir arşiv yok: {path}"},
     "restore.server_running": {
         "en": "The Akana server is running — stop it first ('python akana.py stop') before restoring.",
@@ -676,9 +706,29 @@ _STRINGS: dict[str, dict[str, str]] = {
     },
     "restore.moved_aside": {"en": "Existing data moved to {path}", "tr": "Mevcut veri {path} konumuna taşındı"},
     "restore.failed": {"en": "Restore failed: {exc}", "tr": "Geri yükleme başarısız: {exc}"},
+    "restore.bad_format": {
+        "en": "Archive format {got} is not supported (this Akana reads format {want}) — it was probably made by a newer version. Update Akana and restore again.",
+        "tr": "Arşiv biçimi {got} desteklenmiyor (bu Akana {want} biçimini okur) — muhtemelen daha yeni bir sürümle oluşturulmuş. Akana'yı güncelleyip tekrar dene.",
+    },
+    "restore.unchanged": {
+        "en": "Nothing was changed — your data dir is still exactly as it was: {path}",
+        "tr": "Hiçbir şey değişmedi — veri dizinin aynen duruyor: {path}",
+    },
+    "restore.rolled_back": {
+        "en": "Rolled back — your original data dir was put back at {path}",
+        "tr": "Geri alındı — özgün veri dizinin {path} konumuna geri kondu",
+    },
+    "restore.rollback_failed": {
+        "en": "COULD NOT roll back: your original data is in {aside} and {path} is INCOMPLETE. Do not start Akana — move {aside} back to {path} by hand first.",
+        "tr": "GERİ ALINAMADI: özgün verin {aside} içinde ve {path} EKSİK. Akana'yı başlatma — önce {aside} dizinini elle {path} konumuna geri taşı.",
+    },
     "restore.vault_key_written": {
         "en": "Master key restored to {path}",
         "tr": "Ana anahtar {path} konumuna geri yüklendi",
+    },
+    "restore.vault_key_not_read": {
+        "en": "{var} is set on this machine — the vault reads its key from there, NOT from {path}, so the restored key file will be ignored.",
+        "tr": "Bu makinede {var} ayarlı — kasa anahtarını oradan okur, {path} konumundan DEĞİL; geri yüklenen anahtar dosyası yok sayılacak.",
     },
     "restore.done": {"en": "Restored to {path}", "tr": "{path} konumuna geri yüklendi"},
     "restore.restart_hint": {
@@ -687,6 +737,10 @@ _STRINGS: dict[str, dict[str, str]] = {
     },
 
     # ── setup: doctor-preflight fallback + OS install-hint tails ──────────────
+    "setup.provider_store_skipped": {
+        "en": "could not record '{provider}' in Akana's settings store ({exc}) — .env was written; if Akana still uses the old provider, switch it in Settings → Identity.",
+        "tr": "'{provider}' Akana ayar deposuna yazılamadı ({exc}) — .env yazıldı; Akana hâlâ eski sağlayıcıyı kullanıyorsa Ayarlar → Kimlik'ten değiştir.",
+    },
     "setup.doctor_skipped": {
         "en": "doctor preflight skipped ({exc}). Re-run: python akana.py doctor",
         "tr": "doktor ön kontrolü atlandı ({exc}). Yeniden çalıştır: python akana.py doctor",
@@ -748,8 +802,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "tr": "Çıktı dizini (varsayılan: depo kökü)",
     },
     "cli.help.reset_memory": {
-        "en": "Delete Inbox / staging / semantic / graph caches (conversations preserved)",
-        "tr": "Gelen Kutusu / staging / semantic / graph önbelleklerini sil (konuşmalar korunur)",
+        "en": "PERMANENTLY delete learned facts, the memory graph, the vector index and the Inbox (conversations preserved)",
+        "tr": "Öğrenilmiş bilgileri, hafıza grafiğini, vektör dizinini ve Gelen Kutusu'nu KALICI olarak siler (konuşmalar korunur)",
+    },
+    "cli.help.reset_memory_yes": {
+        "en": "Skip the confirmation (for scripts / scheduled runs)",
+        "tr": "Onayı atla (betikler / zamanlanmış çalıştırmalar için)",
     },
     "cli.help.backup": {
         "en": "Snapshot the data dir (~/.akana) to a .tar.gz",

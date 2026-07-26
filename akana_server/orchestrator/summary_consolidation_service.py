@@ -105,6 +105,24 @@ def start_summary_consolidation(app: FastAPI) -> None:
     """The loop is always set up; the active gate checks the runtime setting (can be
     enabled from settings without a restart even if disabled in the env)."""
     settings: Settings = app.state.settings
+
+    # The gate must resolve against the LIVE app.state.settings, not this lifespan
+    # snapshot. apply_runtime_overrides stamps every stored override onto the snapshot's
+    # settings_attr fields, so after a POST /settings/runtime/reset removes a key,
+    # get_runtime falls back to that stamped attr — the OLD override — and the cron keeps
+    # the pre-reset enabled/interval/language until the process restarts, while the UI
+    # reports the reset as applied (this key is not restart_required). rebuild_app_settings
+    # only refreshes app.state.settings, so these callbacks re-read it fresh each turn and
+    # ignore the loop's captured arg. Mirrors session_closer_service.
+    def is_active(_captured: Settings) -> bool:
+        return consolidation_active(app.state.settings)
+
+    def interval_seconds(_captured: Settings) -> float:
+        return _interval_seconds(app.state.settings)
+
+    async def run_once_live(_captured: Settings) -> int:
+        return await run_once(app.state.settings)
+
     _start_task(
         app,
         _TASK_ATTR,
@@ -112,10 +130,10 @@ def start_summary_consolidation(app: FastAPI) -> None:
             settings,
             log=log,
             name="summary_consolidation",
-            is_active=consolidation_active,
-            interval_seconds=_interval_seconds,
+            is_active=is_active,
+            interval_seconds=interval_seconds,
             disabled_check_seconds=_DISABLED_CHECK_SECONDS,
-            run_once=run_once,
+            run_once=run_once_live,
         ),
     )
 

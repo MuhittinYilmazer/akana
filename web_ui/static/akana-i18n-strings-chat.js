@@ -61,6 +61,9 @@ window.AkanaI18nStrings = Object.assign(window.AkanaI18nStrings || {}, {
   "chat.send_btn_stop_title": { en: "Stop response", tr: "Yanıtı durdur" },
   "chat.send_btn_send_aria":  { en: "Send", tr: "Gönder" },
 
+  // ── Stop pressed with a queued message but no live stream ──
+  "chat.stop_nothing_running": { en: "Nothing is running to stop — your queued message is still waiting on the server.", tr: "Durdurulacak çalışan bir yanıt yok — sıradaki mesajın sunucuda bekliyor." },
+
   // ── Streaming guard toast ──
   "chat.stream_busy": { en: "Wait for this chat's response to finish — or press Stop and resend.", tr: "Bu sohbetin yanıtı bitsin — ya da DUR'a basıp yeniden gönder." },
 
@@ -79,7 +82,7 @@ window.AkanaI18nStrings = Object.assign(window.AkanaI18nStrings || {}, {
   // ── Chat store thread title default ──
   "chat.new_thread_title": { en: "New chat", tr: "Yeni sohbet" },
 
-  // ── Render: arg-key display labels (ARG_KEY_TR) ──
+  // ── Render: arg-key display labels (ARG_LABEL_KEYS / argLabel) ──
   "msg.arg_file":        { en: "File",         tr: "Dosya" },
   "msg.arg_notebook":    { en: "Notebook",      tr: "Defter" },
   "msg.arg_command":     { en: "Command",       tr: "Komut" },

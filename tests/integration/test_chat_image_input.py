@@ -1,6 +1,6 @@
 """MultimodalEngine F1 — image input (image_ids) binding in chat.
 
-* claude + cursor provider → a `[Görsel: <absolute-path>]` block is added to the
+* claude + cursor provider → a `[Image: <absolute-path>]` block is added to the
   prompt (both agents read the path themselves — empirically verified),
 * unknown id → 400 (`error.code=IMAGE_NOT_FOUND`).
 """
@@ -85,8 +85,8 @@ def test_claude_provider_injects_image_path_block(
         assert r.status_code == 200, r.text
         assert r.json()["text"] == "görseli inceledim."
         assert len(prompts) == 1
-        # [Görsel: <absolute-path>] line — the claude CLI's Read tool reads the path.
-        assert "[Görsel: " in prompts[0]
+        # [Image: <absolute-path>] line — the claude CLI's Read tool reads the path.
+        assert "[Image: " in prompts[0]
         assert str(tmp_path / "uploads") in prompts[0]
         assert prompts[0].rstrip().endswith("]")
 
@@ -107,8 +107,8 @@ def test_cursor_provider_injects_image_path_block(
         assert r.status_code == 200, r.text
         assert r.json()["text"] == "görseli inceledim."
         assert len(prompts) == 1
-        # [Görsel: <absolute-path>] line — the cursor agent also reads the path itself.
-        assert "[Görsel: " in prompts[0]
+        # [Image: <absolute-path>] line — the cursor agent also reads the path itself.
+        assert "[Image: " in prompts[0]
         assert str(tmp_path / "uploads") in prompts[0]
 
 
@@ -150,4 +150,4 @@ def test_image_ids_empty_list_is_noop(
         r = client.post("/api/v1/chat", json={"text": "selam", "image_ids": []})
         assert r.status_code == 200
         assert len(prompts) == 1
-        assert "[Görsel:" not in prompts[0]
+        assert "[Image:" not in prompts[0]

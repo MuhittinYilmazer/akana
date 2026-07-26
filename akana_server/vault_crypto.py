@@ -203,6 +203,13 @@ def _restrict_to_owner(path: Path) -> None:
     the master key would inherit the profile's ACEs instead of being owner-only.
     ``icacls`` drops inheritance and grants just the current user. Best-effort:
     a failure here must never break key generation.
+
+    A DIRECTORY grant MUST carry ``(OI)(CI)`` (object/container inherit).
+    ``/inheritance:r`` removes the inheritable ACEs the directory's existing
+    children inherit; with a non-inheritable replacement grant NTFS propagates the
+    removal down and every descendant is left with an EMPTY DACL — the owner locked
+    out of their own files, ``icacls`` on them failing too. Files have no children,
+    so they take the plain grant (inheritance flags are meaningless on a leaf).
     """
     if os.name != "nt":
         return
@@ -210,8 +217,13 @@ def _restrict_to_owner(path: Path) -> None:
     if not user:
         return
     try:
+        is_dir = path.is_dir()
+    except OSError:  # pragma: no cover - unreadable path
+        is_dir = False
+    grant = f"{user}:(OI)(CI)F" if is_dir else f"{user}:F"
+    try:
         subprocess.run(
-            ["icacls", str(path), "/inheritance:r", "/grant:r", f"{user}:F"],
+            ["icacls", str(path), "/inheritance:r", "/grant:r", grant],
             capture_output=True,
             timeout=10,
             check=False,
@@ -262,26 +274,39 @@ def write_private_bytes_atomic(path: Path, data: bytes) -> None:
 
 
 def _write_keyfile(path: Path, key: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        os.chmod(path.parent, 0o700)
-    except OSError:
-        pass
-    _restrict_to_owner(path.parent)  # the dir; the keyfile itself is hardened in the writer
+    """Mint the master keyfile, hardening ONLY what Akana itself owns.
+
+    The directory is locked down only when THIS call created it. ``AKANA_VAULT_KEYFILE``
+    is a user-chosen path, so the parent is routinely a folder full of the user's own
+    data (Documents, a drive root, the data dir); re-ACLing or chmodding it would take
+    permissions away from files Akana has nothing to do with — on Windows
+    ``/inheritance:r`` even locks the owner out of them (see :func:`_restrict_to_owner`).
+    The key's own confidentiality comes from the owner-only ACL/mode that
+    :func:`write_private_bytes_atomic` puts on the FILE, which holds regardless of the
+    directory it sits in.
+    """
+    parent = path.parent
+    created = not parent.exists()
+    parent.mkdir(parents=True, exist_ok=True)
+    if created:
+        try:
+            os.chmod(parent, 0o700)
+        except OSError:
+            pass
+        _restrict_to_owner(parent)
     write_private_bytes_atomic(path, key)
 
 
 def _keyfile_lock_path(keyfile: Path) -> Path:
     """Cross-process lock path for minting ``keyfile`` — kept OUT of the key's own dir.
 
-    It must NOT be a sibling of the keyfile: ``_write_keyfile`` hardens the keyfile's
+    It must NOT be a sibling of the keyfile: ``_write_keyfile`` may harden the keyfile's
     parent with ``icacls /inheritance:r`` (Windows), which strips inherited ACEs from
-    everything in that dir — including a sibling lock file, leaving it with an EMPTY
-    DACL so the very next ``os.open`` of the lock fails with PermissionError (WinError 5)
-    and every subsequent mint/rotation is wedged. Placing the lock in the system temp
-    dir, keyed by a hash of the keyfile path (stable per keyfile, distinct across
-    tests/env overrides), sidesteps that entirely. The lock file holds no secret
-    material — only the keyfile (in its hardened dir) does.
+    everything in that dir — a sibling lock file caught by that re-ACL could be left
+    unopenable (PermissionError / WinError 5), wedging every subsequent mint/rotation.
+    Placing the lock in the system temp dir, keyed by a hash of the keyfile path (stable
+    per keyfile, distinct across tests/env overrides), sidesteps that entirely. The lock
+    file holds no secret material — only the keyfile (owner-only ACL) does.
     """
     digest = hashlib.sha256(str(keyfile).encode("utf-8")).hexdigest()[:16]
     return Path(tempfile.gettempdir()) / f"akana-vault-key-{digest}.lock"

@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
+from typing import Any
 
 import ulid
 
@@ -31,6 +32,72 @@ log = logging.getLogger(__name__)
 # the short backoff does not block responses.
 _PERSIST_ATTEMPTS = 3
 _PERSIST_BACKOFF_S = 0.1
+
+
+_VAULT_RESULT_TOOLS = frozenset({"vault_get", "vault_get_credential"})
+#: The only argument that ever carries a secret value (the write surface: vault_set /
+#: vault_set_credential). Key/namespace/profile/field are NAMES — ``vault_list`` hands
+#: those to the model by design, so they are not secrets.
+_VAULT_SECRET_ARG_KEYS = frozenset({"value"})
+_VAULT_WITHHELD = "[vault secret withheld]"
+
+
+def _tool_base_name(name: Any) -> str:
+    """Trailing segment of a tool name, lowercased.
+
+    The same vault tool reaches this list under three shapes depending on provider:
+    ``mcp__akana_vault__vault_get`` (claude MCP), ``akana_vault/vault_get`` (prefixed
+    bridges) and bare ``vault_get`` (the gemini/openai native decls). Matching the bare
+    name only would leak on the provider that is actually the default.
+    """
+    raw = str(name or "").strip().lower()
+    for sep in ("__", "/", "."):
+        if sep in raw:
+            raw = raw.rsplit(sep, 1)[-1]
+    return raw
+
+
+def redact_tool_calls_for_storage(
+    tool_calls: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]] | None:
+    """Turn ``tool_calls`` into the copy that is safe to write to ``memory.db``.
+
+    CONSTRAINT: ``memory.db`` is UNENCRYPTED and ``akana backup`` copies it into an archive
+    the CLI advertises as holding no plaintext secret. A vault value that reaches the
+    ``tool_calls`` column is therefore a permanent plaintext copy of a secret whose master
+    key is deliberately kept OUTSIDE the data dir — one ``vault_get`` would nullify the
+    whole vault (and it is re-served to the browser on every /messages reload). Only the
+    secret-carrying fields are dropped: the card must still show WHICH vault tool ran and
+    whether it succeeded, because that row is the user's only durable trace of the access.
+
+    NEVER mutates in place. These dicts are the SAME objects the SSE ``done`` payload, the
+    WS broadcast and the client's tool-card cache hold, so an in-place scrub would blank
+    the live card the user is watching mid-turn.
+    """
+    out: list[dict[str, Any]] = []
+    for call in tool_calls or []:
+        if not isinstance(call, dict):
+            continue
+        base = _tool_base_name(call.get("name"))
+        if not base.startswith("vault_"):
+            out.append(call)
+            continue
+        safe = dict(call)
+        args = safe.get("args")
+        if isinstance(args, dict):
+            if any(k in args for k in _VAULT_SECRET_ARG_KEYS):
+                safe["args"] = {
+                    k: (_VAULT_WITHHELD if k in _VAULT_SECRET_ARG_KEYS else v)
+                    for k, v in args.items()
+                }
+        elif args is not None:
+            # A non-dict args blob (a raw/partial payload) cannot be inspected field by
+            # field, so it is dropped whole rather than trusted.
+            safe["args"] = _VAULT_WITHHELD
+        if base in _VAULT_RESULT_TOOLS and safe.get("result") is not None:
+            safe["result"] = _VAULT_WITHHELD
+        out.append(safe)
+    return out or None
 
 
 def _persist_turn(
@@ -71,6 +138,12 @@ def _persist_turn(
       (no under-count), and ``return`` only happens on full success so the bump runs
       EXACTLY ONCE (no double-count).
     """
+    # SINGLE WRITER, SINGLE REDACTION. memory.db is unencrypted and ships inside `akana
+    # backup`, so a vault value reaching the tool_calls column is a permanent plaintext copy
+    # of a secret whose master key is deliberately kept OUT of the data dir. Scrubbing here
+    # rather than in each caller is what makes that true for the voice turn and any future
+    # persist path, not just the chat one that happened to be audited.
+    tool_calls = redact_tool_calls_for_storage(tool_calls)
     dd = Path(data_dir) if data_dir is not None else None
     if dd is None:
         log.error("turn_writer: data_dir could not be resolved (conv=%s turn=%s)", conversation_id, turn_id)

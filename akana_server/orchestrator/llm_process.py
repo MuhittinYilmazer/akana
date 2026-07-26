@@ -185,6 +185,117 @@ def _group_alive(pgid: int) -> bool:
     return True
 
 
+# --------------------------------------------------------------------------- #
+# Process IDENTITY — a pid alone never authorises a kill
+# --------------------------------------------------------------------------- #
+
+#: Tolerance when matching a recorded creation time against the live process's.
+#: The two come from the same OS clock, so they are equal to well under a second;
+#: this only absorbs FILETIME/jiffy rounding.
+_CREATE_TIME_TOLERANCE_S = 2.0
+
+#: Tolerance on the derived boot timestamp. ``time.time() - time.monotonic()`` drifts
+#: with NTP steps and (on POSIX) suspend, so the fence is deliberately loose — it only
+#: has to separate one boot from another, and erring loose means "leave the process
+#: alone", never "kill a stranger".
+_BOOT_SKEW_S = 600.0
+
+
+def _boot_timestamp() -> float:
+    """Approximate wall-clock time this machine booted (epoch seconds).
+
+    ``time.monotonic()`` counts from boot on both Windows (``GetTickCount64``) and
+    Linux (``CLOCK_MONOTONIC``), so the difference is a boot marker every process on
+    the machine agrees on — with no third-party dependency."""
+    return time.time() - time.monotonic()
+
+
+def _process_start_time(pid: int) -> float | None:
+    """The OS-reported creation time of ``pid`` (epoch seconds), or ``None``.
+
+    This is the only field that distinguishes OUR process from a stranger that
+    inherited its number: pids are recycled (Windows hands them out from a small pool
+    in multiples of 4; POSIX restarts low after a boot). ``None`` means the platform
+    gave us no answer — the caller must then fall back to the boot fence, never to
+    "assume it is ours".
+    """
+    if pid <= 0:
+        return None
+    if _IS_WIN:
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            # PROCESS_QUERY_LIMITED_INFORMATION — enough for GetProcessTimes and
+            # granted even for processes whose full token we cannot open.
+            handle = k32.OpenProcess(0x1000, False, int(pid))
+            if not handle:
+                return None
+            try:
+                creation = wintypes.FILETIME()
+                exit_t = wintypes.FILETIME()
+                kernel_t = wintypes.FILETIME()
+                user_t = wintypes.FILETIME()
+                ok = k32.GetProcessTimes(
+                    handle,
+                    ctypes.byref(creation),
+                    ctypes.byref(exit_t),
+                    ctypes.byref(kernel_t),
+                    ctypes.byref(user_t),
+                )
+                if not ok:
+                    return None
+                ticks = (creation.dwHighDateTime << 32) | creation.dwLowDateTime
+                # FILETIME is 100ns units since 1601-01-01; 11644473600s to the epoch.
+                return ticks / 1e7 - 11644473600.0
+            finally:
+                k32.CloseHandle(handle)
+        except Exception:  # pragma: no cover - no ctypes / API refusal
+            return None
+    try:
+        # /proc/<pid>/stat field 22 is starttime in clock ticks since boot. comm
+        # (field 2) may contain spaces AND parentheses, so split after the LAST ')'.
+        raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace")
+        fields = raw[raw.rindex(")") + 2:].split()
+        ticks = float(fields[19])  # field 22 = index 19 after comm+state
+        hz = os.sysconf("SC_CLK_TCK")
+        return _boot_timestamp() + ticks / float(hz)
+    except Exception:  # pragma: no cover - non-Linux POSIX (macOS has no /proc)
+        return None
+
+
+def _is_our_process(record: dict[str, Any], pid: int) -> bool:
+    """Whether the LIVE ``pid`` is the process this record was written for.
+
+    A stored pid is a NAME, not a handle: after a reboot (or a same-boot recycle) it
+    can belong to a browser, an editor or a build, and ``_killpg`` takes down the
+    whole tree. So the reaper kills only on positive identification:
+
+    1. the OS creation time matches the one recorded at registration (definitive);
+    2. failing that, the record must come from the CURRENT boot — a record written
+       before this boot names a pid that has necessarily been reassigned;
+    3. a record carrying neither marker (written by an older build) is judged by its
+       ``started_at`` against the boot fence for the same reason.
+
+    Ambiguity resolves to False: leaking one orphan bridge process is recoverable,
+    killing the user's unsaved work is not.
+    """
+    recorded_create = record.get("create_time")
+    if isinstance(recorded_create, (int, float)):
+        live = _process_start_time(pid)
+        if live is not None:
+            return abs(live - float(recorded_create)) <= _CREATE_TIME_TOLERANCE_S
+    boot = _boot_timestamp()
+    marker = record.get("boot_ts")
+    if not isinstance(marker, (int, float)):
+        # Legacy record: registration time is a lower bound on when the process ran.
+        marker = record.get("started_at")
+    if not isinstance(marker, (int, float)):
+        return False
+    return float(marker) >= boot - _BOOT_SKEW_S
+
+
 def llm_pid_dir(data_dir: Path) -> Path:
     """``<data_dir>/run/llm`` — created if it does not exist."""
     d = (Path(data_dir) / "run" / "llm").resolve()
@@ -199,19 +310,28 @@ def register_llm_process(
 
     ``kind`` is for diagnostics only ("cursor_bridge" | "claude_cli"). Returns
     ``None`` and does not disrupt the call flow if the write fails.
+
+    ``create_time`` + ``boot_ts`` are the record's IDENTITY: the file outlives a crash
+    and even a reboot (``run/`` is never cleared), by which time the pid may belong to
+    something else entirely. Captured here, while the process is known to be ours, so
+    :func:`reap_orphan_llm_processes` can prove it later — see :func:`_is_our_process`.
     """
     try:
         d = llm_pid_dir(data_dir)
     except OSError:  # pragma: no cover - pid directory cannot be opened
         log.warning("llm_process: pid directory unavailable (kind=%s)", kind)
         return None
-    record = {
+    record: dict[str, Any] = {
         "token": str(token),
         "pid": int(pid),
         "pgid": int(pid),  # start_new_session=True ⇒ pgid == pid
         "kind": str(kind),
         "started_at": time.time(),
+        "boot_ts": _boot_timestamp(),
     }
+    created = _process_start_time(int(pid))
+    if created is not None:
+        record["create_time"] = created
     path = d / f"{Path(str(token)).name}.json"
     try:
         path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
@@ -302,6 +422,12 @@ def reap_orphan_llm_processes(data_dir: Path) -> list[dict[str, Any]]:
     it takes down live stale process groups via SIGTERM→SIGKILL and removes
     dead/corrupt records. Each returned entry is diagnostic:
     ``token, pid, kind, alive, reaped``.
+
+    A live pid is killed ONLY after :func:`_is_our_process` confirms it — ``run/`` is
+    never cleared, so a record routinely survives a reboot, and by then the pid it
+    names belongs to somebody else. ``alive`` therefore reports the pid's state while
+    ``reaped`` reports what we did about it; the two differ exactly when a record was
+    dropped because the process could not be identified as ours.
     """
     findings: list[dict[str, Any]] = []
     try:
@@ -326,7 +452,18 @@ def reap_orphan_llm_processes(data_dir: Path) -> list[dict[str, Any]]:
         # a recycled stale pid (R4-D #2). Linux os.kill(pid,0) is already definitive.
         alive = _pid_alive(pid, default_on_error=False)
         reaped = False
-        if alive:
+        ours = alive and _is_our_process(record, pid)
+        if alive and not ours:
+            # The pid is live but it is NOT the process we registered — it was recycled
+            # (typically across the reboot that stranded this record in the first place).
+            # Drop the record; killing here would take down an unrelated program and,
+            # via /T // killpg, its entire child tree.
+            log.warning(
+                "llm_process: stale pid record dropped WITHOUT killing (kind=%s pid=%s) "
+                "— the live process is not the one that was registered",
+                record.get("kind"), pid,
+            )
+        if ours:
             # Graceful termination, short wait, force if needed — synchronous bootstrap.
             _killpg(pgid, force=False)
             deadline = time.monotonic() + _TERM_GRACE_SECONDS

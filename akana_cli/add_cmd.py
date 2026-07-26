@@ -233,6 +233,12 @@ def install_component(comp: Component, *, interactive: bool = True) -> bool:
         # provider (LLM_PROVIDER=claude) and the first chat 503s. deps_installed probes
         # the CLI on PATH via shutil.which(probe_bin).
         or (comp.installer == "npm_global" and bool(comp.probe_bin))
+        # external (ollama): _do_install only PRINTS the install hint and returns True,
+        # so without this probe a machine with no Ollama kept `ollama` in setup's picks
+        # and _configure_after_install made it LLM_PROVIDER — the same "misled into a
+        # broken state" trap as npm_global, and the one doctor could not warn about
+        # because setup had already declared it installed.
+        or (comp.installer == "external" and bool(comp.probe_bin))
     )
     if not install_ok:
         # _do_install already printed a SPECIFIC failure (e.g. the openwakeword
@@ -244,6 +250,7 @@ def install_component(comp: Component, *, interactive: bool = True) -> bool:
         key = {
             "npm_bridge": "add.verify_failed_bridge",
             "npm_global": "add.verify_failed_npm",
+            "external": "add.verify_failed_external",
         }.get(comp.installer, "add.verify_failed_pip")
         io.fail(i18n.t(key, id=comp.id))
         ok = False

@@ -222,8 +222,17 @@ def run_doctor(*, verbose: bool = True, probe_network: bool = True, mcp: bool = 
                 io.fail(i18n.t("doctor.claude_missing"))
                 issues += 1
         elif provider == "ollama":
-            if verbose:
-                io.ok(i18n.t("doctor.ollama"))
+            # Same honesty rule as the claude branch above: ollama is a keyless
+            # EXTERNAL install, so the only thing that can be checked is whether it
+            # is on PATH — and it must be, because an unconditional ✓ here is how a
+            # first-timer finishes setup "ready" on a machine with no Ollama at all
+            # and then gets a 503 on every chat with no diagnostic pointing at it.
+            if shutil.which("ollama"):
+                if verbose:
+                    io.ok(i18n.t("doctor.ollama"))
+            else:
+                io.fail(i18n.t("doctor.ollama_missing"))
+                issues += 1
         elif provider and verbose:
             io.ok(i18n.t("doctor.provider_generic", provider=provider))
 

@@ -23,7 +23,7 @@ class ChatRequest(BaseModel):
     image_ids: list[str] = Field(default_factory=list, max_length=30)
     #: PHASE2 multi-type file binding: ids of ANY type (image/pdf/text/...) uploaded
     #: via /api/v1/uploads. Resolved per the active provider
-    #: (claude → a provider-native [Dosya: <path>] block; cursor/unsupported →
+    #: (claude → a provider-native [File: <path>] block; cursor/unsupported →
     #: a Turkish "I can't read it" note without dropping the turn). max_length=30 is
     #: only a SECURITY CEILING — the actual provider-specific per-message/per-conversation
     #: limit is enforced on the frontend (PROVIDER_ATTACH_LIMITS); claude is 20 images +

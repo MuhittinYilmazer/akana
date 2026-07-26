@@ -9,9 +9,12 @@ each handler. On a machine without them the tool call returns a clear install hi
 (see ``requirements-computer.txt``) instead of the module failing to import — so the
 handshake, ``tools/list`` and the non-GUI verification stay green everywhere.
 
-Coordinate system: EVERY x/y is a PHYSICAL PIXEL of the captured screenshot (the same
-pixels ``screenshot`` reports as ``width``/``height``). The operating loop is always
-``screenshot -> Read the PNG -> act -> screenshot again``.
+Coordinate system — ONE space, everywhere: every x/y a tool takes or returns is an
+ABSOLUTE virtual-desktop physical pixel (primary monitor's top-left is 0,0). Monitor
+bounds, window bounds, a11y element boxes and pyautogui itself already speak it. The sole
+exception is a pixel read off a single-monitor screenshot IMAGE, whose (0,0) is that
+monitor's corner — ``screenshot`` returns that capture's ``origin`` and says what to add.
+The operating loop is always ``screenshot -> Read the PNG -> act -> screenshot again``.
 
 Run::
 
@@ -86,21 +89,6 @@ def _prune_shots(d: Path, keep: int = _SHOT_RETENTION) -> None:
             pass
 
 
-#: Virtual-desktop origin (left, top) of the LAST captured monitor. Screenshot pixel
-#: coordinates are relative to the captured monitor's top-left (0,0), but pyautogui
-#: clicks in virtual-desktop coordinates whose origin is the PRIMARY monitor's
-#: top-left. For any monitor not at the virtual origin (a secondary display, or
-#: monitor 0 when a screen sits left/above primary) the two differ by this offset, so
-#: it MUST be added back before clicking or the click lands on the wrong screen.
-#: Reset per build_server(); updated by screenshot().
-_LAST_ORIGIN: list[int] = [0, 0]
-
-
-def _abs_xy(x: int, y: int) -> tuple[int, int]:
-    """Rebase a screenshot-relative (x, y) onto the last captured monitor's origin."""
-    return int(x) + _LAST_ORIGIN[0], int(y) + _LAST_ORIGIN[1]
-
-
 def _summarize(tool: str, kwargs: dict[str, Any]) -> str:
     """One-line, owner-readable description of an action for the approval dialog."""
     def s(v: Any, n: int = 60) -> str:
@@ -120,6 +108,10 @@ def _summarize(tool: str, kwargs: dict[str, Any]) -> str:
         return f"{tool.replace('_', ' ')}: {s(kwargs.get('text', ''))}"
     if tool == "drag":
         return f"Drag ({kwargs.get('x1')},{kwargs.get('y1')}) → ({kwargs.get('x2')},{kwargs.get('y2')})"
+    if isinstance(kwargs.get("keys"), (list, tuple)):
+        # The chord itself is what the owner is approving (alt+F4 closes their window), so
+        # spell it out rather than dumping the raw kwargs dict.
+        return f"{tool.replace('_', ' ')}: {s(' + '.join(str(k) for k in kwargs['keys']))}"
     if "x" in kwargs and "y" in kwargs:
         return f"{tool.replace('_', ' ')} at ({kwargs.get('x')},{kwargs.get('y')})"
     if tool in ("focus_window", "maximize_window", "minimize_window", "move_window", "resize_window"):
@@ -194,7 +186,11 @@ def build_server() -> FastMCP:
         def deco(fn):
             @functools.wraps(fn)
             def wrapper(*args: Any, **kwargs: Any):
-                denial = approval.gate(fn.__name__, _data_dir(), _summarize(fn.__name__, kwargs))
+                # kwargs go to the gate too: risk is decided by what the call DOES (the key
+                # chord it presses), not only by the tool's name — see approval.chord_risk.
+                denial = approval.gate(
+                    fn.__name__, _data_dir(), _summarize(fn.__name__, kwargs), kwargs
+                )
                 if denial is not None:
                     return {"ok": False, "action": fn.__name__, "error": denial, "denied": True}
                 return fn(*args, **kwargs)
@@ -204,9 +200,6 @@ def build_server() -> FastMCP:
         return deco
 
     mcp.tool = _gated_tool
-    # No screenshot has been taken yet on this server: clicks default to the untranslated
-    # virtual-desktop origin until screenshot() records the captured monitor's offset.
-    _LAST_ORIGIN[:] = [0, 0]
 
     # PERCEPTION state (a11y tree + refs). The registry maps wNeM refs → live elements for
     # the CURRENT snapshot; _last_root holds the last read_screen tree for find_element.
@@ -230,6 +223,17 @@ def build_server() -> FastMCP:
         if w <= 0 or h <= 0:  # 0-width OR 0-height → no clickable point
             return None, {"ok": False, "error": f"ref {ref!r} has no clickable bounds"}
         return (int(x + w / 2), int(y + h / 2)), None
+
+    def _invalidate_refs() -> None:
+        """Drop the ref snapshot after the SERVER ITSELF moved/re-stacked/destroyed windows.
+
+        Every ref is a captured rectangle; once this process relocates the window it was
+        captured from, acting on that ref would click whatever moved into its place. Called
+        even when the window op reported failure — a backend can fail AFTER the window
+        moved, and re-reading is the cheap direction to be wrong in.
+        """
+        _registry.invalidate()
+        _last_root[0] = None  # find_element must not hand out refs click_ref will refuse
 
     def _resolve_window(title_contains: str):
         """Find the first window whose title CONTAINS ``title_contains`` (case-insensitive).
@@ -262,10 +266,11 @@ def build_server() -> FastMCP:
     def screen_info() -> dict[str, Any]:
         """Report the desktop geometry BEFORE any action.
 
-        Returns the primary screen size and every monitor's bounds (in physical
-        pixels). Use it to sanity-check that a coordinate you intend to click is on
-        an actual screen, and to pick a ``monitor`` for ``screenshot`` on multi-monitor
-        setups. No mouse or keyboard is touched.
+        Returns the primary screen size and every monitor's bounds as ABSOLUTE
+        virtual-desktop physical pixels — the SAME space every click/move/drag takes, so a
+        coordinate you are about to click can be checked against these bounds directly: if
+        it is inside no monitor, do not click it. Also use this to pick a ``monitor`` for
+        ``screenshot`` on multi-monitor setups. No mouse or keyboard is touched.
         """
         info: dict[str, Any] = {}
         try:
@@ -292,7 +297,9 @@ def build_server() -> FastMCP:
             info["monitors"] = monitors
             info["note"] = (
                 "monitor 0 is the full virtual desktop (all screens); 1, 2, ... are "
-                "individual monitors. Coordinates in screenshots/clicks are physical pixels."
+                "individual monitors. These bounds and every click/move/drag x,y are "
+                "ABSOLUTE virtual-desktop physical pixels; only a pixel read off a "
+                "single-monitor screenshot IMAGE needs that capture's `origin` added."
             )
         except _BackendMissing as exc:
             info["monitors_error"] = str(exc)
@@ -306,10 +313,16 @@ def build_server() -> FastMCP:
         capture a single monitor (see ``screen_info`` for the indices). The image is
         saved under ``<AKANA_DATA_DIR>/run/computer/<id>.png``.
 
-        Returns ``{path, width, height}`` where ``path`` is ABSOLUTE. You MUST then Read
-        that path to actually see the screen — this tool only saves the file, it does not
-        return the pixels. The returned ``width``/``height`` are the coordinate space for
-        every subsequent click/move (top-left is 0,0; x grows right, y grows down).
+        Returns ``{path, width, height, origin}`` where ``path`` is ABSOLUTE. You MUST then
+        Read that path to actually see the screen — this tool only saves the file, it does
+        not return the pixels.
+
+        COORDINATES: the image's top-left pixel is the virtual-desktop point ``origin``
+        (``[left, top]``). Every click/move/drag tool takes ABSOLUTE virtual-desktop pixels,
+        so ADD ``origin`` to any coordinate you read off this image before acting on it.
+        When ``origin`` is ``[0, 0]`` — a single-screen desktop, or the default full-desktop
+        capture on a normal layout — image pixels ARE the absolute coordinates and there is
+        nothing to add. ``instructions`` in the payload spells out the exact numbers.
         """
         mss = _mss()
         try:
@@ -323,20 +336,35 @@ def build_server() -> FastMCP:
             idx = monitor if 0 <= monitor < len(mons) else 0
             mon = mons[idx]
             raw = sct.grab(mon)
-        # Record the captured monitor's virtual-desktop origin so click/move/drag can
-        # rebase this screenshot's pixel coordinates back onto the physical screen.
-        _LAST_ORIGIN[:] = [int(mon["left"]), int(mon["top"])]
+        # The captured monitor's virtual-desktop origin is REPORTED, never applied behind
+        # the model's back: rebasing click inputs by it created a SECOND coordinate space on
+        # one tool surface, in which a find_element box and a pixel off this image named
+        # points a monitor-width apart. The image is the only thing here that is not already
+        # absolute, so the conversion is stated in numbers next to the pixels it applies to.
+        ox, oy = int(mon["left"]), int(mon["top"])
         img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
         img.save(str(out), format="PNG")
         _prune_shots(shots)
+        instructions = "Read this path now to see the screen. "
+        if (ox, oy) == (0, 0):
+            instructions += (
+                "This capture starts at the virtual-desktop origin, so a pixel you read off "
+                "the image IS the coordinate every click/move/drag tool takes."
+            )
+        else:
+            instructions += (
+                f"This capture's top-left pixel is virtual-desktop ({ox},{oy}): ADD "
+                f"({ox},{oy}) to every coordinate you read off the image before passing it "
+                f"to a click/move/drag tool — image (0,0) is desktop ({ox},{oy}) and image "
+                f"({int(raw.width) - 1},{int(raw.height) - 1}) is desktop "
+                f"({ox + int(raw.width) - 1},{oy + int(raw.height) - 1})."
+            )
         return {
             "path": str(out.resolve()),
             "width": int(raw.width),
             "height": int(raw.height),
-            "instructions": (
-                "Read this path now to see the screen, then use physical-pixel "
-                "coordinates for any click/move/drag."
-            ),
+            "origin": [ox, oy],
+            "instructions": instructions,
         }
 
     @mcp.tool()
@@ -404,7 +432,14 @@ def build_server() -> FastMCP:
         """
         root = _last_root[0]
         if root is None:
-            return {"ok": False, "action": "find_element", "error": "no snapshot yet — call read_screen first"}
+            return {
+                "ok": False,
+                "action": "find_element",
+                "error": (
+                    "no current snapshot — call read_screen first (a window op since the last "
+                    "read dropped it, so its refs no longer address anything)"
+                ),
+            }
         needle = str(query or "").strip().lower()
         if not needle:
             return {"ok": False, "action": "find_element", "error": "query must be non-empty"}
@@ -425,7 +460,7 @@ def build_server() -> FastMCP:
             return {"ok": False, "action": action, "ref": ref, **err}
         pg = _pyautogui()
         try:
-            do(pg, center[0], center[1])  # absolute virtual-desktop coords — NO _abs_xy
+            do(pg, center[0], center[1])  # absolute virtual-desktop coords — the one space
         except pg.FailSafeException:
             return {"ok": False, "action": action, "ref": ref, "error": _FAILSAFE_MSG}
         except Exception as exc:
@@ -438,11 +473,12 @@ def build_server() -> FastMCP:
 
         Preferred over ``left_click(x, y)``: it targets the element's center from the snapshot,
         so you don't eyeball pixels. ``element`` is an optional human description of what you
-        are clicking (e.g. "the Save button"). A ref from a SUPERSEDED snapshot (you ran
-        ``read_screen`` again since) is refused with a re-read error. IMPORTANT: within a
-        snapshot the ref clicks the element's LAST-SEEN rectangle — so after ANY action that
-        changes the UI you MUST call ``read_screen`` again before clicking, or the click may
-        land on whatever now occupies that spot.
+        are clicking (e.g. "the Save button"). A ref is refused with a re-read error once its
+        snapshot is over — you ran ``read_screen`` again, or a window op (focus/move/resize/
+        minimize/maximize/close/open_application) moved the ground under it. IMPORTANT: a ref
+        addresses the element's LAST-SEEN RECTANGLE, not its identity, so after ANY action
+        that changes the UI you MUST call ``read_screen`` again before clicking, or the click
+        may land on whatever now occupies that spot.
         """
         return _act_on_ref(ref, "click_ref", lambda pg, x, y: pg.click(x=x, y=y, button="left"), element)
 
@@ -502,10 +538,16 @@ def build_server() -> FastMCP:
 
     @mcp.tool()
     def left_click(x: int, y: int) -> dict[str, Any]:
-        """Left-click at physical pixel (x, y). Screenshot + Read first to locate the target."""
+        """Left-click at ABSOLUTE virtual-desktop pixel (x, y).
+
+        (x, y) are in the one coordinate space this server uses everywhere: the same as
+        ``screen_info``/``list_windows`` bounds and ``find_element`` boxes, so a box centre
+        can be clicked as-is. A pixel read off a ``screenshot`` image needs that capture's
+        ``origin`` added first. Prefer ``click_ref`` when ``read_screen`` gave you a ref.
+        """
         pg = _pyautogui()
         try:
-            ax, ay = _abs_xy(x, y)
+            ax, ay = int(x), int(y)
             pg.click(x=ax, y=ay, button="left")
         except pg.FailSafeException:
             return {"ok": False, "action": "left_click", "error": _FAILSAFE_MSG}
@@ -515,10 +557,10 @@ def build_server() -> FastMCP:
 
     @mcp.tool()
     def double_click(x: int, y: int) -> dict[str, Any]:
-        """Double-click at physical pixel (x, y) — e.g. to open an item."""
+        """Double-click at absolute virtual-desktop pixel (x, y) — e.g. to open an item."""
         pg = _pyautogui()
         try:
-            ax, ay = _abs_xy(x, y)
+            ax, ay = int(x), int(y)
             pg.doubleClick(x=ax, y=ay)
         except pg.FailSafeException:
             return {"ok": False, "action": "double_click", "error": _FAILSAFE_MSG}
@@ -528,10 +570,10 @@ def build_server() -> FastMCP:
 
     @mcp.tool()
     def right_click(x: int, y: int) -> dict[str, Any]:
-        """Right-click at physical pixel (x, y) — opens the context menu there."""
+        """Right-click at absolute virtual-desktop pixel (x, y) — opens the context menu."""
         pg = _pyautogui()
         try:
-            ax, ay = _abs_xy(x, y)
+            ax, ay = int(x), int(y)
             pg.click(x=ax, y=ay, button="right")
         except pg.FailSafeException:
             return {"ok": False, "action": "right_click", "error": _FAILSAFE_MSG}
@@ -541,10 +583,10 @@ def build_server() -> FastMCP:
 
     @mcp.tool()
     def mouse_move(x: int, y: int) -> dict[str, Any]:
-        """Move the cursor to physical pixel (x, y) WITHOUT clicking (e.g. to hover)."""
+        """Move the cursor to absolute virtual-desktop pixel (x, y) WITHOUT clicking (hover)."""
         pg = _pyautogui()
         try:
-            pg.moveTo(*_abs_xy(x, y))
+            pg.moveTo(int(x), int(y))
         except pg.FailSafeException:
             return {"ok": False, "action": "mouse_move", "error": _FAILSAFE_MSG}
         except Exception as exc:
@@ -555,13 +597,13 @@ def build_server() -> FastMCP:
     def drag(x1: int, y1: int, x2: int, y2: int) -> dict[str, Any]:
         """Press at (x1, y1), drag to (x2, y2), release — e.g. select text or move an item.
 
-        All four values are physical pixels. Confirm with the owner before dragging
-        something that moves or deletes data irreversibly.
+        All four values are absolute virtual-desktop pixels. Confirm with the owner before
+        dragging something that moves or deletes data irreversibly.
         """
         pg = _pyautogui()
         try:
-            pg.moveTo(*_abs_xy(x1, y1))
-            pg.dragTo(*_abs_xy(x2, y2), button="left")
+            pg.moveTo(int(x1), int(y1))
+            pg.dragTo(int(x2), int(y2), button="left")
         except pg.FailSafeException:
             return {"ok": False, "action": "drag", "error": _FAILSAFE_MSG}
         except Exception as exc:
@@ -577,13 +619,13 @@ def build_server() -> FastMCP:
     def scroll(amount: int, x: int | None = None, y: int | None = None) -> dict[str, Any]:
         """Scroll the wheel by ``amount`` clicks: positive = UP, negative = DOWN.
 
-        If (x, y) are given, the cursor moves there first so the scroll targets that
-        region (physical pixels). Omit them to scroll wherever the cursor already is.
+        If (x, y) are given, the cursor moves there first so the scroll targets that region
+        (absolute virtual-desktop pixels). Omit them to scroll wherever the cursor already is.
         """
         pg = _pyautogui()
         try:
             if x is not None and y is not None:
-                pg.moveTo(*_abs_xy(x, y))
+                pg.moveTo(int(x), int(y))
             pg.scroll(int(amount))
         except pg.FailSafeException:
             return {"ok": False, "action": "scroll", "error": _FAILSAFE_MSG}
@@ -631,8 +673,9 @@ def build_server() -> FastMCP:
     def list_windows() -> dict[str, Any]:
         """List the titles of open top-level windows — use to find a target for ``focus_window``.
 
-        Returns each window's title plus its bounds (left/top/width/height in physical
-        pixels) so you can decide where it is on screen. Untitled windows are skipped.
+        Returns each window's title plus its bounds (left/top/width/height in ABSOLUTE
+        virtual-desktop pixels — the same space the click tools take) so you can decide where
+        it is on screen. Untitled windows are skipped.
         """
         gw = _pygetwindow()
         windows: list[dict[str, Any]] = []
@@ -668,20 +711,22 @@ def build_server() -> FastMCP:
             target.activate()
         except Exception as exc:  # some window managers reject activate()
             return {"ok": False, "error": f"could not focus window: {exc}"}
+        finally:
+            _invalidate_refs()  # the z-order changed: the last snapshot's rects may be covered
         return {"ok": True, "action": "focus_window", "title": getattr(target, "title", "")}
 
     # -- click / mouse primitives (reference-set parity) -------------------------
 
     @mcp.tool()
     def triple_click(x: int, y: int) -> dict[str, Any]:
-        """Triple-click at physical pixel (x, y) — selects the whole line/paragraph.
+        """Triple-click at absolute virtual-desktop pixel (x, y) — selects the whole line.
 
         The standard way to select existing text before replacing it (triple-click,
         then ``type_text``/``paste_text`` the new value).
         """
         pg = _pyautogui()
         try:
-            ax, ay = _abs_xy(x, y)
+            ax, ay = int(x), int(y)
             pg.click(x=ax, y=ay, clicks=3, interval=0.05)
         except pg.FailSafeException:
             return {"ok": False, "action": "triple_click", "error": _FAILSAFE_MSG}
@@ -691,10 +736,11 @@ def build_server() -> FastMCP:
 
     @mcp.tool()
     def middle_click(x: int, y: int) -> dict[str, Any]:
-        """Middle-click at (x, y) — e.g. open a link in a new tab, or close a browser tab."""
+        """Middle-click at absolute virtual-desktop pixel (x, y) — e.g. open a link in a new
+        tab, or close a browser tab."""
         pg = _pyautogui()
         try:
-            ax, ay = _abs_xy(x, y)
+            ax, ay = int(x), int(y)
             pg.click(x=ax, y=ay, button="middle")
         except pg.FailSafeException:
             return {"ok": False, "action": "middle_click", "error": _FAILSAFE_MSG}
@@ -704,7 +750,8 @@ def build_server() -> FastMCP:
 
     @mcp.tool()
     def mouse_down(x: int, y: int, button: str = "left") -> dict[str, Any]:
-        """Press and HOLD a mouse button at (x, y) WITHOUT releasing — pair with ``mouse_up``.
+        """Press and HOLD a mouse button at absolute (x, y) WITHOUT releasing — pair with
+        ``mouse_up``.
 
         ``button`` is "left" | "right" | "middle". Use for gestures ``drag`` cannot express:
         hold a modifier (via ``hotkey``/``hold_key``) across the press, or draw a freehand
@@ -712,7 +759,7 @@ def build_server() -> FastMCP:
         """
         pg = _pyautogui()
         try:
-            ax, ay = _abs_xy(x, y)
+            ax, ay = int(x), int(y)
             pg.mouseDown(x=ax, y=ay, button=str(button))
         except pg.FailSafeException:
             return {"ok": False, "action": "mouse_down", "error": _FAILSAFE_MSG}
@@ -722,10 +769,10 @@ def build_server() -> FastMCP:
 
     @mcp.tool()
     def mouse_up(x: int, y: int, button: str = "left") -> dict[str, Any]:
-        """Release a held mouse button at (x, y) — the other half of ``mouse_down``."""
+        """Release a held mouse button at absolute (x, y) — the other half of ``mouse_down``."""
         pg = _pyautogui()
         try:
-            ax, ay = _abs_xy(x, y)
+            ax, ay = int(x), int(y)
             pg.mouseUp(x=ax, y=ay, button=str(button))
         except pg.FailSafeException:
             return {"ok": False, "action": "mouse_up", "error": _FAILSAFE_MSG}
@@ -737,13 +784,13 @@ def build_server() -> FastMCP:
     def hscroll(amount: int, x: int | None = None, y: int | None = None) -> dict[str, Any]:
         """Scroll HORIZONTALLY by ``amount`` clicks: positive = RIGHT, negative = LEFT.
 
-        If (x, y) are given the cursor moves there first (physical pixels). Use for wide
-        tables, timelines, or horizontally-scrolling galleries. Vertical scroll is ``scroll``.
+        If (x, y) are given the cursor moves there first (absolute virtual-desktop pixels).
+        Use for wide tables, timelines or galleries. Vertical scroll is ``scroll``.
         """
         pg = _pyautogui()
         try:
             if x is not None and y is not None:
-                pg.moveTo(*_abs_xy(x, y))
+                pg.moveTo(int(x), int(y))
             pg.hscroll(int(amount))
         except pg.FailSafeException:
             return {"ok": False, "action": "hscroll", "error": _FAILSAFE_MSG}
@@ -753,7 +800,7 @@ def build_server() -> FastMCP:
 
     @mcp.tool()
     def cursor_position() -> dict[str, Any]:
-        """Return the current mouse cursor position as ``{x, y}`` (physical pixels).
+        """Return the cursor position as ``{x, y}`` (absolute virtual-desktop pixels).
 
         Lets you confirm a ``mouse_move``/``drag`` landed where intended without spending a
         screenshot. No mouse or keyboard is touched.
@@ -892,6 +939,8 @@ def build_server() -> FastMCP:
                 subprocess.Popen([app])
         except Exception as exc:
             return {"ok": False, "action": "open_application", "error": str(exc)}
+        finally:
+            _invalidate_refs()  # the new window lands on top of everything the snapshot saw
         return {"ok": True, "action": "open_application", "launched": app}
 
     # -- window management (min / max / move / resize / close) -------------------
@@ -906,6 +955,8 @@ def build_server() -> FastMCP:
             target.maximize()
         except Exception as exc:
             return {"ok": False, "action": "maximize_window", "error": str(exc)}
+        finally:
+            _invalidate_refs()
         return {"ok": True, "action": "maximize_window", "title": getattr(target, "title", "")}
 
     @mcp.tool()
@@ -918,11 +969,13 @@ def build_server() -> FastMCP:
             target.minimize()
         except Exception as exc:
             return {"ok": False, "action": "minimize_window", "error": str(exc)}
+        finally:
+            _invalidate_refs()
         return {"ok": True, "action": "minimize_window", "title": getattr(target, "title", "")}
 
     @mcp.tool()
     def move_window(title_contains: str, x: int, y: int) -> dict[str, Any]:
-        """Move the matched window so its TOP-LEFT is at (x, y) in physical pixels.
+        """Move the matched window so its TOP-LEFT is at absolute virtual-desktop (x, y).
 
         Handy to park an app at a known position for stable clicks. Re-``screenshot``
         after moving — everything shifted.
@@ -934,6 +987,8 @@ def build_server() -> FastMCP:
             target.moveTo(int(x), int(y))
         except Exception as exc:
             return {"ok": False, "action": "move_window", "error": str(exc)}
+        finally:
+            _invalidate_refs()
         return {"ok": True, "action": "move_window", "title": getattr(target, "title", ""), "x": int(x), "y": int(y)}
 
     @mcp.tool()
@@ -946,6 +1001,8 @@ def build_server() -> FastMCP:
             target.resizeTo(int(width), int(height))
         except Exception as exc:
             return {"ok": False, "action": "resize_window", "error": str(exc)}
+        finally:
+            _invalidate_refs()
         return {
             "ok": True,
             "action": "resize_window",
@@ -968,6 +1025,8 @@ def build_server() -> FastMCP:
             target.close()
         except Exception as exc:
             return {"ok": False, "action": "close_window", "error": str(exc)}
+        finally:
+            _invalidate_refs()
         return {"ok": True, "action": "close_window", "title": title}
 
     return mcp
