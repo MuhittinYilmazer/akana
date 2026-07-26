@@ -80,6 +80,11 @@ __all__ = [
 
 log = logging.getLogger(__name__)
 
+#: Shortest fact value the forget path will match against turn text. Below it a
+#: value ("30", "Ali") is a substring of unrelated turns, and redacting on it
+#: would quietly delete recall the user never asked to lose.
+_MIN_REDACT_VALUE_LEN = 4
+
 
 def _new_id() -> str:
     return str(ulid.new())
@@ -479,18 +484,75 @@ class Memory:
             self._emit_fact(new)
         return result
 
+    def redact_fact_evidence(self, fact: SemanticFact) -> int:
+        """Stop the turns that STATE ``fact`` resurfacing in recall; returns how many.
+
+        Idempotent, and the count is "turns this fact's evidence covers", not
+        "rows changed": calling it twice reports the same number, so a caller
+        can read the scope back after :meth:`forget_fact` already applied it.
+
+        The privacy half of forget. ``forget_fact`` only closes the durable row
+        and drops its embedding — the conversation turn the fact was distilled
+        from is still in the FTS index, so the very next ``memory.search``
+        returns the "forgotten" value verbatim and ships it back out to whatever
+        provider serves the turn. Two arms, both deliberately literal (guesswork
+        here would silently delete unrelated recall):
+
+        * the fact's own evidence turn (``source_turn_id``), and
+        * turns whose text states the value verbatim, for facts captured with no
+          evidence link (auto-capture without a turn id, manual writes).
+
+        The by-value arm needs a value long enough to be unambiguous —
+        ``_MIN_REDACT_VALUE_LEN``. A 2-3 character value ("30", "Ali") occurs
+        inside unrelated turns, so short values are covered by the evidence arm
+        only. The transcript is never rewritten (see
+        :meth:`EpisodicStore.redact_turns`).
+        """
+        turn_ids: list[str] = []
+        if fact.source_turn_id:
+            turn_ids.append(fact.source_turn_id)
+        value = (fact.value or "").strip()
+        if len(value) >= _MIN_REDACT_VALUE_LEN:
+            turn_ids.extend(self._episodic.find_turn_ids_containing(value))
+        unique = list(dict.fromkeys(turn_ids))
+        if not unique:
+            return 0
+        self._episodic.redact_turns(unique)
+        return len(unique)
+
     def forget_fact(self, fact_id: str, *, hard: bool = False) -> bool:
-        """Invalidate a fact (default, replay-safe) or hard-delete it."""
+        """Forget a fact everywhere it can still be recalled from.
+
+        Every caller of this (the ``memory.forget`` tool, the Studio delete
+        button) means "the user wants this gone", so the whole privacy scope
+        lives here rather than in one caller — a future third door cannot
+        re-open the leak by forgetting a step:
+
+        * the durable row is retracted, not merely closed, so a time-travel
+          (``as_of``) search cannot read the value back out of history (see
+          :meth:`SemanticStore.invalidate_fact`);
+        * its embedding is dropped, so vector recall cannot match it;
+        * the conversation turns that STATE it stop being keyword-searchable
+          (:meth:`redact_fact_evidence`) — the transcript itself is untouched.
+        """
+        # Snapshot first: a hard delete takes the row away, and the evidence arm
+        # needs the fact's value and source_turn_id to know what to redact.
+        fact = self.get_fact(fact_id)
         if hard:
             ok = self._semantic.delete_fact(fact_id)
         else:
-            ok = self._semantic.invalidate_fact(fact_id) is not None
+            ok = self._semantic.invalidate_fact(fact_id, retract=True) is not None
         if ok:
             # U6: cascade the embedding regardless of whether an indexer is subscribed.
             # forget_fact emits the raw event (not via _emit_fact_invalidated), so drop
             # here directly. Both hard and soft forget shrink the table — matching the
             # indexer's contract that it tracks only currently-valid facts.
             self._drop_embedding(fact_id)
+            if fact is not None:
+                try:
+                    self.redact_fact_evidence(fact)
+                except Exception:  # a closed fact must stay closed even if this fails
+                    log.exception("forget: episodic redaction failed for %s", fact_id)
             self._emit("fact_invalidated", fact_id=fact_id, hard=hard)
         return ok
 

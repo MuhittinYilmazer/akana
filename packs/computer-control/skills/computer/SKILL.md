@@ -29,8 +29,11 @@ There are two ways to see. Always TRY the structured one first:
    view. Use `computer_find_element("Save")` to locate a control in a large tree.
 2. **Act by ref**: `click_ref("w1e7")`, `double_click_ref`, `right_click_ref`, or
    `type_into_ref("w1e3", "text")` (focuses then Unicode-safe pastes). Pass `element="the Save
-   button"` describing the target. Refs target the element's CENTER by identity, so a small
-   layout shift can't make you miss.
+   button"` describing the target. A ref addresses the element's LAST-SEEN RECTANGLE, not its
+   identity — a layout shift WILL make you miss, so re-read after anything that changes the UI.
+   The server drops every ref whenever it moves, resizes, focuses, maximizes, minimizes or
+   closes a window or launches an app, so a dropped ref asks you to re-read instead of
+   clicking blind.
 3. **Re-read**: after any action that changes the UI, call `computer_read_screen` AGAIN — refs
    are only valid for the current snapshot. A stale ref returns an error asking you to re-read;
    NEVER fall back to a remembered coordinate.
@@ -66,12 +69,18 @@ canvas, a custom-drawn app) — switch to the pixel loop below.
 
 ## Coordinate guidance
 
-- Coordinates are PHYSICAL PIXELS of the captured screenshot — the same numbers the
-  screenshot reports as `width`/`height`. Do not scale, guess DPI, or reuse coordinates
-  from an earlier screenshot after anything on screen moved.
+- Coordinates are ABSOLUTE virtual-desktop PHYSICAL PIXELS (primary monitor top-left = 0,0).
+  This is ONE space shared by every tool: `screen_info` bounds, `list_windows` bounds,
+  `find_element` boxes and the x/y you pass to click/drag/scroll/move_window. No tool applies
+  a hidden translation. Do not scale, guess DPI, or reuse coordinates from an earlier
+  screenshot after anything on screen moved.
 - `computer_screenshot(monitor=0)` captures the full virtual desktop (all screens);
-  `monitor=1,2,...` capture a single screen. `computer_screen_info` lists the monitors
-  and their bounds so you can choose. If a coordinate is off any real screen, do not click.
+  `monitor=1,2,...` capture a single screen. The result carries `origin` — the capture's
+  top-left in that absolute space. If `origin` is not `[0, 0]` you are reading pixels off a
+  monitor-scoped image, so ADD `origin` to every coordinate you measure on it before clicking;
+  the payload's `instructions` field spells out the exact numbers. `computer_screen_info`
+  lists the monitors and their bounds, so "is this coordinate on a real screen?" is now a
+  check you can actually make — if it is off every bound, do not click.
 - Typing goes to whatever has focus: click the target field FIRST, then type.
 - `type_text` sends per-key scan codes and SILENTLY DROPS any character not on the US
   keyboard layout — Turkish (ç ğ ı İ ö ş ü), accents, emoji, CJK. For ANY non-ASCII text

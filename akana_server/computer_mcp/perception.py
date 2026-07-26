@@ -12,11 +12,15 @@ text lines ending in ``[ref=wNeM]``, and a per-snapshot registry maps ``ref -> r
 
 Staleness model (weaker than the browser's live DOM re-resolve — be honest about it): a
 ref resolves only while it belongs to the CURRENT snapshot, so a ref from a SUPERSEDED
-``read_screen`` is refused with a "re-snapshot" error. But between snapshots the registry
-holds a captured RECT, not a live element handle — if the UI changes and the model acts
-WITHOUT re-reading, the click lands on that remembered rect. The operating rule (enforced
-in SKILL.md, not by the server) is therefore: re-run ``read_screen`` after any action that
-alters the UI. A future revision may re-locate the element by identity at action time.
+``read_screen`` is refused with a "re-snapshot" error, and ``RefRegistry.invalidate`` ends
+the snapshot whenever the SERVER ITSELF mutates windows (move/resize/close/focus/launch).
+But between snapshots the registry holds a captured RECT, not a live element handle — a
+ref addresses the element's LAST-SEEN RECTANGLE, never its identity — so if the UI changes
+for a reason the server cannot see (the app repaints, a notification pops) and the model
+acts WITHOUT re-reading, the click lands on that remembered rect. The operating rule
+(enforced in SKILL.md, not by the server) is therefore: re-run ``read_screen`` after any
+action that alters the UI. A future revision may re-locate the element by identity at
+action time.
 
 Backends are platform-selected and LAZY-imported (Windows → UI Automation via the
 ``uiautomation`` package; Linux → AT-SPI via ``pyatspi``), mirroring ``__main__``'s
@@ -185,6 +189,22 @@ class RefRegistry:
             snapshot_id=self._snapshot_id,
         )
         return ref
+
+    def invalidate(self) -> None:
+        """End the current snapshot WITHOUT starting a new one: every ref stops resolving.
+
+        Called when the server itself performs an action it knows relocates or destroys the
+        windows a snapshot captured (window move/resize/minimize/maximize/focus/close, or
+        launching an app over them). The registry holds a captured RECT, not a live element
+        handle, so a ref that survived such a mutation would click whatever now occupies
+        that rectangle — a blind click on the owner's desktop. Refusing loudly (the caller
+        gets the re-``read_screen`` error) is the only safe answer. Bumping the snapshot id
+        the way ``begin_snapshot`` does also ages the identity memo slightly, which costs
+        ref-NUMBER stability only, never correctness.
+        """
+        self._snapshot_id += 1
+        self._by_ref.clear()
+        self._used_this_snapshot.clear()
 
     def resolve(self, ref: str) -> RefEntry | None:
         """Return the entry IFF it is from the current snapshot, else None (stale/unknown)."""

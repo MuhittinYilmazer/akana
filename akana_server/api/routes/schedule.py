@@ -21,6 +21,8 @@ surfaces enforce identical rules; REST-created schedules are tagged
 
 from __future__ import annotations
 
+import asyncio
+
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
@@ -72,10 +74,16 @@ def _error_response(name: str, result: dict[str, Any]) -> None:
     raise http_error(422, "VALIDATION", message)
 
 
+# The schedules store is guarded by a CROSS-PROCESS file lock (the akana_schedule MCP child
+# writes the same file), and acquiring it can wait out its full ~10s deadline. On the event
+# loop that is not a slow request — it is the WHOLE server frozen, every stream and socket
+# included, while a peer process holds the lock. Every store call here therefore runs in a
+# worker thread. ``run_schedule`` below is already safe: it goes through the engine, which
+# does its own off-loop hop.
 @router.get("/schedule", dependencies=[Depends(require_akana_bearer)])
 async def list_schedules(request: Request) -> dict[str, Any]:
     settings = request.app.state.settings
-    items = get_schedule_store(settings.data_dir).load()
+    items = await asyncio.to_thread(get_schedule_store(settings.data_dir).load)
     return {"schedules": [i.public_dict() for i in items], "count": len(items)}
 
 
@@ -84,7 +92,9 @@ async def create_schedule(request: Request) -> dict[str, Any]:
     settings = request.app.state.settings
     body = await _json_object(request)
     tools = ScheduleTools(settings.data_dir, created_by="user")
-    result = tools.handle_tool_call("schedule_create", _flatten_body(body))
+    result = await asyncio.to_thread(
+        tools.handle_tool_call, "schedule_create", _flatten_body(body)
+    )
     if result.get("error"):
         _error_response("schedule_create", result)
     return result
@@ -96,7 +106,7 @@ async def update_schedule(schedule_id: str, request: Request) -> dict[str, Any]:
     body = await _json_object(request)
     tools = ScheduleTools(settings.data_dir, created_by="user")
     args = {**_flatten_body(body), "id": schedule_id}
-    result = tools.handle_tool_call("schedule_update", args)
+    result = await asyncio.to_thread(tools.handle_tool_call, "schedule_update", args)
     if result.get("error"):
         _error_response("schedule_update", result)
     return result
@@ -105,7 +115,9 @@ async def update_schedule(schedule_id: str, request: Request) -> dict[str, Any]:
 @router.delete("/schedule/{schedule_id}", dependencies=[Depends(require_akana_bearer)])
 async def delete_schedule(schedule_id: str, request: Request) -> dict[str, Any]:
     settings = request.app.state.settings
-    removed = get_schedule_store(settings.data_dir).cancel(schedule_id)
+    removed = await asyncio.to_thread(
+        get_schedule_store(settings.data_dir).cancel, schedule_id
+    )
     if not removed:
         raise http_error(404, "NOT_FOUND", f"No schedule with id {schedule_id}.")
     return {"id": schedule_id, "removed": True, "status": "cancelled"}

@@ -101,9 +101,25 @@ def test_reaper_uses_group_alive_not_just_pid(monkeypatch, tmp_path) -> None:
     """When the leader dies but a group child survives, the reaper must keep polling
     via _group_alive and then force-kill the GROUP — not return early on _pid_alive."""
     # Stale pid file for a group whose LEADER is already gone.
+    # ``boot_ts`` is not decoration: the reaper now kills only on POSITIVE identity,
+    # because a stored pid is a name, not a handle — after a reboot it can belong to the
+    # user's editor and ``_killpg`` takes down the whole tree. A record from THIS boot is
+    # what makes the pid still trustworthy, so it is what a real registration writes.
+    # Without it the reaper correctly refuses, and this test would be asserting the
+    # refusal instead of the group-vs-leader behaviour it is named for.
+    _BOOT = 1_000_000.0
+    monkeypatch.setattr(llm_process, "_boot_timestamp", lambda: _BOOT, raising=True)
     pid_dir = llm_process.llm_pid_dir(tmp_path)
     (pid_dir / "tok.json").write_text(
-        json.dumps({"token": "tok", "pid": 4321, "pgid": 4321, "kind": "cursor_bridge"}),
+        json.dumps(
+            {
+                "token": "tok",
+                "pid": 4321,
+                "pgid": 4321,
+                "kind": "cursor_bridge",
+                "boot_ts": _BOOT,
+            }
+        ),
         encoding="utf-8",
     )
 

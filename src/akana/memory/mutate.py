@@ -157,21 +157,64 @@ def forget(memory: Memory, req: ForgetRequest) -> dict[str, Any]:
             )
         old, new = result
         _audit(memory, req, outcome="superseded", new_id=new.id)
-        return {"status": "superseded", "old_id": old.id, "new_id": new.id}
+        return {
+            "status": "superseded",
+            "old_id": old.id,
+            "new_id": new.id,
+            # A partial forget edits the durable record only. The conversation
+            # turns are left searchable because we cannot tell which part of an
+            # old turn the user dropped — say so instead of implying more.
+            "note": (
+                "the durable record now holds only the new value; conversation turns "
+                "are unchanged. To also stop the old wording resurfacing in memory "
+                "search, forget the record with mode=retract."
+            ),
+        }
 
     if not fact.is_valid:
         return {"status": "already_inactive", "fact_id": fact.id}
     memory.forget_fact(req.target_id, hard=False)
-    _audit(memory, req, outcome=req.mode)
-    out: dict[str, Any] = {"status": "forgotten", "mode": req.mode, "fact_id": req.target_id}
+    # forget_fact already applied the episodic arm (every forget door gets the
+    # same scope); this idempotent re-read is only to REPORT it, because the
+    # answer must state what the user actually got — without the arm the fact is
+    # closed but the turn that STATES it is still in the FTS index, and the next
+    # memory.search hands back the secret we just said was forgotten.
+    redacted = 0
+    try:
+        redacted = memory.redact_fact_evidence(fact)
+    except Exception:  # reporting must never break the operation itself
+        log.exception("forget: episodic redaction read-back failed for %s", req.target_id)
+    _audit(memory, req, outcome=req.mode, episodic_redacted=redacted)
+    out: dict[str, Any] = {
+        "status": "forgotten",
+        "mode": req.mode,
+        "fact_id": req.target_id,
+        "episodic_turns_excluded": redacted,
+    }
+    # Say exactly what "forgotten" bought the user — the scope is not obvious,
+    # and an assistant that overstates it is the bug this arm exists to fix.
+    notes = [
+        f"the durable fact is gone and {redacted} conversation turn(s) stating it are "
+        "excluded from memory search; those turns stay in the chat transcript the user "
+        "can scroll back to, and the current conversation's recent messages are already "
+        "in context"
+    ]
     if req.mode == "soft_delete":
-        out["note"] = "grace-period hard delete deferred to F5; behaves like retract for now"
+        notes.append("grace-period hard delete deferred to F5; behaves like retract for now")
     if req.mode == "quarantine":
-        out["note"] = "quarantine: excluded from recall, flagged in ledger"
+        notes.append("quarantine: excluded from recall, flagged in ledger")
+    out["note"] = ". ".join(notes)
     return out
 
 
-def _audit(memory: Memory, req: ForgetRequest, *, outcome: str, new_id: str | None = None) -> None:
+def _audit(
+    memory: Memory,
+    req: ForgetRequest,
+    *,
+    outcome: str,
+    new_id: str | None = None,
+    episodic_redacted: int | None = None,
+) -> None:
     try:
         memory.ledger.append(
             "memory.forget",
@@ -181,6 +224,9 @@ def _audit(memory: Memory, req: ForgetRequest, *, outcome: str, new_id: str | No
                 "reason": req.reason,
                 "outcome": outcome,
                 **({"new_id": new_id} if new_id else {}),
+                # The audit trail records the real scope, so a later "what did
+                # forget actually do?" is answerable from the ledger alone.
+                **({} if episodic_redacted is None else {"episodic_redacted": episodic_redacted}),
             },
         )
     except Exception:  # the audit write must never break the main operation

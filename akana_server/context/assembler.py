@@ -117,7 +117,7 @@ class ContextRequest:
     skill: str | None = None  # skill_run/work-mode turn (D12.E contract)
     skill_block: str = ""  # SkillTurnPlan.prompt_block ([Yetenek: ...])
     skill_entries: list[dict[str, Any]] = field(default_factory=list)
-    #: MultimodalEngine F1: `[Görsel: <path>]` lines — appended to the end of the
+    #: MultimodalEngine F1: `[Image: <path>]` lines — appended to the end of the
     #: user text; like the user text, NEVER trimmed in the budget.
     image_block: str = ""
 
@@ -370,7 +370,7 @@ class ContextAssembler:
         image_block = ctx.image_block or ""
         trimmed: list[dict[str, Any]] = []
 
-        # Final order: [Yetenek] → [Prior context] + [memory + raw text] → [Görsel].
+        # Final order: [Yetenek] → [Prior context] + [memory + raw text] → [Image].
         # (bracket tokens are load-bearing prompt markers — kept verbatim.)
         def _body() -> str:
             parts = [p for p in (prior_block, mem_text) if p]
@@ -432,9 +432,12 @@ class ContextAssembler:
                 {
                     "kind": "image",
                     "chars": len(image_block),
-                    "count": image_block.count("[Görsel:"),
+                    # Must match the marker _files_gate actually emits; it is stable
+                    # ENGLISH regardless of the user's language (prompt scaffolding the
+                    # MODEL reads — a foreign-language token nudges the reply language).
+                    "count": image_block.count("[Image:"),
                     "reason": (
-                        "image input (image_ids) — [Görsel: <path>] lines"
+                        "image input (image_ids) — [Image: <path>] lines"
                         " appended to the end of user text (MultimodalEngine F1)"
                     ),
                 }

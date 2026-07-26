@@ -63,3 +63,28 @@ def test_vector_bridges_evcil_hayvan_to_kedi(vec_orch) -> None:
 def test_vector_bridges_karanlik_mod_to_koyu_tema(vec_orch) -> None:
     # 'karanlık mod' ≈ 'koyu tema' — impossible with keywords, the vector resolves it
     assert "koyu" in _recalled(vec_orch, "karanlık mod mu açık mod mu")
+
+
+# The cosine floor, against the REAL model it was calibrated on. The two tests
+# above are the "still recalls" direction; these two are the "stops recalling
+# everything" direction. Both must hold — a floor that only satisfies one of
+# them is either a leak or a silently emptied memory.
+
+
+@pytest.mark.parametrize(
+    "off_topic",
+    [
+        "quantum chromodynamics lattice gauge simulation",
+        "kubernetes ingress controller tls termination",
+        "what is the capital of Peru",
+    ],
+)
+def test_off_topic_query_does_not_dump_the_fact_store(vec_orch, off_topic: str) -> None:
+    # No fact in the corpus is about any of these; with no floor the vector leg
+    # returned the whole table ranked by "least unrelated".
+    assert _recalled(vec_orch, off_topic).strip() == ""
+
+
+def test_english_query_still_bridges_to_a_turkish_fact(vec_orch) -> None:
+    # Cross-language semantic recall must survive the floor (EN query, TR fact).
+    assert "egea" in _recalled(vec_orch, "what car do I drive")

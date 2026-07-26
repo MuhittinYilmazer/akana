@@ -18,10 +18,13 @@ import pytest
 
 from akana_cli import backup_cmd
 
-# NOTE (Windows only): restore's _reharden_secret_dirs makes vault/credentials owner-only
-# (icacls /inheritance:r); pytest's own SESSION-level tmp_path rm_rf can then hit a transient
-# Access-denied and emit an "rm_rf … garbage-*" PytestWarning. That is test-RUNNER cleanup
-# noise (Linux/CI unaffected, every test passes); the autouse teardown resets perms best-effort.
+# NOTE (Windows): restore's _reharden_secret_dirs really does icacls the restored
+# vault/credentials trees, and these tests exercise it for real. It must leave the OWNER
+# with full control at every level — a directory granted a NON-inheritable `<user>:F`
+# after `/inheritance:r` leaves its children with an EMPTY DACL, which is what used to
+# produce an undeletable tmp dir and a permanent "rm_rf … garbage-*" PytestWarning on
+# every run in this repo. pytest's own tmp cleanup deleting these dirs IS the assertion:
+# if the grants ever regress, the warning comes back.
 
 
 def _make_data_dir(root: Path) -> Path:
@@ -52,27 +55,8 @@ def _make_data_dir(root: Path) -> Path:
 
 
 @pytest.fixture(autouse=True)
-def _no_server(monkeypatch, tmp_path):
+def _no_server(monkeypatch):
     monkeypatch.setattr(backup_cmd, "_server_might_be_running", lambda: False)
-    yield
-    # Best-effort: reset the perms the restore hardened so pytest's tmp teardown can delete
-    # them (real reharden coverage kept; the residual Windows warning is silenced above).
-    import os
-    import stat
-    import subprocess
-    import sys
-
-    for p in tmp_path.rglob("*"):
-        try:
-            os.chmod(p, stat.S_IRWXU)
-        except OSError:
-            pass
-    if sys.platform == "win32":
-        try:
-            subprocess.run(["icacls", str(tmp_path), "/reset", "/T", "/C", "/Q"],
-                           capture_output=True, timeout=30, check=False)
-        except Exception:
-            pass
 
 
 def test_reharden_runs_without_error(tmp_path):

@@ -7,8 +7,19 @@ calls an input prompt for a secret.
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
 
 from akana_cli import add_cmd, io, setup_cmd
+
+
+@pytest.fixture(autouse=True)
+def _isolated_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``_configure_after_install`` records the provider in the SETTINGS STORE as well as
+    .env (that is the value the server resolves). Without this the tests below would
+    rewrite the developer's own ~/.akana/llm_settings.json."""
+    monkeypatch.setenv("AKANA_DATA_DIR", str(tmp_path / "data"))
 
 
 def _no_input(*_a, **_k):

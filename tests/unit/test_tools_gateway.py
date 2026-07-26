@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,25 @@ MOCK_TOOL_CALL = {
     "phase": "start",
     "args": {"command": "pytest -q"},
     "status": None,
+}
+
+_SECRET = "ghp_SUPERSECRET_0123456789abcdef"
+
+#: The shapes the stream builds for a vault write/read — args on ``start``,
+#: result on ``end`` (both carry raw secret material).
+VAULT_SET_CALL = {
+    "id": "call-vault",
+    "name": "mcp__akana_vault__vault_set",
+    "phase": "start",
+    "args": {"key": "github_token", "value": _SECRET},
+    "status": None,
+}
+VAULT_GET_CALL = {
+    "id": "call-vault",
+    "name": "mcp__akana_vault__vault_get",
+    "phase": "end",
+    "result": f"github_token = {_SECRET}",
+    "status": "ok",
 }
 
 
@@ -93,4 +113,41 @@ def test_tools_recent_endpoint(client: TestClient, tmp_path: Path) -> None:
     body = r.json()
     assert body["count"] == 1
     assert body["tools"][0]["call"]["name"] == "shell"
+
+
+# --- the recent buffer must never hold tool payloads -------------------------
+#
+# /tools/recent is served behind require_akana_bearer, which trusts ANY direct
+# loopback peer — i.e. any other local OS account or process on the box. The vault's
+# whole threat model (0600 keyfile, icacls, Fernet at rest, the strict reveal gate)
+# is exactly that neighbour, so raw args/results must never reach the buffer.
+
+
+def test_recent_buffer_holds_no_tool_payload(tmp_path: Path) -> None:
+    record_tool_call(tmp_path, VAULT_SET_CALL, turn_id="01T", conv_id="01C")
+    record_tool_call(tmp_path, VAULT_GET_CALL, turn_id="01T", conv_id="01C")
+
+    recent = list_recent_tool_calls(limit=20)
+    assert _SECRET not in json.dumps(recent)
+    for entry in recent:
+        assert "args" not in entry["call"]
+        assert "result" not in entry["call"]
+    # The observability value (which tool, which phase, which outcome) survives.
+    assert recent[0]["call"]["name"] == "mcp__akana_vault__vault_set"
+    assert recent[0]["call"]["phase"] == "start"
+    assert recent[1]["call"]["status"] == "ok"
+
+
+def test_tools_recent_endpoint_serves_no_secret(client: TestClient, tmp_path: Path) -> None:
+    record_tool_call(tmp_path, VAULT_SET_CALL, turn_id="01T", conv_id="01C")
+    r = client.get("/api/v1/tools/recent?limit=20")
+    assert r.status_code == 200
+    assert _SECRET not in r.text
+
+
+def test_record_tool_call_does_not_mutate_the_caller_dict(tmp_path: Path) -> None:
+    """The SAME dict is streamed to the client and persisted — redaction is a COPY."""
+    call = dict(VAULT_SET_CALL)
+    record_tool_call(tmp_path, call, turn_id="01T", conv_id="01C")
+    assert call["args"] == {"key": "github_token", "value": _SECRET}
 

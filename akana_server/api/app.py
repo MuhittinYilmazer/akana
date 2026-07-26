@@ -27,7 +27,7 @@ from akana_server.api.static_files import (
 from akana_server.api import ws as ws_routes
 from akana_server.api.routes import voice_live as voice_live_routes
 from akana_server.api.routes import voice_realtime as voice_realtime_routes
-from akana_server.api.deps import require_akana_bearer
+from akana_server.api.deps import HostHeaderGuard, require_akana_bearer
 from akana_server.api.routes import chat as chat_routes
 from akana_server.api.routes import connectors as connectors_routes
 from akana_server.api.routes import conversations as conversations_routes
@@ -383,6 +383,10 @@ class StreamAwareGZipMiddleware(GZipMiddleware):
 def create_app() -> FastAPI:
     app = FastAPI(title="Akana", version="0.2.0", lifespan=lifespan)
     app.add_middleware(StreamAwareGZipMiddleware, minimum_size=500)
+    # Added LAST = OUTERMOST: a DNS-rebinding origin is turned away before it reaches
+    # any route, static file or WebSocket. Auth trusts a loopback peer, and a rebound
+    # page IS a loopback peer — the Host header is what separates it from the owner.
+    app.add_middleware(HostHeaderGuard)
 
     @app.get("/health", dependencies=[Depends(require_akana_bearer)])
     async def health() -> dict[str, Any]:

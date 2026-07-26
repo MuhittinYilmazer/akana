@@ -109,14 +109,22 @@ def _create_venv(python_exe: str) -> None:
 def _repair_venv() -> None:
     """`--repair`: delete the venv so it is rebuilt from scratch. For the case where
     the venv is corrupt (half-built, wrong Python, missing pip) and re-running plain
-    setup can't fix it. Only the regenerable venv/ dir is removed — never user data."""
+    setup can't fix it. Only the regenerable venv/ dir is removed — never user data.
+
+    A partial rmtree (a file held open by a stale server / antivirus / Explorer) must
+    ABORT setup: venv_exists() is just `venv/Scripts/python.exe`, so a tree that lost
+    site-packages but kept that one file still reads as "venv present" — setup would
+    then skip the rebuild, pip-install into the wreck, and print "Setup complete" over
+    exactly the corruption --repair was invoked to fix.
+    """
     if not VENV_DIR.exists():
         return
     io.step(i18n.t("setup.venv_repair"))
     try:
         shutil.rmtree(VENV_DIR)
     except OSError as exc:
-        io.warn(i18n.t("setup.venv_repair_failed", path=VENV_DIR, err=exc))
+        io.fail(i18n.t("setup.venv_repair_failed", path=VENV_DIR, err=exc))
+        raise SystemExit(1) from exc
 
 
 def _pip_cmd() -> list[str]:
@@ -354,6 +362,28 @@ def _select_and_install() -> list[str]:
     return picks
 
 
+def _persist_active_provider(provider: str) -> None:
+    """Record the provider where the SERVER reads it, not only in .env.
+
+    The server resolves ``llm.provider or settings.llm_provider`` (llm_settings.
+    resolve_provider) — the persisted store WINS. A user who ever picked a provider in
+    the UI has ``~/.akana/llm_settings.json``, so writing only .env made setup print
+    "✓ Active provider: gemini" (twice, counting the closing summary) while every chat
+    kept going to the old provider, with nothing anywhere pointing at the cause.
+
+    Best-effort: during a FIRST setup the server package may not be importable yet, and
+    that must not abort the wizard — .env is still written either way.
+    """
+    try:
+        from akana_server.config import load_settings
+        from akana_server.llm_settings import update_llm_settings
+
+        settings = load_settings()
+        update_llm_settings(settings.data_dir, settings, {"provider": provider})
+    except Exception as exc:  # noqa: BLE001 — a pre-install/broken server package degrades to .env
+        io.warn(i18n.t("setup.provider_store_skipped", provider=provider, exc=exc))
+
+
 def _configure_after_install(picks: list[str]) -> None:
     """After the batch install: pick the default active provider.
 
@@ -369,8 +399,7 @@ def _configure_after_install(picks: list[str]) -> None:
     if not prov_ids:
         return  # no provider selected → leave LLM_PROVIDER as-is (unconfigured if never set)
     if len(prov_ids) == 1:
-        _write_env_key("LLM_PROVIDER", prov_ids[0])
-        io.ok(i18n.t("setup.active_provider", id=prov_ids[0]))
+        pick = prov_ids[0]
     else:
         print()
         pick = io.ask_choice(
@@ -378,7 +407,10 @@ def _configure_after_install(picks: list[str]) -> None:
             {pid: i18n.t("comp." + pid, default=REGISTRY[pid].label) for pid in prov_ids},
             default=prov_ids[0],
         )
-        _write_env_key("LLM_PROVIDER", pick)
+    _write_env_key("LLM_PROVIDER", pick)
+    _persist_active_provider(pick)
+    if len(prov_ids) == 1:
+        io.ok(i18n.t("setup.active_provider", id=pick))
     keyed = [c for c in picked_providers if c.key_env]
     if keyed:
         print()
@@ -598,9 +630,12 @@ def run_setup(
             )
         )
 
+    from akana_cli.doctor import _resolved_provider
     from akana_cli.env_util import read_env_key
 
-    _prov = (read_env_key("LLM_PROVIDER") or "").strip().lower()
+    # Store-first, exactly like the server and the doctor run two lines above — reading
+    # only .env here made the summary contradict the checks printed right before it.
+    _prov = _resolved_provider()
     _tok = (read_env_key("AKANA_TOKEN") or "").strip()
     from akana_cli.components import REGISTRY, deps_installed
 

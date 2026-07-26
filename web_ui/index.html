@@ -882,8 +882,12 @@
               <option value="browser" data-i18n="settings.voice.wake_source_browser">Browser</option>
             </select>
             <p class="field-hint" data-i18n="settings.voice.wake_source_hint">Model uses the on-server «Hey Akana» detector (gated by the threshold below). Browser uses your browser's speech recognition to match the «Hey Akana» phrase. If the model isn't set up, it falls back to browser automatically.</p>
-            <label for="wake-threshold"><span data-i18n="settings.voice.wake_threshold_label">Threshold</span> <output id="wake-threshold-out" for="wake-threshold">0.15</output></label>
-            <input id="wake-threshold" type="range" min="0.01" max="1" step="0.01" value="0.15" />
+            <!-- value/output = DEFAULTS["wake_threshold"] in akana_server/settings_defaults.py;
+                 both are overwritten by GET /voice/config. Kept in step by a drift guard
+                 (tests/web/hunt6_frontend.harness.mjs) — a stale 0.15 here told a user tuning
+                 false wakes that the server was 3x more sensitive than it really is. -->
+            <label for="wake-threshold"><span data-i18n="settings.voice.wake_threshold_label">Threshold</span> <output id="wake-threshold-out" for="wake-threshold">0.5</output></label>
+            <input id="wake-threshold" type="range" min="0.01" max="1" step="0.01" value="0.5" />
             <p class="field-hint" data-i18n="settings.voice.wake_threshold_hint">Applies to Model mode only. Low threshold = more sensitive (more false positives). Live score is shown in the top bar.</p>
             <label for="wake-min-frames"><span data-i18n="settings.voice.wake_sustain_label">Strictness (sustain)</span> <output id="wake-min-frames-out" for="wake-min-frames">3</output></label>
             <input id="wake-min-frames" type="range" min="1" max="10" step="1" value="3" />

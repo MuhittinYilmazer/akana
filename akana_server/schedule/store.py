@@ -13,17 +13,19 @@ a single un-parseable ROW is skipped, but a TEMPORARILY-unreadable or wholly-cor
 file RAISES (never "starts empty") so a transient Windows sharing violation can
 never trick a mutation into overwriting real data with nothing.
 
-Recurrence math (:func:`compute_next_run`) is plain datetime arithmetic in
-Turkey local time (fixed +03:00, no DST — the project convention). There is NO
-cron dependency: the four kinds (``once`` / ``interval`` / ``daily`` / ``weekly``)
-are each a small, testable closed-form computation.
+Recurrence math (:func:`compute_next_run`) is plain datetime arithmetic in the
+USER's local zone (:func:`local_tz`). There is NO cron dependency: the four kinds
+(``once`` / ``interval`` / ``daily`` / ``weekly``) are each a small, testable
+closed-form computation.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+import os
+import re
+from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from typing import Any
 
@@ -47,16 +49,34 @@ __all__ = [
     "SPENT_ONCE_RETENTION_DAYS",
     "ScheduleValidationError",
     "ScheduleStore",
+    "local_tz",
+    "reset_timezone_cache",
+    "now_local",
     "now_tr",
     "to_iso",
     "parse_iso",
     "compute_next_run",
 ]
 
-#: Turkey fixed offset (+03:00, no DST since 2016). All schedule wall-clock math
-#: (``HH:MM``, weekday, ``next_run_at``) is done in this zone, matching
-#: ``src/akana/memory/time_expressions`` and the rest of the server.
+#: Turkey fixed offset (+03:00, no DST since 2016). NOT the zone wall-clock math is
+#: done in any more (see :func:`local_tz`) — it survives as the last-resort fallback
+#: and as the offset every row written before the timezone fix carries.
 TR_TZ = timezone(timedelta(hours=3))
+
+#: Timezone override — an IANA name (``Europe/Istanbul``, ``America/New_York``) or a
+#: plain UTC offset (``UTC``, ``+03:00``, ``UTC-04:30``). Set it when the host clock is
+#: not the zone the user thinks in (a server in UTC, a container without
+#: ``/etc/localtime``); unset means "follow the host". The offset form exists because
+#: Windows ships no system tz database, so IANA names need the ``tzdata`` package.
+TZ_ENV_VAR = "AKANA_TIMEZONE"
+
+#: Resolved zones by name — the IANA lookup reads tzdata off disk and ``local_tz`` runs
+#: on every store read/write. ``None`` caches "this name is unusable" so the warning is
+#: emitted once, not per call.
+_ZONES: dict[str, tzinfo | None] = {}
+
+#: ``UTC`` / ``Z`` / ``+03:00`` / ``UTC-04:30`` / ``+0330`` / ``UTC+3``.
+_OFFSET_RE = re.compile(r"^(?:utc|gmt|z)?(?:([+-])(\d{1,2})(?::?(\d{2}))?)?$", re.I)
 
 #: Hard ceiling on stored schedules (SAFETY: a runaway assistant / buggy client
 #: must not be able to accumulate unbounded pending work). Counts only ENABLED
@@ -83,31 +103,107 @@ class ScheduleValidationError(ValueError):
 
 
 # --------------------------------------------------------------------------- #
-# Time helpers (all in Turkey local time, +03:00)
+# Time helpers (all in the USER's local zone — see local_tz)
 # --------------------------------------------------------------------------- #
 
 
-def now_tr() -> datetime:
-    """Current instant as a +03:00-aware datetime (Turkey local time)."""
-    return datetime.now(TR_TZ)
+def _fixed_offset(name: str) -> tzinfo | None:
+    """A plain UTC-offset spelling → a fixed-offset zone, else ``None``."""
+    m = _OFFSET_RE.match(name.strip())
+    if m is None:
+        return None
+    sign, hours, minutes = m.groups()
+    if sign is None:
+        return timezone.utc  # bare "UTC"/"GMT"/"Z"
+    delta = timedelta(hours=int(hours), minutes=int(minutes or 0))
+    if delta > timedelta(hours=24):
+        return None
+    return timezone(-delta if sign == "-" else delta)
+
+
+def _zone(name: str) -> tzinfo | None:
+    """The zone named by :data:`TZ_ENV_VAR`, or ``None`` if the name is unusable.
+
+    The offset form is tried FIRST: it needs no tz database, and on Windows (no system
+    tzdb, ``tzdata`` not a dependency) it is the only form that resolves at all."""
+    if name in _ZONES:
+        return _ZONES[name]
+    tz = _fixed_offset(name)
+    if tz is None:
+        try:
+            from zoneinfo import ZoneInfo
+
+            tz = ZoneInfo(name)
+        except Exception:
+            log.warning(
+                "%s=%r is not a usable timezone (unknown IANA name, and no tz database "
+                "on this host — try an offset like '+03:00', or pip install tzdata) — "
+                "falling back to the host zone",
+                TZ_ENV_VAR, name,
+            )
+    _ZONES[name] = tz
+    return tz
+
+
+def local_tz() -> tzinfo:
+    """The zone every schedule WALL-CLOCK value means.
+
+    "daily 09:00" means 09:00 where the USER is. Pinning this to a fixed +03:00 gave
+    every user outside UTC+3 their reminders at the wrong hour with nothing on screen
+    to reveal it — ``schedule_list`` echoed the stored ``+03:00`` ISO, which reads as
+    "09:00". Resolution: :data:`TZ_ENV_VAR` (an IANA name, so DST is handled, or a plain
+    offset) > the host's own current offset > :data:`TR_TZ`.
+
+    Resolved per call, never cached as a value: the host offset changes at a DST
+    boundary and a long-running server must follow it.
+    """
+    name = (os.environ.get(TZ_ENV_VAR) or "").strip()
+    if name:
+        tz = _zone(name)
+        if tz is not None:
+            return tz
+    try:
+        host = datetime.now().astimezone().tzinfo
+    except Exception:  # pragma: no cover - a platform with no local zone at all
+        host = None
+    return host or TR_TZ
+
+
+def reset_timezone_cache() -> None:
+    """Drop the resolved-zone cache (test isolation / a tzdata change)."""
+    _ZONES.clear()
+
+
+def now_local() -> datetime:
+    """Current instant, aware, in the user's local zone (:func:`local_tz`)."""
+    return datetime.now(local_tz())
+
+
+#: Back-compat alias — the name predates the timezone fix and is still imported by
+#: callers and tests; the behaviour is now "local", not "Turkey".
+now_tr = now_local
 
 
 def to_iso(dt: datetime) -> str:
-    """Aware datetime → a stable ``+03:00`` ISO-8601 string (second precision).
+    """Aware datetime → a stable local-offset ISO-8601 string (second precision).
 
-    A naive datetime is assumed to already be Turkey local time. Second
+    A naive datetime is assumed to already be local wall-clock time. Second
     precision keeps the stored value human-readable and comparison-stable."""
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=TR_TZ)
-    return dt.astimezone(TR_TZ).replace(microsecond=0).isoformat()
+        dt = dt.replace(tzinfo=local_tz())
+    return dt.astimezone(local_tz()).replace(microsecond=0).isoformat()
 
 
 def parse_iso(value: str) -> datetime:
-    """Parse an ISO-8601 datetime → a +03:00-aware datetime.
+    """Parse an ISO-8601 datetime → an aware datetime in the user's local zone.
 
-    Accepts a trailing ``Z`` (UTC) and offset-less values (assumed +03:00), and
-    a bare ``YYYY-MM-DD`` date (interpreted as midnight Turkey time). Raises
-    :class:`ScheduleValidationError` on anything unparseable."""
+    Accepts a trailing ``Z`` (UTC) and offset-less values (the user's local wall
+    clock), and a bare ``YYYY-MM-DD`` date (interpreted as local midnight). Raises
+    :class:`ScheduleValidationError` on anything unparseable.
+
+    MIGRATION: a value that CARRIES an offset (every stored ``next_run_at``, written
+    as ``+03:00`` before this fix) keeps its absolute instant — only the rendering
+    zone changes. An already-armed reminder therefore never shifts."""
     raw = (value or "").strip()
     if not raw:
         raise ScheduleValidationError("empty datetime")
@@ -122,9 +218,10 @@ def parse_iso(value: str) -> datetime:
             raise ScheduleValidationError(
                 f"could not parse datetime {value!r} (use ISO-8601, e.g. 2026-07-11T18:30)"
             ) from exc
+    tz = local_tz()
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=TR_TZ)
-    return dt.astimezone(TR_TZ)
+        dt = dt.replace(tzinfo=tz)
+    return dt.astimezone(tz)
 
 
 def _parse_hhmm(value: str) -> tuple[int, int]:
@@ -149,7 +246,7 @@ def compute_next_run(
     weekday: int | None,
     after: datetime,
 ) -> datetime | None:
-    """The next fire time strictly appropriate for ``after`` (Turkey local time).
+    """The next fire time strictly appropriate for ``after`` (the user's local zone).
 
     * ``once``     — the fixed target datetime (``when``). Returned as-is; the
       engine disables the item after it fires, so this is only used to seed the
@@ -159,12 +256,13 @@ def compute_next_run(
       time has not passed, else tomorrow).
     * ``weekly``   — the next ``weekday`` at ``HH:MM`` strictly after ``after``.
 
-    ``after`` is normalised to +03:00. Because the recurring branches always jump
+    ``after`` is normalised to the local zone. Because the recurring branches always jump
     to the next occurrence AFTER a reference instant, recomputing with
     ``after=now`` after a fire naturally rolls a long-overdue schedule forward to
     a single future occurrence — no backlog storm (see the engine's catch-up
     policy)."""
-    ref = after.astimezone(TR_TZ) if after.tzinfo else after.replace(tzinfo=TR_TZ)
+    tz = local_tz()
+    ref = after.astimezone(tz) if after.tzinfo else after.replace(tzinfo=tz)
     if kind == "once":
         return parse_iso(when)
     if kind == "interval":
@@ -291,6 +389,13 @@ class ScheduleStore:
         self._data_dir = Path(data_dir)
         self._path = self._data_dir / _FILENAME
 
+    @property
+    def path(self) -> Path:
+        """The backing ``schedules.json``. A ``ScheduleStore`` is constructed per
+        call (see :func:`get_schedule_store`), so this file — not the object — is
+        the identity callers key their own per-store bookkeeping on."""
+        return self._path
+
     def _guard(self):
         """The combined in-process + cross-process lock for one RMW (or read).
 
@@ -397,7 +502,8 @@ class ScheduleStore:
 
         Sorted by ``next_run_at`` so the most overdue fires first (the engine
         runs them sequentially, one LLM turn at a time)."""
-        ref = now.astimezone(TR_TZ) if now.tzinfo else now.replace(tzinfo=TR_TZ)
+        tz = local_tz()
+        ref = now.astimezone(tz) if now.tzinfo else now.replace(tzinfo=tz)
         out: list[ScheduleItem] = []
         with self._guard():
             items = self._load_items()

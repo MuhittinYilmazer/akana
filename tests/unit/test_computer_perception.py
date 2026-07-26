@@ -73,8 +73,92 @@ class _FakePyautogui:
     def doubleClick(self, x=None, y=None):
         self.calls.append(("doubleClick", x, y))
 
+    def moveTo(self, x=None, y=None):
+        self.calls.append(("moveTo", x, y))
+
+    def dragTo(self, x=None, y=None, button="left"):
+        self.calls.append(("dragTo", x, y))
+
     def hotkey(self, *keys):
         self.calls.append(("hotkey", keys))
+
+
+class _FakeWindow:
+    """A pygetwindow stand-in: records the mutation instead of touching a real window."""
+
+    def __init__(self, title):
+        self.title = title
+        self.isMinimized = False
+        self.log = []
+
+    def moveTo(self, x, y):
+        self.log.append(("moveTo", x, y))
+
+    def resizeTo(self, w, h):
+        self.log.append(("resizeTo", w, h))
+
+    def maximize(self):
+        self.log.append(("maximize",))
+
+    def minimize(self):
+        self.log.append(("minimize",))
+
+    def restore(self):
+        self.log.append(("restore",))
+
+    def activate(self):
+        self.log.append(("activate",))
+
+    def close(self):
+        self.log.append(("close",))
+
+
+class _FakePygetwindow:
+    def __init__(self, windows):
+        self._windows = windows
+
+    def getAllWindows(self):
+        return list(self._windows)
+
+
+#: A two-screen desktop with the secondary at virtual x=1920 (tiny captures keep the fake
+#: cheap — only the monitors' ORIGINS matter to the coordinate-space contract).
+_MONITORS = [
+    {"left": 0, "top": 0, "width": 8, "height": 2},      # 0 = the whole virtual desktop
+    {"left": 0, "top": 0, "width": 4, "height": 2},      # 1 = primary
+    {"left": 1920, "top": 0, "width": 4, "height": 2},   # 2 = secondary
+]
+
+
+class _FakeGrab:
+    def __init__(self, mon):
+        self.size = (mon["width"], mon["height"])
+        self.width, self.height = self.size
+        self.bgra = bytes(mon["width"] * mon["height"] * 4)
+
+
+class _FakeSct:
+    def __init__(self, monitors):
+        self.monitors = monitors
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_a):
+        return False
+
+    def grab(self, mon):
+        return _FakeGrab(mon)
+
+
+class _FakeMss:
+    """Stand-in for the ``mss`` MODULE (the handler calls ``mss.MSS()``)."""
+
+    def __init__(self, monitors):
+        self._monitors = monitors
+
+    def MSS(self):  # noqa: N802 — mirrors the real mss API
+        return _FakeSct(self._monitors)
 
 
 class _FakePyperclip:
@@ -101,6 +185,15 @@ def rig(monkeypatch):
     server = cm.build_server()
     yield server, fake_pg, fake_clip
     perception.set_backend_override(None)
+
+
+@pytest.fixture
+def win_rig(rig, monkeypatch):
+    """``rig`` plus a fake pygetwindow holding one window named "App"."""
+    server, fake_pg, fake_clip = rig
+    window = _FakeWindow("App — Untitled")
+    monkeypatch.setattr(cm, "_pygetwindow", lambda: _FakePygetwindow([window]))
+    return server, fake_pg, window
 
 
 def _call(server, name, args=None):
@@ -194,6 +287,133 @@ def test_ref_from_superseded_snapshot_is_stale(rig):
     out = _call(server, "click_ref", {"ref": "w1e1"})
     assert out["ok"] is False
     assert "read_screen again" in out["error"]
+
+
+# ── ONE coordinate space: absolute virtual-desktop pixels everywhere ────────────
+def test_perception_box_and_pixel_click_are_the_same_space(rig, monkeypatch, tmp_path):
+    """A find_element box, a click_ref and a left_click must address the SAME pixel.
+
+    The click tools used to re-add the last capture's origin, so a box centre (absolute,
+    from the a11y layer) fed to left_click after a monitor-2 screenshot fired 1920px to the
+    right of the element — off the desktop entirely — while reporting ok with the
+    coordinates the model asked for. One element, one coordinate, whichever path is used.
+    """
+    server, pg, _clip = rig
+    monkeypatch.setenv("AKANA_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(cm, "_mss", lambda: _FakeMss(_MONITORS))
+    _call(server, "screenshot", {"monitor": 2})  # a capture whose origin is NOT (0, 0)
+    _call(server, "read_screen", {})
+    box = _call(server, "find_element", {"query": "Save"})["matches"][0]["box"]
+    cx, cy = box[0] + box[2] // 2, box[1] + box[3] // 2  # Button (100,200,40,20) → (120,210)
+    _call(server, "left_click", {"x": cx, "y": cy})
+    assert pg.calls[-1] == ("click", cx, cy, "left")
+    _call(server, "click_ref", {"ref": "w1e1"})
+    assert pg.calls[-1] == ("click", cx, cy, "left")
+
+
+def test_screenshot_reports_the_capture_origin(rig, monkeypatch, tmp_path):
+    """The image is the ONE thing not in the canonical space, so the capture states where
+    its top-left sits on the virtual desktop and, when that is not the origin, says in
+    numbers what to add to a pixel read off it."""
+    server, _pg, _clip = rig
+    monkeypatch.setenv("AKANA_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(cm, "_mss", lambda: _FakeMss(_MONITORS))
+    off = _call(server, "screenshot", {"monitor": 2})
+    assert off["origin"] == [1920, 0]
+    assert "1920" in off["instructions"] and "ADD" in off["instructions"]
+    at_origin = _call(server, "screenshot", {"monitor": 1})
+    assert at_origin["origin"] == [0, 0]
+    assert "ADD" not in at_origin["instructions"]  # nothing to add: no arithmetic to get wrong
+
+
+def test_drag_and_scroll_are_absolute_too(rig, monkeypatch, tmp_path):
+    """Every pixel tool honours the one space — not just left_click."""
+    server, pg, _clip = rig
+    monkeypatch.setenv("AKANA_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(cm, "_mss", lambda: _FakeMss(_MONITORS))
+    _call(server, "screenshot", {"monitor": 2})
+    _call(server, "drag", {"x1": 10, "y1": 20, "x2": 30, "y2": 40})
+    assert ("moveTo", 10, 20) in pg.calls
+    assert ("dragTo", 30, 40) in pg.calls
+    _call(server, "mouse_move", {"x": 2000, "y": 300})
+    assert pg.calls[-1] == ("moveTo", 2000, 300)
+
+
+# ── the server's OWN window mutations invalidate the refs ───────────────────────
+@pytest.mark.parametrize(
+    "tool, args",
+    [
+        ("move_window", {"title_contains": "App", "x": 0, "y": 0}),
+        ("resize_window", {"title_contains": "App", "width": 400, "height": 300}),
+        ("maximize_window", {"title_contains": "App"}),
+        ("minimize_window", {"title_contains": "App"}),
+        ("focus_window", {"title_contains": "App"}),
+        ("close_window", {"title_contains": "App"}),
+    ],
+)
+def test_window_mutation_invalidates_refs(win_rig, tool, args):
+    """A ref addresses a captured RECTANGLE, not a live element handle. Once the SERVER
+    ITSELF moves / resizes / re-stacks / destroys the window a snapshot captured, a
+    surviving ref would click whatever now occupies that rectangle — a blind click on the
+    owner's live desktop. It must fail loudly and demand a re-read instead."""
+    server, pg, _window = win_rig
+    _call(server, "read_screen", {})
+    assert _call(server, "click_ref", {"ref": "w1e2"})["ok"] is True  # a fresh ref clicks
+    assert _call(server, tool, args)["ok"] is True
+    before = list(pg.calls)
+    out = _call(server, "click_ref", {"ref": "w1e2"})
+    assert out["ok"] is False, f"{tool} left a stale ref clickable"
+    assert "read_screen again" in out["error"]
+    assert pg.calls == before  # nothing was clicked at the dead rectangle
+
+
+def test_open_application_invalidates_refs(rig, monkeypatch):
+    """A launched app's window lands ON TOP of whatever the snapshot captured, so the
+    stored rectangles no longer address what the model saw."""
+    server, pg, _clip = rig
+    monkeypatch.setattr(cm.os, "startfile", lambda p: None, raising=False)
+    monkeypatch.setattr(cm.subprocess, "Popen", lambda *a, **k: None)
+    _call(server, "read_screen", {})
+    assert _call(server, "open_application", {"name": "notepad"})["ok"] is True
+    before = list(pg.calls)
+    out = _call(server, "click_ref", {"ref": "w1e1"})
+    assert out["ok"] is False and "read_screen again" in out["error"]
+    assert pg.calls == before
+
+
+def test_find_element_after_a_window_mutation_asks_for_a_re_read(win_rig):
+    """find_element must not keep handing out refs that click_ref will now refuse — the
+    snapshot it searches is gone too."""
+    server, _pg, _window = win_rig
+    _call(server, "read_screen", {})
+    assert _call(server, "find_element", {"query": "sea"})["count"] == 1
+    _call(server, "move_window", {"title_contains": "App", "x": 50, "y": 60})
+    out = _call(server, "find_element", {"query": "sea"})
+    assert out["ok"] is False and "read_screen" in out["error"]
+
+
+def test_failed_window_mutation_still_invalidates_refs(win_rig, monkeypatch):
+    """A mutation that RAISED may still have moved the window (the backend can fail after
+    the fact), so the refs are dropped either way — the safe direction is to re-read."""
+    server, pg, window = win_rig
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("window manager said no")
+
+    monkeypatch.setattr(window, "moveTo", _boom)
+    _call(server, "read_screen", {})
+    assert _call(server, "move_window", {"title_contains": "App", "x": 1, "y": 2})["ok"] is False
+    out = _call(server, "click_ref", {"ref": "w1e2"})
+    assert out["ok"] is False and "read_screen again" in out["error"]
+
+
+def test_a_window_mutation_that_matched_nothing_keeps_the_refs(win_rig):
+    """No window matched → nothing changed on screen, so the snapshot is still valid;
+    invalidating there would force a pointless re-read on every typo."""
+    server, pg, _window = win_rig
+    _call(server, "read_screen", {})
+    assert _call(server, "move_window", {"title_contains": "nope", "x": 1, "y": 2})["ok"] is False
+    assert _call(server, "click_ref", {"ref": "w1e2"})["ok"] is True
 
 
 # ── find_element + type_into_ref ────────────────────────────────────────────────

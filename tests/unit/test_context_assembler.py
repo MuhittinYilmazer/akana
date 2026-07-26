@@ -96,9 +96,15 @@ def test_skill_blogu_tarihi_formulle_eklenir(req) -> None:
 
 
 def test_gorsel_blogu_kullanici_metninin_sonuna_eklenir(req) -> None:
-    """MultimodalEngine F1: [Görsel: <path>] lines go at the END of the text;
-    the skill-block formula is unchanged (skill at the start, image at the end)."""
-    image_block = "[Görsel: /tmp/uploads/a.png]\n[Görsel: /tmp/uploads/b.png]"
+    """MultimodalEngine F1: [Image: <path>] lines go at the END of the text;
+    the skill-block formula is unchanged (skill at the start, image at the end).
+
+    The marker must be the one ``_files_gate`` really emits — it is stable ENGLISH in
+    every language, because this is prompt scaffolding the MODEL reads and a
+    foreign-language token nudges the reply language. The assembler counts that literal
+    for its observability trace, so a marker that drifts here silently reports 0 images.
+    """
+    image_block = "[Image: /tmp/uploads/a.png]\n[Image: /tmp/uploads/b.png]"
     out = _assemble(req, text="bu görsellerde ne var?", image_block=image_block)
     assert out.user_text == f"bu görsellerde ne var?\n\n{image_block}"
     blocks = [b for b in out.injected_blocks if b["kind"] == "image"]

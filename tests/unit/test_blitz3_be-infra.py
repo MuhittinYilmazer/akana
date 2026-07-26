@@ -47,8 +47,12 @@ def test_doctor_provider_comes_from_store_not_env(
     monkeypatch.setattr(doctor, "ENV_FILE", tmp_path / ".env")
     monkeypatch.setattr(doctor, "venv_exists", lambda: False)  # skip venv module probes
     monkeypatch.setattr(doctor, "find_system_python", lambda: "py")
-    # Node/npm absent — would trip the cursor hard-failures if cursor were treated active.
-    monkeypatch.setattr(doctor.shutil, "which", lambda _n: None)
+    # Node/npm absent — would trip the cursor hard-failures if cursor were treated
+    # active. ollama IS on PATH: the active provider's own probe must be able to pass,
+    # otherwise this test could not tell "cursor checks skipped" from "everything failed".
+    monkeypatch.setattr(
+        doctor.shutil, "which", lambda n: "/usr/local/bin/ollama" if n == "ollama" else None
+    )
     sink = _capture_io(monkeypatch)
 
     doctor.run_doctor(verbose=True, probe_network=False)

@@ -1,4 +1,10 @@
-"""Tool gateway debug endpoints (PR-T1)."""
+"""Tool gateway debug endpoints (PR-T1).
+
+``require_akana_bearer`` (not the strict variant) is deliberate: the records this
+serves carry NO tool payload — ``record_tool_call`` reduces every call to
+id/name/phase/status before it reaches the buffer — so the loopback skip cannot
+leak secret arguments here.
+"""
 
 from __future__ import annotations
 

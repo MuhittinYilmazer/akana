@@ -77,9 +77,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=i18n.t("cli.help.ship_out"),
     )
-    sub.add_parser(
+    rm = sub.add_parser(
         "reset-memory",
         help=i18n.t("cli.help.reset_memory"),
+    )
+    rm.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help=i18n.t("cli.help.reset_memory_yes"),
     )
     bk = sub.add_parser("backup", help=i18n.t("cli.help.backup"))
     bk.add_argument("--out", type=str, default=None, help=i18n.t("cli.help.backup_out"))
@@ -180,7 +186,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "reset-memory":
             from akana_cli.reset_memory_cmd import run_reset_memory
 
-            return run_reset_memory()
+            return run_reset_memory(assume_yes=bool(args.yes))
         if args.command == "backup":
             from pathlib import Path
 

@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import json
+import logging
+import os
+import sqlite3
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field, field_validator
 
-from akana_server.api.deps import require_akana_bearer
+from akana_server.api.deps import get_image_store, require_akana_bearer
 from akana_server.api.routes.chat._base import _off_loop
 from akana_server.api.services import AppServices, get_services
 from akana_server.chat_context import (
@@ -23,8 +28,88 @@ from akana_server.llm_settings import (
     resolve_cursor_model_tag,
 )
 from akana_server.memory_core import get_memory_core
+from akana_server.multimodal.store import UploadStore
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(tags=["conversations"])
+
+
+# -- upload reclamation on conversation delete -----------------------------------------
+#
+# GC RULE: an upload's BYTES are removed only when the conversation being deleted
+# referenced it AND no SURVIVING turn (in any conversation) still does. Two failure modes
+# are worse than leaking a file and are both closed by that wording:
+#
+# * content dedup gives two conversations the SAME upload id, so deleting one chat must
+#   not break the other's attachment — hence the post-delete re-scan across ALL turns;
+# * the composer parks an upload BEFORE the message is sent, so it belongs to no turn yet
+#   — a "delete everything unreferenced" sweep would eat the file the user is about to
+#   send. Candidates come ONLY from the deleted conversation's own turns, so a parked
+#   upload is never even considered.
+#
+# The multimodal.db ROW is deliberately kept: the store is append-only, the row carries the
+# audit event log, and its sha256 identity lets ``UploadStore.save`` recreate the file if
+# the same content is uploaded again (the ``file_recreated`` path) — so the id stays
+# attachable instead of turning into a permanently disabled record. Rows are bytes; files
+# are megabytes, and the unbounded growth this closes is the files.
+
+
+def _episodic_db_path(memory: Any) -> Path | None:
+    """Path of the turns DB, taken FROM the store rather than reassembled.
+
+    Hardcoding ``<data_dir>/db/memory.db`` here would silently target the wrong file the
+    day the layout moves; if the attribute is ever gone, the sweep skips (a leaked file is
+    recoverable, unlinking bytes out of the wrong database is not).
+    """
+    raw = getattr(getattr(memory, "episodic", None), "_path", None)
+    return Path(raw) if raw else None
+
+
+def _referenced_upload_ids(db_path: Path, conversation_id: str | None) -> set[str]:
+    """Upload ids referenced by turns — of ONE conversation, or of every surviving turn.
+
+    A single read-only scan of the ``file_ids`` JSON column. There is no episodic API for
+    "which turns reference this upload" and no index on that column, but conversation
+    delete is rare and runs off the loop, so one scan beats maintaining a second store.
+    """
+    sql = "SELECT file_ids FROM turns WHERE file_ids IS NOT NULL"
+    params: tuple[Any, ...] = ()
+    if conversation_id is not None:
+        sql += " AND conversation_id = ?"
+        params = (conversation_id,)
+    out: set[str] = set()
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("PRAGMA busy_timeout=10000")
+        for (raw,) in conn.execute(sql, params):
+            try:
+                ids = json.loads(raw or "[]")
+            except (TypeError, ValueError):
+                continue
+            if isinstance(ids, list):
+                out.update(str(i) for i in ids if i)
+    finally:
+        conn.close()
+    return out
+
+
+def _reclaim_uploads(store: UploadStore, db_path: Path, candidates: set[str]) -> int:
+    """Unlink the bytes of every candidate no surviving turn references. Returns the count."""
+    orphans = candidates - _referenced_upload_ids(db_path, None)
+    removed = 0
+    for file_id in sorted(orphans):
+        record = store.get(file_id)
+        if record is None:
+            continue
+        try:
+            os.unlink(store.file_path(record))
+            removed += 1
+        except FileNotFoundError:
+            pass  # already reclaimed (or restored without uploads/) — nothing to do
+        except OSError:
+            log.warning("could not reclaim upload %s", file_id, exc_info=True)
+    return removed
 
 
 class ConversationCreate(BaseModel):
@@ -298,6 +383,23 @@ async def delete_conversation(
             status_code=404,
             detail={"error": {"code": "NOT_FOUND", "message": "Conversation not found."}},
         )
+    memory = get_memory_core(services.settings.data_dir)
+    # Collect the attachments BEFORE the turns go: after reset_conversation the only
+    # record of which files this conversation held is gone, and the bytes would be
+    # unreachable forever (the reported unbounded-growth leak).
+    db_path = _episodic_db_path(memory)
+    attached: set[str] = set()
+    if db_path is not None:
+        try:
+            attached = await _off_loop(
+                _referenced_upload_ids, db_path, conversation_id
+            )
+        except Exception:  # a sweep problem must never fail the delete itself
+            log.warning(
+                "could not read attachments of conv=%s; uploads not reclaimed",
+                conversation_id,
+                exc_info=True,
+            )
     # DELETE the turns — a single set-based path. There USED to be a double
     # delete: mem.reset_conversation (DELETE FROM turns + per-row FTS trigger)
     # followed by a second pass scanning the SAME turns again — in a long chat the
@@ -306,9 +408,24 @@ async def delete_conversation(
     # conversation_reset event); the second is unnecessary. Additionally, set-based
     # FTS deletion (episodic.delete_conversation) is ~20× faster. All in a worker
     # thread → the loop keeps serving SSE/WS.
-    await _off_loop(
-        get_memory_core(services.settings.data_dir).reset_conversation, conversation_id
-    )
+    await _off_loop(memory.reset_conversation, conversation_id)
+    if attached and db_path is not None:
+        # AFTER the turns are gone, so a file still referenced by any surviving turn
+        # (dedup hands two conversations the same id) is excluded by the re-scan.
+        try:
+            removed = await _off_loop(
+                _reclaim_uploads, get_image_store(request), db_path, attached
+            )
+            if removed:
+                log.info(
+                    "reclaimed %d upload file(s) of deleted conv=%s",
+                    removed,
+                    conversation_id,
+                )
+        except Exception:
+            log.warning(
+                "upload reclamation failed for conv=%s", conversation_id, exc_info=True
+            )
     settings = services.settings
     if bridge_daemon_enabled():
         await get_bridge_pool(settings).close_session(conversation_id)

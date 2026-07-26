@@ -172,6 +172,18 @@ async def _persist_user_turn_start(
         return user_turn_id or str(ulid.new())
 
 
+#: Vault tools whose RESULT *is* the decrypted secret (the read surface). ``vault_list``
+#: is deliberately absent — it returns names only, by contract, and the inventory is what
+#: makes the stored card readable.
+# The redaction itself lives with the SINGLE WRITER (turn_writer), so every persist path —
+# this one, the voice turn, an injected background result — is covered by construction
+# rather than one caller at a time. Re-exported here because this module is where the
+# chat surface (and its tests) already reach for it.
+from akana_server.orchestrator.turn_writer import (  # noqa: E402
+    redact_tool_calls_for_storage,
+)
+
+
 def _mirror_cursor_agent_meta(
     request: Request, conversation_id: str, agent_id: str | None
 ) -> None:
@@ -487,7 +499,7 @@ async def _persist_assistant_turn_end(
             lang=lang,
             latency_ms=latency_ms,
             intent=intent,
-            tool_calls=[c for c in (tool_calls or []) if isinstance(c, dict)] or None,
+            tool_calls=redact_tool_calls_for_storage(tool_calls),
             data_dir=getattr(settings, "data_dir", None),
             usage=usage,
             ask_user=ask_user if isinstance(ask_user, dict) else None,

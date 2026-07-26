@@ -785,7 +785,8 @@ _SPECS: tuple[RuntimeSettingSpec, ...] = (
             "an action runs (a confirmation dialog on the controlled machine). «off» "
             "(default) = full autonomy, no prompt; «destructive» = ask before opening an "
             "app, closing a window/tab or dragging — including the low-level equivalents "
-            "(hotkey like alt+F4, middle-click, mouse hold); «all» = ask before every "
+            "(any alt+F4 / ctrl+W-style key chord, however it is pressed, middle-click, "
+            "mouse hold); «all» = ask before every "
             "click / keystroke / window action (reading the screen is never gated). If a "
             "confirmation cannot be shown, the action is DENIED (fail-safe)."
         ),

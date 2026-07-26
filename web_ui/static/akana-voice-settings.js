@@ -460,6 +460,12 @@
           if (voiceStatusStrip) {
             voiceStatusStrip.textContent = window.AkanaI18n.t("voicecfg.status.failed", { error: e.message || e });
           }
+          // GET /voice/config is the ONLY source for the live wake sensitivity. When it fails
+          // the markup's placeholder is still on screen, and a user tuning false wakes reads
+          // it as the running value. Say "unknown" instead of stating a number we could not
+          // verify (the strip above carries the reason).
+          if (wakeThresholdOut) wakeThresholdOut.textContent = "—";
+          if (wakeMinFramesOut) wakeMinFramesOut.textContent = "—";
         }
       }
 

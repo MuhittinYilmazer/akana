@@ -33,6 +33,7 @@ from akana_server.chat_context import effective_llm_settings
 from akana_server.llm_settings import load_llm_settings, resolve_provider
 from akana_server.multimodal import ImageStore, prepare_files
 from akana_server.orchestrator.router import classify_intent
+from akana_server.runtime_settings import resolve_language
 from akana_server.skills.turn_injection import (
     SkillTurnPlan,
     # `__init__` RE-EXPORTS this from `gates` (the test patch surface);
@@ -63,12 +64,12 @@ def _classify_turn_intent(text: str) -> str:
 #
 # `ChatRequest.effective_file_ids` (file_ids + image_ids) → resolved per the active
 # provider:
-# * claude  → a `[Dosya: <absolute-path>]` line for each provider-native file
+# * claude  → an `[Image:/File: <absolute-path>]` line for each provider-native file
 #   (the CLI's Read tool reads the path ITSELF: image/pdf/text — the content is
 #   NOT EMBEDDED into the prompt, only a path reference is passed),
-# * cursor / unsupported → without DROPPING the turn, a Turkish "this provider
-#   can't read this file" note is added to the prompt block (the file isn't
-#   silently dropped; one unsupported file doesn't abort the turn),
+# * cursor / unsupported → without DROPPING the turn, a "this provider can't read
+#   this file" note is added to the prompt block (the file isn't silently dropped;
+#   one unsupported file doesn't abort the turn),
 # * unknown/disabled/missing-on-disk id → `prepare_files` writes it to
 #   `unsupported` (the turn isn't aborted, the user is honestly informed).
 #
@@ -100,26 +101,71 @@ def _image_store(request: Request) -> ImageStore:
     return store
 
 
-def _kind_label(kind: str | None) -> str:
-    """Convert a file kind to a short label (for the unsupported note)."""
-    return {
+_KIND_LABELS: dict[str, dict[str, str]] = {
+    "en": {
         "image": "image",
         "pdf": "PDF",
         "docx": "Word document",
         "xlsx": "Excel spreadsheet",
         "text": "text file",
-    }.get(str(kind or "").strip().lower(), "file")
+        "": "file",
+    },
+    "tr": {
+        "image": "görsel",
+        "pdf": "PDF",
+        "docx": "Word belgesi",
+        "xlsx": "Excel tablosu",
+        "text": "metin dosyası",
+        "": "dosya",
+    },
+}
+
+
+def _kind_label(kind: str | None, lang: str = "en") -> str:
+    """File kind → short label. ``lang`` is explicit at every call site.
+
+    The SAME label lands in two places with opposite rules: the rejection text the USER
+    reads (follows the language setting) and the ``[Note: …]`` line the MODEL reads
+    (pinned to English — see :func:`_file_block_line`). Defaulting to English keeps a
+    caller that forgets to pass a language on the model-facing side.
+    """
+    table = _KIND_LABELS.get(lang, _KIND_LABELS["en"])
+    return table.get(str(kind or "").strip().lower(), table[""])
 
 
 def _file_block_line(kind: str | None, path: str) -> str:
     """Provider-native file path → prompt line (label per kind).
 
-    Images keep the D16.B backward-compatible `[Görsel: <path>]` label (the
-    assembler counters + existing tests look at this); other types use
-    `[Dosya: <path>]`.
+    STABLE ENGLISH, never localized. This is prompt scaffolding the MODEL reads, not
+    user-visible text: a foreign-language token appended to the end of the user's message
+    nudges the reply into that language, which is the "English mode, Turkish answer" class
+    this project keeps hitting — and the attachment turn is exactly where the user has not
+    set the tone themselves. Keeping one spelling also means nothing downstream has to
+    parse two variants of the same marker.
     """
-    label = "Görsel" if str(kind or "").strip().lower() == "image" else "Dosya"
+    label = "Image" if str(kind or "").strip().lower() == "image" else "File"
     return f"[{label}: {path}]"
+
+
+def _unsupported_files_text(provider: str, noun: str, lang: str) -> str:
+    """The "I can't read your attachment" reply — Akana ANSWERING THE USER.
+
+    It is persisted as the assistant turn and rendered in the bubble, so it follows the
+    ``language`` runtime setting like every other assistant-visible string (default
+    English; Turkish only on explicit choice). It used to be a hardcoded English f-string
+    and was the single English paragraph in an otherwise Turkish conversation.
+    """
+    if lang == "tr":
+        return (
+            f"Dosyaları işleyemiyorum: aktif «{provider}» sağlayıcısı {noun} "
+            "desteklemiyor. Dosya kullanmak için Ayarlar → LLM altından claude "
+            "sağlayıcısına geç."
+        )
+    return (
+        f"I can't process the files: the active provider «{provider}» does "
+        f"not support {noun}. To use files, switch to the claude provider "
+        "under Settings → LLM."
+    )
 
 
 async def _files_gate(
@@ -127,7 +173,7 @@ async def _files_gate(
 ) -> tuple[str, "ChatResponse | None"]:
     """effective_file_ids → (prompt file block, short-circuit response | None).
 
-    claude provider-native files become `[Görsel/Dosya: <path>]` lines;
+    claude provider-native files become `[Image/File: <path>]` lines;
     unsupported files (cursor/unknown-provider) become `[Note: ...]` warning
     lines without dropping the turn. If no id is given, `("", None)`.
 
@@ -165,7 +211,8 @@ async def _files_gate(
     lines = [_file_block_line(ref.get("kind"), ref["path"]) for ref in prepared.file_refs]
     notes: list[str] = []
     for item in prepared.unsupported:
-        label = _kind_label(item.get("kind"))
+        # English is PINNED here: this note goes into the prompt, not to the user.
+        label = _kind_label(item.get("kind"), "en")
         notes.append(
             f"[Note: the «{provider}» provider cannot read this {label}; "
             "to read it, switch to the claude provider under Settings → LLM.]"
@@ -180,17 +227,17 @@ async def _files_gate(
             str(i.get("kind") or "").strip().lower() == "image"
             for i in prepared.unsupported
         )
+        lang = resolve_language(settings)
         kinds = ", ".join(
-            _kind_label(i.get("kind")) for i in prepared.unsupported
+            _kind_label(i.get("kind"), lang) for i in prepared.unsupported
         )
-        noun = "image input" if only_images else f"these file types ({kinds})"
+        if lang == "tr":
+            noun = "görsel girişini" if only_images else f"bu dosya türlerini ({kinds})"
+        else:
+            noun = "image input" if only_images else f"these file types ({kinds})"
         return "", ChatResponse(
             turn_id=str(ulid.new()),
-            text=(
-                f"I can't process the files: the active provider «{provider}» does "
-                f"not support {noun}. To use files, switch to the claude provider "
-                "under Settings → LLM."
-            ),
+            text=_unsupported_files_text(provider, noun, lang),
             lang=body.lang,
             conversation_id=(body.conversation_id or "").strip() or str(ulid.new()),
             intent="system_action",

@@ -260,7 +260,10 @@
       try {
         const d = new Date(iso);
         if (Number.isNaN(d.getTime())) return "";
-        return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+        // App language, not the browser's — the two sibling formatters below already resolve
+        // it this way and three different locale sources in one surface is the drift itself.
+        const locale = window.AkanaI18n.getLanguage?.() === "en" ? "en-US" : "tr-TR";
+        return d.toLocaleString(locale, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
       } catch {
         return "";
       }

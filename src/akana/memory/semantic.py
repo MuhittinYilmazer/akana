@@ -832,16 +832,32 @@ class SemanticStore:
                 conn.close()
         return self.get_fact(fact_id)
 
-    def invalidate_fact(self, fact_id: str, *, at: str | None = None) -> SemanticFact | None:
-        """Close a fact's validity window (temporal delete). Idempotent-safe."""
+    def invalidate_fact(
+        self, fact_id: str, *, at: str | None = None, retract: bool = False
+    ) -> SemanticFact | None:
+        """Close a fact's validity window (temporal delete). Idempotent-safe.
+
+        ``retract=True`` is the PRIVACY close (``memory.forget``), not the
+        bookkeeping close a supersede does, and it additionally collapses the
+        window to zero width (``valid_from = invalidated_at``). "This was true
+        until Tuesday" has a past worth travelling to; "the user asked us to
+        forget this" does not — without the collapse, ``facts_as_of`` happily
+        hands a forgotten secret back on any as_of inside the old window, which
+        is the same leak by a different door. The row itself stays for ledger
+        replay; only its as-of visibility goes.
+        """
         ts = at or self._iso_now()
+        # Zero width is exactly what supersede_fact bumps by 1ms to AVOID (see
+        # its FIX 1 comment) — the same mechanism, used deliberately here.
+        set_vf = ", valid_from = ?" if retract else ""
+        vf_params: tuple[object, ...] = (ts,) if retract else ()
         with self._lock:
             conn = self._connect()
             try:
                 cur = conn.execute(
-                    "UPDATE facts SET invalidated_at = ?, ts_last = ? "
+                    f"UPDATE facts SET invalidated_at = ?, ts_last = ?{set_vf} "  # noqa: S608 - set_vf is a static ?-placeholder clause
                     "WHERE id = ? AND invalidated_at IS NULL",
-                    (ts, ts, fact_id),
+                    (ts, ts, *vf_params, fact_id),
                 )
                 conn.commit()
                 if int(cur.rowcount) < 1:
