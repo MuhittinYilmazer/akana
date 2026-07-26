@@ -23,7 +23,10 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
-from akana_server.api.routes.chat.persist import _persist_user_turn_start
+from akana_server.api.routes.chat.persist import (
+    _persist_assistant_turn_end,
+    _persist_user_turn_start,
+)
 from akana_server.conversation_service import ConversationService
 from akana_server.memory_core import get_memory_core
 
@@ -130,6 +133,71 @@ def test_ok_out_signals_false_when_persist_raises(tmp_path: Path, monkeypatch) -
     # turn id still returned (the stream is not broken) but ok_out=False → caller must retry.
     assert turn_id == "01USERFAIL000000000000000000"
     assert ok == [False]
+
+
+def test_ok_out_false_but_id_still_usable_when_the_store_refuses(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A swallowed write (the store refuses, the writer returns "") is a FAILED receipt —
+    but the returned value is the turn's IDENTITY, not the receipt: callers link the
+    assistant turn to it and some mint none of their own, so handing back "" would write
+    the answer with an empty ``user_turn_id`` instead of reporting the loss."""
+    from akana.memory import Memory
+
+    def _locked(self: object, **_kwargs: object) -> object:
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(Memory, "remember_turn", _locked)
+    request = _fake_request(tmp_path)
+    ok: list[bool] = []
+
+    async def run() -> str:
+        return await _persist_user_turn_start(
+            request,
+            conversation_id=FRESH_CID,
+            user_text="disk kilitli",
+            lang="tr",
+            user_turn_id="01USERLOCKED0000000000000000",
+            ok_out=ok,
+        )
+
+    turn_id = asyncio.run(run())
+    assert turn_id == "01USERLOCKED0000000000000000"
+    assert ok == [False]
+    assert get_memory_core(tmp_path).episodic.get_turn(turn_id) is None
+
+
+def test_assistant_turn_is_not_written_without_its_user_turn(tmp_path: Path) -> None:
+    """X1: ``user_turn_ok=False`` → no assistant row and a False receipt.
+
+    A pair is atomic in meaning. An answer stored with no question is replayed to the
+    next turn as LLM history (``recent_llm_messages``), so the assistant answers, then
+    contradicts, a question nobody can see — worse than losing both halves."""
+    request = _fake_request(tmp_path)
+    # A usable (ensured) conversation — otherwise the write is skipped for the unrelated
+    # reason that the conversation is not there, and the pair rule is never exercised.
+    request.app.state.conversation_service.ensure(FRESH_CID)
+    ok: list[bool] = []
+
+    async def run() -> list[dict[str, str]]:
+        return await _persist_assistant_turn_end(
+            request,
+            conversation_id=FRESH_CID,
+            user_text="soru",
+            assistant_text="cevap",
+            user_turn_id="01USERMISSING000000000000000",
+            assistant_turn_id="01ASSTORPHAN0000000000000000",
+            lang="tr",
+            latency_ms=5,
+            intent="chat",
+            stage_captures=False,
+            user_turn_ok=False,
+            ok_out=ok,
+        )
+
+    assert asyncio.run(run()) == []
+    assert ok == [False]
+    assert get_memory_core(tmp_path).episodic.get_turn("01ASSTORPHAN0000000000000000") is None
 
 
 def test_skips_persist_for_in_memory_tombstone(tmp_path: Path) -> None:

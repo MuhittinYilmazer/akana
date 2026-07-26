@@ -724,6 +724,15 @@
       // If a row is missing/partial (stalled SSE / F5 / tab switch) the old rescue
       // path (resume; if not available, rebuild from server) still applies.
       const atid = evt && evt.assistant_turn_id;
+      // A FAILED turn that produced no row has nothing for us to fetch, and rebuilding
+      // from the server would REPLACE what is on screen with that nothing. The rows a
+      // live-voice turn painted from transcript frames exist ONLY in the DOM/store —
+      // mergeServerMessages preserves a trailing pending USER message, not those — so a
+      // storage failure that is now honestly announced as status:"error" would erase the
+      // exchange the user just had out loud. Server-side error paths that DO store
+      // something (the streaming error card) carry their turn id and still reload below.
+      const failed = String((evt && evt.status) || "ok") !== "ok";
+      if (failed && !atid) return;
       if (atid && ensureTransport().isForegroundTurnFinalized?.(convId, atid)) {
         await ensureThreads().syncConversationLogFromServer?.(convId);
         return;

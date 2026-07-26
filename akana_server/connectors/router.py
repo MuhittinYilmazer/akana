@@ -776,6 +776,12 @@ class InboundRouter:
         blocked the whole server under DB-lock contention (busy_timeout up to 10s + blocking
         backoff) whenever a web turn held the memory.db write lock — "the page froze while
         streaming". Every other persist path already offloads; the connector did not.
+
+        HALF-PAIR: once the question is lost the answer is NOT written. An assistant row
+        with no question is worse than an empty exchange — ``recent_llm_messages`` feeds it
+        to the NEXT channel turn as history, so the model answers a message it cannot see
+        and contradicts itself. The reply itself is not lost by this: it is already on the
+        user's phone; only the archive copy goes, and the turn is announced as an error.
         """
         if self._conversations is None:
             return ""
@@ -793,13 +799,27 @@ class InboundRouter:
                 user_text=user_text,
                 data_dir=dd,
             )
-            return await asyncio.to_thread(
+            if not uid:
+                log.error(
+                    "connector turn NOT ARCHIVED (conv=%s): the incoming message could not "
+                    "be stored, so the reply is not written either (no orphan answer)",
+                    conversation_id,
+                )
+                return ""
+            asst_id = await asyncio.to_thread(
                 persist_assistant_turn,
                 conversation_id=conversation_id,
                 assistant_text=assistant_text,
                 user_turn_id=uid,
                 data_dir=dd,
             )
+            if not asst_id:
+                log.error(
+                    "connector turn HALF-ARCHIVED (conv=%s): the message is stored, the "
+                    "reply is not — the turn is announced as an error",
+                    conversation_id,
+                )
+            return asst_id
         except Exception as e:  # archive error does not break the reply flow
             capture_failure(e, where="connectors.InboundRouter._persist_turn_pair")
             return ""

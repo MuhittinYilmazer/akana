@@ -46,8 +46,15 @@ def _persist_turn(
     file_ids: list[str] | None = None,
     usage: dict[str, object] | None = None,
     ask_user: dict[str, object] | None = None,
-) -> None:
-    """Write the turn to ``memory.db`` (PRIMARY — sole writer since A5).
+) -> bool:
+    """Write the turn to ``memory.db`` (PRIMARY — sole writer since A5). True = it landed.
+
+    The RETURN VALUE IS A RECEIPT and callers depend on it: a turn that never reached
+    the store is not a successful turn, and announcing one as "ok" makes the UI reload
+    and find nothing (and makes a schedule roll forward over a result nobody got).
+    Failures are still logged loudly and still not propagated — the response the user
+    is already reading must not be broken by a storage problem — but they are no longer
+    INVISIBLE to the caller.
 
     * Idempotent: the same ``turn_id`` is UPSERTed; the metadata counter only
       increments for a NEW turn.
@@ -67,7 +74,7 @@ def _persist_turn(
     dd = Path(data_dir) if data_dir is not None else None
     if dd is None:
         log.error("turn_writer: data_dir could not be resolved (conv=%s turn=%s)", conversation_id, turn_id)
-        return
+        return False
     from akana_server.memory_core import get_memory_core
 
     last_exc: Exception | None = None
@@ -93,7 +100,7 @@ def _persist_turn(
             turn_id,
             exc_info=exc,
         )
-        return
+        return False
     for attempt in range(_PERSIST_ATTEMPTS):
         try:
             mem.remember_turn(
@@ -118,7 +125,7 @@ def _persist_turn(
                     # message counter / last-activity preview (otherwise the sidebar
                     # would show a failed turn as the conversation's latest message).
                     mem.conversations_meta.on_assistant_message(conversation_id)
-            return  # success
+            return True  # success
         except Exception as exc:  # noqa: BLE001 - must not break the turn/response; retry + VISIBLE
             last_exc = exc
             if attempt + 1 < _PERSIST_ATTEMPTS:
@@ -127,14 +134,27 @@ def _persist_turn(
                     role, attempt + 1, _PERSIST_ATTEMPTS, conversation_id, turn_id,
                 )
                 time.sleep(_PERSIST_BACKOFF_S * (attempt + 1))
+    # ASK THE STORE, do not infer from the exception. The loop also repeats the meta
+    # bump (see above), so an attempt whose episodic write SUCCEEDED but whose meta
+    # transaction stayed locked raises every time and lands here with the row already
+    # written. Reporting that as a loss would be a different lie from the one this
+    # receipt exists to prevent: the turn IS readable, and a caller that "rescues" it
+    # would duplicate the row / re-run a schedule that already delivered.
+    try:
+        landed = mem.episodic.get_turn(turn_id) is not None
+    except Exception:  # noqa: BLE001 - the store is unreachable, so we cannot claim the turn landed
+        landed = False
     log.error(
-        "turn_writer: %s turn COULD NOT BE WRITTEN (conv=%s turn=%s) — %d attempts exhausted, turn not persisted",
+        "turn_writer: %s turn write FAILED (conv=%s turn=%s) — %d attempts exhausted; "
+        "row present in store: %s",
         role,
         conversation_id,
         turn_id,
         _PERSIST_ATTEMPTS,
+        landed,
         exc_info=last_exc,
     )
+    return landed
 
 
 def persist_user_turn(
@@ -146,14 +166,18 @@ def persist_user_turn(
     file_ids: list[str] | None = None,
     data_dir: Path | None = None,
 ) -> str:
-    """Write the user turn + update conversation metadata; returns the turn id.
+    """Write the user turn + update conversation metadata; returns the turn id, "" if it was NOT stored.
 
     The turn is written DIRECTLY to ``memory.db`` (``data_dir`` → ``memory.db``).
     Pass an explicit ``turn_id`` so the stored row shares the same id as the SSE
     meta event.
+
+    THE RETURNED ID IS A RECEIPT, NOT A NAME. It used to be the freshly minted ULID
+    whether or not the row landed, so every caller's "did this reach the store?"
+    check was dead code and a swallowed write was reported to the user as success.
     """
     uid = turn_id or str(ulid.new())
-    _persist_turn(
+    if not _persist_turn(
         data_dir=data_dir,
         role="user",
         conversation_id=conversation_id,
@@ -161,7 +185,8 @@ def persist_user_turn(
         turn_id=uid,
         lang=lang,
         file_ids=file_ids,
-    )
+    ):
+        return ""
     return uid
 
 
@@ -179,17 +204,23 @@ def persist_assistant_turn(
     usage: dict[str, object] | None = None,
     ask_user: dict[str, object] | None = None,
 ) -> str:
-    """Write the assistant turn + metadata; returns the turn id (empty string if text is blank — no write).
+    """Write the assistant turn + metadata; returns the turn id, "" if nothing was stored.
 
     The turn is written DIRECTLY to ``memory.db``. ``tool_calls`` is written to the
     turn → a /messages reload returns tool cards. ``usage`` is stored as
     {prompt, completion, cost_usd?} → token/cost information survives a page reload.
+
+    "" means BOTH "blank text, nothing to write" and "the write did not land" — in
+    either case there is no row, which is the only thing a caller may act on. The id
+    is a RECEIPT: returning the minted ULID after a swallowed write made every
+    downstream "did it reach the store?" guard unreachable, so the user was answered,
+    told the turn completed "ok", and pointed at a row that did not exist.
     """
     body = (assistant_text or "").strip()
     if not body:
         return ""
     asst_id = assistant_turn_id or str(ulid.new())
-    _persist_turn(
+    if not _persist_turn(
         data_dir=data_dir,
         role="assistant",
         conversation_id=conversation_id,
@@ -200,7 +231,8 @@ def persist_assistant_turn(
         tool_calls=tool_calls,
         usage=usage,
         ask_user=ask_user,
-    )
+    ):
+        return ""
     return asst_id
 
 
@@ -212,7 +244,7 @@ def persist_error_turn(
     lang: str | None = None,
     data_dir: Path | None = None,
 ) -> str:
-    """Write a FAILED-turn marker (role="error") + return the turn id (empty if blank — no write).
+    """Write a FAILED-turn marker (role="error") + return the turn id, "" if nothing was stored.
 
     Persisted so the UI can re-render the error card after a page reload (F5),
     exactly like any other message. The "error" role is deliberately EXCLUDED from
@@ -226,14 +258,15 @@ def persist_error_turn(
     if not body:
         return ""
     err_id = turn_id or str(ulid.new())
-    _persist_turn(
+    if not _persist_turn(
         data_dir=data_dir,
         role="error",
         conversation_id=conversation_id,
         text=body,
         turn_id=err_id,
         lang=lang,
-    )
+    ):
+        return ""
     return err_id
 
 

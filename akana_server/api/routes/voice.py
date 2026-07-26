@@ -26,7 +26,7 @@ from akana_server.api.routes.chat import (
     guard_nonstreaming_turn,
     run_nonstreaming_turn,
 )
-from akana_server.api.routes.chat._base import _off_loop
+from akana_server.api.routes.chat._base import _off_loop, set_turn_outcome
 from akana_server.api.routes.chat.chat_producer import _tool_only_summary
 from akana_server.api.services import AppServices, get_services
 from akana_server.chat_context import (
@@ -47,6 +47,7 @@ from akana_server.orchestrator.memory_tools import memory_mcp_servers
 from akana_server.orchestrator.router import classify_intent
 from akana_server.orchestrator.turn_writer import (
     persist_assistant_turn,
+    persist_error_turn,
     persist_user_turn,
 )
 from akana_server.voice import (
@@ -708,6 +709,55 @@ class VoiceResponse(ChatResponse):
     tts_error: str | None = None
 
 
+#: Body of the role="error" marker left behind when a voice exchange was answered but
+#: not stored. Same wording contract as the streaming path's TURN_NOT_PERSISTED card:
+#: the user heard a real answer, so the message says what is missing, not that the turn
+#: failed.
+_VOICE_TURN_NOT_PERSISTED = (
+    "The spoken reply was delivered but could not be saved (storage error). It will "
+    "not be here after a reload."
+)
+
+
+async def _mark_voice_turn_unstored(
+    request: Request, *, conv_id: str, user_turn_id: str, lang: str | None
+) -> None:
+    """Record a voice exchange the store did not keep — loudly, and where the user looks.
+
+    The writer ids are RECEIPTS; ignoring them let POST /voice answer aloud, return 200
+    and announce ``turn_completed{status:"ok"}`` for an exchange that is absent from the
+    archive, with a ``history_turns`` that silently failed to advance as the only hint.
+
+    When the QUESTION landed and only its answer was lost, the archive would otherwise
+    show that question with nothing under it forever, so a role="error" marker takes the
+    answer's place: it re-renders as an error card on reload and is excluded from the
+    LLM history window, so the next turn sees an unanswered question rather than a
+    phantom answer to contradict. Nothing landed at all → nothing to explain, and the
+    marker write would fail the same way.
+    """
+    settings = getattr(request.app.state, "settings", None)
+    log.error(
+        "voice turn NOT persisted (conv=%s) — the user heard the reply; question "
+        "stored: %s",
+        conv_id,
+        bool(user_turn_id),
+    )
+    if not user_turn_id:
+        return
+    try:
+        await _off_loop(
+            persist_error_turn,
+            conversation_id=conv_id,
+            error_text=_VOICE_TURN_NOT_PERSISTED,
+            lang=lang,
+            data_dir=getattr(settings, "data_dir", None),
+        )
+    except Exception:  # noqa: BLE001 - the reply is already spoken; never fail the turn
+        log.warning(
+            "voice: could not record the lost-turn marker (conv=%s)", conv_id, exc_info=True
+        )
+
+
 @router.post("/voice", dependencies=[Depends(require_akana_bearer)])
 @guard_nonstreaming_turn(lambda a: a.get("conversation_id"))
 async def post_voice(
@@ -883,6 +933,7 @@ async def post_voice(
         _tool_only_summary(tool_calls_resp) if tool_calls_resp else ""
     )
     user_turn_id: str | None = None
+    assistant_turn_id = ""
     if assistant_body:
         user_turn_id = await _off_loop(
             persist_user_turn,
@@ -895,17 +946,29 @@ async def post_voice(
             file_ids=parsed_file_ids or None,
             data_dir=settings.data_dir,
         )
-        await _off_loop(
-            persist_assistant_turn,
-            conversation_id=conv_id,
-            assistant_text=assistant_body,
-            user_turn_id=user_turn_id,
-            lang=stt_lang,
-            latency_ms=llm_latency_ms,
-            intent=intent,
-            tool_calls=tool_calls_resp or None,
-            data_dir=settings.data_dir,
-        )
+        # The ids are RECEIPTS, not names: "" means the row is not in memory.db. Writing
+        # the answer when the question did not land would leave an orphan assistant row —
+        # the next turn is fed it as LLM history with no question to answer and the model
+        # contradicts itself, which is worse than the pair simply being absent.
+        if user_turn_id:
+            assistant_turn_id = await _off_loop(
+                persist_assistant_turn,
+                conversation_id=conv_id,
+                assistant_text=assistant_body,
+                user_turn_id=user_turn_id,
+                lang=stt_lang,
+                latency_ms=llm_latency_ms,
+                intent=intent,
+                tool_calls=tool_calls_resp or None,
+                data_dir=settings.data_dir,
+            )
+        if not assistant_turn_id:
+            await _mark_voice_turn_unstored(
+                request,
+                conv_id=conv_id,
+                user_turn_id=str(user_turn_id or ""),
+                lang=stt_lang,
+            )
     if isinstance(conv_svc, ConversationService):
         meta_after = await _off_loop(conv_svc.get, conv_id)
         new_history_len = int(meta_after.message_count) if meta_after else 0
@@ -999,8 +1062,18 @@ async def post_voice(
             "audio_bytes": len(raw),
             "transcript_preview": transcript[:200],
             "assistant_preview": text[:200],
+            # The audit line said "ok" for turns that never reached memory.db. It is
+            # frequently the only place a lost exchange can still be found afterwards.
+            "persisted": bool(assistant_turn_id),
             "prompt_tokens": int(usage.get("prompt_tokens", 0) or 0),
             "completion_tokens": int(usage.get("completion_tokens", 0) or 0),
         },
     )
+    if assistant_body and not assistant_turn_id:
+        # This turn was announced by ``guard_nonstreaming_turn``, whose release reports
+        # "ok" for anything that did not RAISE — and a lost write deliberately does not
+        # raise, because the user is already hearing the answer. Record the real outcome
+        # instead: the guard's own release (still the only one) announces it, so the turn
+        # keeps exactly one completion and the conversation stays claimed to the end.
+        set_turn_outcome(request, "error")
     return resp

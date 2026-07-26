@@ -275,6 +275,9 @@ function loadChat({ voiceMode = false, activity = null, realTurnStatus = false }
     // WS turn_completed handler drives (reconcileServerCompletedTurn ABORTS a stream).
     streamActive: false,
     rescueCalls: [],
+    resumable: true,
+    logRebuilds: [],
+    logSyncs: [],
     // Every /chat/active URL the module actually requested — the negative checks below
     // ("the strip must stay hidden") pass vacuously if the probe never happens, so the
     // integrity check asserts the stub is really being hit, per conversation.
@@ -303,8 +306,10 @@ function loadChat({ voiceMode = false, activity = null, realTurnStatus = false }
     syncChatThreadBar: () => {},
     refreshActiveConversationMeta: () => {},
     refreshArchiveActivity: (id) => { state.archiveActivity.push(id); },
-    refreshConversationLogAfterTurn: async () => {},
-    syncConversationLogFromServer: async () => {},
+    // Recorded, not silent: rebuilding the log REPLACES what is on screen with the
+    // server's answer, so "was it called" is the whole contract for C13.
+    refreshConversationLogAfterTurn: async (cid, atid) => { state.logRebuilds.push([cid, atid]); },
+    syncConversationLogFromServer: async (cid) => { state.logSyncs.push(cid); },
     getChatArchiveItems: () => [{ id: "B", title: "Rapor" }],
     getActiveConversationMeta: () => null,
     setActiveConversationMeta: () => {},
@@ -337,7 +342,10 @@ function loadChat({ voiceMode = false, activity = null, realTurnStatus = false }
     fetchConversationTurnsFromServer: async () => ({ status: 404, turns: null }),
     setForegroundConversation: () => {},
     abortConversationTurnsFetch: () => {},
-    resumeActiveTurn: async () => true,
+    // Default true = "the turn was resumable", which SHORT-CIRCUITS the log rebuild.
+    // Any scenario about the rebuild must set state.resumable = false, otherwise it
+    // passes without ever reaching the branch it claims to test.
+    resumeActiveTurn: async () => state.resumable,
     probeActiveTurn: async () => null,
     reconcileServerCompletedTurn: async (cid, atid) => {
       state.rescueCalls.push([cid, atid]);
@@ -897,6 +905,40 @@ await check("C12b the user's OWN completion still rescues a stalled stream", asy
   h.Chat.setChatInFlight(true);
   await h.Chat.onTurnCompletedRemote("A", { ...USER_DONE("A"), assistant_turn_id: "t9" });
   assert.deepEqual(h.state.rescueCalls, [["A", "t9"]], "the safety net for the user's own stalled turn must survive");
+});
+
+await check("C13 a FAILED turn that stored nothing must not rebuild the log over what is on screen", async () => {
+  // The voice bridge now announces a lost write honestly: status "error", NO
+  // assistant_turn_id. A live-voice exchange exists only as rows painted from transcript
+  // frames, so rebuilding from a server that holds nothing would erase the conversation
+  // the user just had out loud — the exact damage the honest announcement was meant to stop.
+  const h = loadChat();
+  h.setDisplayed("A");
+  h.state.resumable = false; // reach the rebuild branch at all
+ 
+  await h.Chat.onTurnCompletedRemote("A", USER_DONE("A", "error"));
+  assert.deepEqual(h.state.logRebuilds, [], "a failed turn with no stored row must not reload the log");
+  assert.deepEqual(h.state.logSyncs, [], "and must not overwrite the store with that nothing either");
+});
+
+await check("C13b a failed turn that DID store an error card is still rendered", async () => {
+  // The streaming path persists a role="error" marker and announces its id: that row is
+  // real and the user must see it after a reload, so the rebuild has to still happen.
+  const h = loadChat();
+  h.setDisplayed("A");
+  h.state.resumable = false; // reach the rebuild branch at all
+ 
+  await h.Chat.onTurnCompletedRemote("A", { ...USER_DONE("A", "error"), assistant_turn_id: "err-1" });
+  assert.deepEqual(h.state.logRebuilds, [["A", "err-1"]], "a stored error card must still be fetched and rendered");
+});
+
+await check("C13c a normal successful completion still reloads", async () => {
+  const h = loadChat();
+  h.setDisplayed("A");
+  h.state.resumable = false; // reach the rebuild branch at all
+ 
+  await h.Chat.onTurnCompletedRemote("A", USER_DONE("A"));
+  assert.deepEqual(h.state.logRebuilds, [["A", undefined]], "the ordinary success path must be untouched");
 });
 
 // ═════════════════════════════════════════════════════════════════════════════

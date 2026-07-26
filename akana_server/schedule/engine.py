@@ -132,12 +132,37 @@ def _mcp_servers(settings: Any, conversation_id: str | None) -> dict[str, Any] |
         return None
 
 
+class TurnPairNotStored(RuntimeError):
+    """The (prompt → result) pair did not reach ``memory.db``.
+
+    RAISED, not returned: the only way this failure has ever gone unnoticed is a
+    caller dropping the writer's receipt on the floor, which is exactly what this
+    function used to invite. A run whose result was never stored was recorded
+    "ok", rolled forward, bound to the thread and toasted as ready — so the user
+    opened an EMPTY conversation and the briefing was gone for good. An exception
+    cannot be discarded by accident, and the delivery block above already turns a
+    thread failure into a failed target + a note.
+    """
+
+
 def _append_turn_pair(
     data_dir: Any, conversation_id: str, prompt: str, result: str
 ) -> None:
     """Write the (prompt → result) pair into a conversation via the SAME single
     writer chat/voice use (``turn_writer``). Factored out as a module function so
-    tests can patch it without a real ``memory.db``."""
+    tests can patch it without a real ``memory.db``.
+
+    The writer returns "" for a turn that did not land, and BOTH receipts are
+    checked: delivery means the exchange is readable afterwards, not that a write
+    was attempted. Raises :class:`TurnPairNotStored` when either row is missing.
+
+    HALF-PAIR: once the prompt row is lost the result row is NOT attempted. An
+    assistant turn with no question is worse than no turn at all — it is fed to the
+    next run as LLM history, so the model answers a request it cannot see and
+    contradicts itself. A dangling prompt row (result lost) is left in place: it is
+    the user's own text, and deleting it would be a second write in a store that
+    just proved it cannot take one.
+    """
     from akana_server.orchestrator.turn_writer import (
         persist_assistant_turn,
         persist_user_turn,
@@ -147,12 +172,19 @@ def _append_turn_pair(
     uid = persist_user_turn(
         conversation_id=conversation_id, user_text=prompt, data_dir=dd
     )
-    persist_assistant_turn(
+    if not uid:
+        raise TurnPairNotStored(
+            f"prompt turn was not stored (conv={conversation_id})"
+        )
+    if not persist_assistant_turn(
         conversation_id=conversation_id,
         assistant_text=result,
         user_turn_id=uid,
         data_dir=dd,
-    )
+    ):
+        raise TurnPairNotStored(
+            f"result turn was not stored (conv={conversation_id})"
+        )
 
 
 def _deliver_thread(
@@ -163,7 +195,11 @@ def _deliver_thread(
     Reuses ``item.delivery.conversation_id`` when it still exists; otherwise
     creates a NEW conversation titled from the schedule (so a recurring schedule
     keeps landing in one growing thread once the id is written back by
-    ``mark_ran``). Returns ``None`` when no conversation service is available."""
+    ``mark_ran``). Returns ``None`` when no conversation service is available.
+
+    Propagates :class:`TurnPairNotStored`: a thread that received no turns is not a
+    delivery. Returning its id would make ``mark_ran`` record "ok", roll the
+    schedule forward and bind it to a conversation that holds nothing."""
     if conversations is None:
         return None
     cid = item.delivery.conversation_id
@@ -503,15 +539,22 @@ async def _run_one_impl(
                     # schedule_list shows it healthy: fall back to the separate-thread
                     # delivery, which creates a fresh thread, and let mark_ran write that
                     # id back so the NEXT fire lands there instead of repeating the drop.
-                    notes.append("same-chat delivery failed — result moved to a new thread")
+                    # The note is written AFTER the move lands: the rescue thread can
+                    # itself fail to store the pair, and "moved to a new thread" would
+                    # then be the same false receipt this whole path exists to avoid.
                     conversation_id = await asyncio.to_thread(
                         _deliver_thread, settings, conversations, item, body
                     )
                     if conversation_id:
                         thread_ok = True
                         same_chat_recovered = True
+                        notes.append(
+                            "same-chat delivery failed — result moved to a new thread"
+                        )
                     else:
-                        notes.append("no conversation service available")
+                        notes.append(
+                            "same-chat delivery failed — no conversation service available"
+                        )
             else:
                 conversation_id = await asyncio.to_thread(
                     _deliver_thread, settings, conversations, item, body
@@ -523,6 +566,10 @@ async def _run_one_impl(
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
+            # Includes TurnPairNotStored — a write that never landed is a delivery
+            # failure, so ``conversation_id`` stays unset: the run is recorded with
+            # its real status + this note, the schedule is not rebound to a thread
+            # that holds nothing, and no "your result is ready" toast goes out.
             log.warning("schedule %s: thread delivery failed: %s", item.id, exc, exc_info=True)
             notes.append(f"thread delivery error: {exc}")
 

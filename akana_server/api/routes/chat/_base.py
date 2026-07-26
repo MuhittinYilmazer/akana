@@ -12,6 +12,7 @@ import asyncio
 import functools
 import inspect
 import json
+import logging
 from typing import Any, Callable
 
 from fastapi import Request
@@ -21,6 +22,8 @@ from akana_server.config import Settings
 from akana_server.context import ContextRequest
 from akana_server.llm_settings import resolve_cursor_model_tag
 from akana_server.skills.turn_injection import SkillTurnPlan
+
+log = logging.getLogger(__name__)
 
 
 def _sse_pack(event: str, data: dict[str, Any]) -> str:
@@ -209,6 +212,40 @@ def voice_turn_suffix(settings: Settings, *, streaming: bool) -> str:
     return "\n".join(parts)
 
 
+#: Where a blocking/voice handler records the turn's REAL outcome for the guard below.
+#: Namespaced: ``request.state`` is shared with every dependency on the request.
+_TURN_OUTCOME_ATTR = "akana_turn_outcome"
+
+
+def set_turn_outcome(request: Any, status: str) -> None:
+    """Record the REAL outcome of a blocking/voice turn ("error" / "cancelled" / "ok").
+
+    :func:`guard_nonstreaming_turn` can only observe whether the handler RAISED, and
+    these handlers deliberately do NOT raise when the answer was produced but never
+    stored — the user is already reading (or hearing) it, and breaking the response over
+    a storage fault is a worse lie than a wrong status. Without a seam, such a turn
+    announced ``turn_completed{status:"ok"}`` for an exchange that is not in memory.db,
+    and the client reloaded the log to find nothing.
+
+    Set it as late as the outcome is known; the guard reads it once, on release, so the
+    turn still gets EXACTLY ONE completion and the conversation stays claimed for the
+    whole handler. Best-effort: a request with no writable ``state`` never breaks a turn.
+    """
+    try:
+        setattr(request.state, _TURN_OUTCOME_ATTR, str(status or "ok"))
+    except Exception:  # noqa: BLE001 - a status hint must never break the response
+        log.debug("could not record the turn outcome (%s)", status, exc_info=True)
+
+
+def _recorded_turn_outcome(request: Any) -> str | None:
+    """The outcome :func:`set_turn_outcome` recorded on this request, if any."""
+    try:
+        value = getattr(request.state, _TURN_OUTCOME_ATTR, None)
+    except Exception:  # noqa: BLE001 - no state (direct call / fake request) → no hint
+        return None
+    return str(value) if value else None
+
+
 def guard_nonstreaming_turn(get_conv_id: Callable[[dict[str, Any]], Any]):
     """DECORATOR wrapping a blocking/voice handler with busy-registry register/release.
 
@@ -267,6 +304,11 @@ def guard_nonstreaming_turn(get_conv_id: Callable[[dict[str, Any]], Any]):
                 raise
             finally:
                 if app is not None:
+                    # A handler that returned normally may still have failed in a way it
+                    # must not raise — an answer the store refused. Its recorded outcome
+                    # decides then; a raise/cancel already put the truth in ``status``.
+                    if status == "ok":
+                        status = _recorded_turn_outcome(request) or "ok"
                     release_turn(app, conv_id, token, status=status)
                     # #8 queue drain: when a blocking/voice turn finishes NORMALLY, drain the
                     # next queued message (symmetric with the streaming finally). Otherwise a

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -28,6 +29,23 @@ from akana_server.connectors.service import _make_turn_guard
 from akana_server.connectors.telegram import MAX_MESSAGE_LEN, TelegramConnector
 from akana_server.conversation_service import ConversationService
 from akana_server.skills.turn_injection import SkillTurnPlan
+
+
+async def _wait_until(cond, timeout_s: float = 20.0, step_s: float = 0.02) -> None:
+    """Poll ``cond`` until it holds or ``timeout_s`` of WALL time has passed.
+
+    A counted loop of ``asyncio.sleep(0.01)`` does not bound wall time: when the delay
+    is below the event loop's clock resolution (0.015625 s on Windows) the timer is
+    already due when it is scheduled, so each iteration returns on the next loop pass
+    and "2000 × 10 ms = 20 s of headroom" collapses to a fraction of a second. That made
+    this file pass in a full-suite run (stores and imports already warm) and fail when
+    run alone. Sleep above the resolution and measure the deadline, not the iterations.
+    """
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if cond():
+            return
+        await asyncio.sleep(step_s)
 
 
 def _settings(tmp_path: Path, **kw) -> SimpleNamespace:
@@ -421,10 +439,7 @@ def test_end_to_end_telegram_multi_turn(tmp_path: Path) -> None:
     async def run() -> None:
         await reg.start_all()
         router.start()
-        for _ in range(2000):  # up to ~20 s — headroom for a contended CI runner
-            if len(api.sent) >= 2:
-                break
-            await asyncio.sleep(0.01)
+        await _wait_until(lambda: len(api.sent) >= 2)
         await router.stop()
         await reg.stop_all()
 
@@ -603,10 +618,7 @@ def test_worker_cap_backpressures_then_drains(tmp_path: Path) -> None:
         assert len(router._workers) <= 2, f"worker cap exceeded: {len(router._workers)}"
         assert len(seen) <= 2, f"must be capped, no more than 2 should reach complete: {seen}"
         gate.set()  # free → drain + the remaining 2 chats are processed
-        for _ in range(400):
-            if len(seen) >= 4:
-                break
-            await asyncio.sleep(0.01)
+        await _wait_until(lambda: len(seen) >= 4)
         await router.stop()
 
     asyncio.run(run())

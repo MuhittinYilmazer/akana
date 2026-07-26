@@ -27,10 +27,17 @@ Reconciled drift (previously the two copies differed):
   SEMANTICS are now identical: persist-if-complete then reset, driven by the same
   base method.
 - Barge-in buffer/clock reset. The reset is owned by :meth:`_persist_turn` and
-  happens ONLY when a real (user+assistant) turn is written. An orphan barge-in
-  (user interjects before any assistant text) is a no-op that leaves the partial
-  user transcript intact, so it is not lost or mis-attributed to the old turn.
-  Both bridges get exactly this behaviour by delegating to the base.
+  happens ONLY when a real (user+assistant) turn is written AND that write LANDED.
+  An orphan barge-in (user interjects before any assistant text) is a no-op that
+  leaves the partial user transcript intact, so it is not lost or mis-attributed to
+  the old turn. Both bridges get exactly this behaviour by delegating to the base.
+
+- Lost-write retention. The transcript buffers are the ONLY copy a spoken turn has
+  (text chat can fall back on the client's draft and the SSE replay buffer; a voice
+  row is built from transcript frames the bridge itself produced). So a pair whose
+  write did not land is carried over inside the base — see
+  :meth:`RealtimeBridge._report_lost_turn` — and the failure is announced as
+  ``status="error"`` with no turn id, never as a completed turn.
 """
 
 from __future__ import annotations
@@ -62,6 +69,13 @@ FRAME_AUDIO = 0x01
 #: send would queue behind it with nothing left to wait for. The claim expires on its
 #: own here, so nothing is blocked for longer than a single spoken exchange.
 _SPOKEN_TURN_MAX_HOLD_S = 60.0
+
+#: Ceiling on transcript text carried forward from a FAILED write, per side.
+#: Retaining the unsaved turn is what lets a spoken exchange survive a transient store
+#: failure (the next persist writes it), but a store that stays broken for the whole
+#: session would otherwise grow one ever-larger write payload per utterance. The TAIL
+#: is kept: the newest words are the ones the exchange is still about.
+_UNSAVED_RETAIN_MAX_CHARS = 4000
 
 
 def parse_browser_frame(data: bytes) -> tuple[int, bytes]:
@@ -108,6 +122,16 @@ class RealtimeBridge:
         #: Busy-registry handle for the spoken turn in flight (None = not claimed).
         #: Assigned before ``_in_buf`` below, whose setter reads it.
         self._turn_handle: "asyncio.Task[Any] | None" = None
+        #: Transcript of a pair whose write did NOT land, carried until one does.
+        #: Held here rather than left in the buffers below because the buffers are
+        #: provider-owned: both subclasses reset (and OpenAI wholesale REASSIGNS)
+        #: them at their own turn boundaries, which would delete the retained words.
+        self._unsaved_user_text = ""
+        self._unsaved_assistant_text = ""
+        #: Turn id of a question that ALREADY landed while its answer did not. The
+        #: retained transcript is re-written by the next persist, and without re-using
+        #: the id the store would end up holding the same question twice.
+        self._unsaved_user_turn_id = ""
         self._in_buf = ""  # user transcript (input transcription)
         self._out_buf = ""  # assistant transcript (output transcription)
         self._turn_t0 = time.perf_counter()
@@ -285,20 +309,31 @@ class RealtimeBridge:
         persistence trigger for BOTH a completed turn AND a barge-in interruption
         (each provider calls it from its own signal — see the module docstring).
 
-        Reset semantics: buffers and the latency clock are reset ONLY when a real
-        turn is written. An orphan/no-op persist (e.g. barge-in before assistant
-        text arrives) returns early WITHOUT resetting, so the interjecting user's
-        partial transcript survives into the next turn instead of being deleted
-        (the old strip→reset→guard order lost it) or mis-attributed.
+        Reset semantics: buffers and the latency clock are reset ONLY when a real turn
+        is written AND the write LANDED. Clearing used to come FIRST and the turn was
+        then announced ``status="ok"`` carrying the id ``persist_assistant_turn`` had
+        minted whether or not the row existed — so a swallowed write deleted the only
+        copy of the transcript, told the client the turn was complete, and the client
+        reloaded the chat log over the rows the voice pane was showing. The exchange
+        was gone from both the screen and the store, with a log line as the only trace.
+        An orphan/no-op persist (e.g. barge-in before assistant text arrives) still
+        returns early WITHOUT resetting, so the interjecting user's partial transcript
+        survives into the next turn instead of being deleted or mis-attributed.
         """
         user_text = self._in_buf.strip()
         assistant_text = self._out_buf.strip()
         latency_ms = int((time.perf_counter() - self._turn_t0) * 1000)
         if not (user_text and assistant_text):
             return
-        self._in_buf = ""
-        self._out_buf = ""
-        self._turn_t0 = time.perf_counter()
+        # A pair that a previous attempt could not store rides along with this one: it
+        # is the ONLY remaining copy of that exchange, and this is the next moment a
+        # write is due anyway. Merged into one turn rather than replayed as a separate
+        # pair because the bridge holds transcripts, not turn records — one legible,
+        # stored exchange beats two invented ones (and beats losing the words).
+        if self._unsaved_user_text:
+            user_text = f"{self._unsaved_user_text}\n{user_text}"
+        if self._unsaved_assistant_text:
+            assistant_text = f"{self._unsaved_assistant_text}\n{assistant_text}"
 
         from akana_server.orchestrator.turn_writer import (
             persist_assistant_turn,
@@ -312,25 +347,88 @@ class RealtimeBridge:
             conversation_id=self.conv_id,
             user_text=user_text,
             lang=lang,
+            # Re-writes the SAME row when an earlier attempt stored the question but
+            # lost its answer (see ``_unsaved_user_turn_id``): ``remember_turn`` UPSERTs
+            # on turn_id, so the carried transcript updates that row instead of leaving
+            # the store holding the same question twice.
+            turn_id=self._unsaved_user_turn_id or None,
             data_dir=data_dir,
         )
-        assistant_turn_id = await _off_loop(
-            persist_assistant_turn,
-            conversation_id=self.conv_id,
-            assistant_text=assistant_text,
-            user_turn_id=user_turn_id,
-            lang=lang,
-            latency_ms=latency_ms,
-            intent="chat",
-            data_dir=data_dir,
+        # A pair is atomic in MEANING, and an assistant row whose question never reached
+        # the store is the worst of the outcomes: the next turn is fed it as LLM history
+        # with nothing to answer, and the model contradicts itself. If the question did
+        # not land, do not write the answer either — both sides are carried instead and
+        # the next persist writes them together.
+        assistant_turn_id = (
+            await _off_loop(
+                persist_assistant_turn,
+                conversation_id=self.conv_id,
+                assistant_text=assistant_text,
+                user_turn_id=user_turn_id,
+                lang=lang,
+                latency_ms=latency_ms,
+                intent="chat",
+                data_dir=data_dir,
+            )
+            if user_turn_id
+            else ""
         )
+        if not assistant_turn_id:
+            await self._report_lost_turn(
+                user_text,
+                assistant_text,
+                user_turn_id=str(user_turn_id or ""),
+            )
+            return
+        self._unsaved_user_text = ""
+        self._unsaved_assistant_text = ""
+        self._unsaved_user_turn_id = ""
+        self._in_buf = ""
+        self._out_buf = ""
+        self._turn_t0 = time.perf_counter()
         # The claim covers the WRITE, not just the speaking: releasing before the pair
         # is on disk is exactly the window an injection used to slip into, landing above
         # the question it answers. ``announce=False`` — the broadcast below is this
         # turn's one completion, and only it carries the assistant turn id.
         await self._release_spoken_turn(status="ok", announce=False)
         await self._broadcast_done(
-            assistant_text, latency_ms, assistant_turn_id=str(assistant_turn_id or "")
+            assistant_text, latency_ms, assistant_turn_id=str(assistant_turn_id)
+        )
+
+    async def _report_lost_turn(
+        self, user_text: str, assistant_text: str, *, user_turn_id: str
+    ) -> None:
+        """Carry an unstored spoken turn forward and announce it as what it is: an error.
+
+        ``status="error"`` and NO ``assistant_turn_id``: pointing the client at a row
+        that does not exist is what made it reload the chat log and wipe the transcript
+        rows the voice pane had painted. The completion is broadcast here rather than
+        left to :meth:`_release_spoken_turn` for the same reason the success path does
+        it — a session whose claim was declined (the conversation was already busy)
+        never owned a handle, yet still owes exactly one completion for this turn.
+
+        The words are held in the base's own carry-over, not left in ``_in_buf`` /
+        ``_out_buf``: those belong to the providers, which reset (OpenAI outright
+        reassigns) them at their own turn boundaries.
+        """
+        log.error(
+            "%s: spoken turn NOT persisted (conv=%s) — announced as error and carried "
+            "to the next write (question already stored: %s)",
+            self._label,
+            self.conv_id,
+            bool(user_turn_id),
+        )
+        self._unsaved_user_text = user_text[-_UNSAVED_RETAIN_MAX_CHARS:]
+        self._unsaved_assistant_text = assistant_text[-_UNSAVED_RETAIN_MAX_CHARS:]
+        self._unsaved_user_turn_id = user_turn_id
+        self._in_buf = ""
+        self._out_buf = ""
+        self._turn_t0 = time.perf_counter()
+        await self._release_spoken_turn(status="error", announce=False)
+        from akana_server.conversation_events import broadcast_turn_completed
+
+        await broadcast_turn_completed(
+            self.app, self.conv_id, status="error", source="user"
         )
 
     async def _broadcast_done(

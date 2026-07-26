@@ -184,7 +184,8 @@ async def _emit_error_tail(
     # re-render after F5. The SSE partial_text field carries "" (more honest).
     partial = "".join(parts).strip()
     if partial:
-        await persist_user_once()  # user first (there's content → LLM succeeded)
+        user_ok = await persist_user_once()  # user first (there's content → LLM succeeded)
+        asst_ok: list[bool] = []
         await _persist_assistant_turn_end(
             request,
             conversation_id=conv_id,
@@ -200,8 +201,13 @@ async def _emit_error_tail(
             # (a 2nd LLM call) — don't pile a second call onto a failed bridge +
             # extracting memory from a half/corrupt response is low value.
             stage_captures=False,
+            user_turn_ok=user_ok,
+            ok_out=asst_ok,
         )
-        persisted_out[0] = True
+        # The RECEIPT decides, not the call: the writer swallows db errors, so an
+        # unconditional True here told the caller's ``finally`` that the partial answer was
+        # safe and skipped the one re-persist that could still have rescued it.
+        persisted_out[0] = bool(asst_ok) and asst_ok[0]
     else:
         # No partial text (e.g. LLM_UNAVAILABLE before the first delta): persist a
         # FAILED-turn marker (role="error") so the error card re-renders from the
@@ -563,14 +569,17 @@ async def _stream_chat_response(
     user_persisted = False
     memory_writes: list[dict[str, str]] = []
 
-    async def _persist_user_once() -> None:
-        """Write the user turn ONCE (idempotent). Called BEFORE the LLM call → so the
-        message is persisted immediately (visible on a mid-turn return). It's also called
-        again on the assistant-persist paths but is a no-op thanks to the guard (user.ts <
-        assistant.ts is preserved)."""
+    async def _persist_user_once() -> bool:
+        """Write the user turn ONCE (idempotent); True once the row is durably stored.
+
+        Called BEFORE the LLM call → so the message is persisted immediately (visible on a
+        mid-turn return). It's also called again on the assistant-persist paths but is a
+        no-op thanks to the guard (user.ts < assistant.ts is preserved). The RESULT is what
+        the assistant-persist sites gate on: an answer must never be written over a
+        question that isn't there."""
         nonlocal user_persisted
         if user_persisted:
-            return
+            return True
         ok: list[bool] = []
         await _persist_user_turn_start(
             request,
@@ -586,6 +595,47 @@ async def _stream_chat_response(
         # call retries — otherwise the assistant turn lands with NO preceding user turn.
         if ok and ok[0]:
             user_persisted = True
+        return user_persisted
+
+    rescue_attempted = False
+
+    async def _repersist_answer_once(answer: str) -> bool:
+        """Last-chance re-write of an answer the user is ALREADY reading. Runs AT MOST ONCE.
+
+        Two paths reach it for the same reason — this text exists nowhere but the open tab:
+        the normal branch when the write did not land, and the ``finally`` when the stream
+        was cut before that branch ran (disconnect / STOP). Re-writing a turn that DID land
+        is harmless (``remember_turn`` UPSERTs on ``turn_id`` and the meta counter only
+        bumps for a new row), but a store that refused twice will not accept the third call
+        either, so one attempt is the contract — otherwise the two callers retry each
+        other's work and the turn's outcome is announced later and later.
+        """
+        nonlocal rescue_attempted
+        if rescue_attempted:
+            return assistant_persisted
+        rescue_attempted = True
+        ok: list[bool] = []
+        user_ok = await _persist_user_once()  # the pair, in order — never an answer alone
+        await _persist_assistant_turn_end(
+            request,
+            conversation_id=conv_id,
+            user_text=body.text,
+            assistant_text=answer,
+            user_turn_id=user_turn_id,
+            assistant_turn_id=turn_id,
+            lang=body.lang,
+            latency_ms=int((time.perf_counter() - t0) * 1000),
+            intent=intent,
+            tool_calls=tool_calls,
+            # Rescue: re-write the answer only. The 2nd LLM call (capture) has no place on
+            # a disconnect path, nor on a store that just refused a write.
+            stage_captures=False,
+            usage=_done_tokens_block(usage) if usage else None,
+            ask_user=last_ask_user if isinstance(last_ask_user, dict) else None,
+            user_turn_ok=user_ok,
+            ok_out=ok,
+        )
+        return bool(ok) and ok[0]
 
     # Persist the user turn BEFORE the LLM → so the message is persisted INSTANTLY. If,
     # while a detached turn is in progress, the user switches to another chat and comes
@@ -1077,7 +1127,8 @@ async def _stream_chat_response(
         if not persist_text and tool_calls:
             persist_text = _tool_only_summary(tool_calls)
         if persist_text:
-            await _persist_user_once()  # user first (there's content → LLM succeeded)
+            user_ok = await _persist_user_once()  # user first (there's content → LLM succeeded)
+            asst_ok: list[bool] = []
             # Contract v2 clause 4: we add usage (prompt/completion/cost_usd?) to the
             # assistant turn so the token/cost info is preserved across a page refresh.
             memory_writes = await _persist_assistant_turn_end(
@@ -1097,15 +1148,30 @@ async def _stream_chat_response(
                 # switch / reload; the turn body stays the _ask_user_summary text (feeds LLM
                 # history bootstrap + previews). NULL on a normal / plan turn.
                 ask_user=last_ask_user if isinstance(last_ask_user, dict) else None,
+                user_turn_ok=user_ok,
+                ok_out=asst_ok,
             )
-            assistant_persisted = True
+            # The receipt, not the call: ``_persist_turn`` swallows every db error, so this
+            # flag used to be True for a turn that never reached memory.db — which SKIPPED
+            # the ``finally``'s re-persist, the one retry that exists for exactly this, and
+            # left ``done`` pointing at an id with no row behind it.
+            assistant_persisted = bool(asst_ok) and asst_ok[0]
+            if not assistant_persisted:
+                # Retry HERE, before ``done``: the frames this turn ends with have to
+                # describe what actually happened, and the ``finally`` runs too late for
+                # that. It is the same one-shot rescue (``_repersist_answer_once`` is a
+                # no-op if the finally reaches it afterwards).
+                assistant_persisted = await _repersist_answer_once(persist_text)
             # Memory capture (the 2nd LLM call) must NOT BLOCK ``done`` → run it in the
             # background. So the "Typing" indicator closes as soon as the answer ends;
             # the turn finishes normally here and leaves the registry (so the next
             # message doesn't hit TURN_BUSY). No capture while the breaker is open or
-            # on an ask_user/plan question turn.
+            # on an ask_user/plan question turn — and none for a turn that is not in the
+            # store: the staged chips are addressed to an assistant turn the client
+            # cannot find.
             if (
-                not _cursor_breaker_open(settings)
+                assistant_persisted
+                and not _cursor_breaker_open(settings)
                 and last_ask_user is None
                 and last_plan is None
             ):
@@ -1192,6 +1258,36 @@ async def _stream_chat_response(
         yield _sse_pack(
             "tts_end", {"turn_id": turn_id, "tts_active": tts_active}
         ).encode("utf-8")
+        if persist_text and not assistant_persisted:
+            # The answer was delivered but nothing about this turn reached memory.db, and
+            # the retry above has already been spent. Say so LAST — after the reply's own
+            # frames, which are about text that really was produced — and leave a
+            # role="error" marker under the SAME turn id the client was handed: without a
+            # row there, the post-turn log reload wipes the answer off the screen and the
+            # user is left with their question and silence. This ``error`` frame is also
+            # what makes the turn's own completion honest: the detached runner reads the
+            # turn's outcome off the SSE, so without it a lost turn announces "ok".
+            persist_failed_message = (
+                "The reply was generated but could not be saved (storage error). Copy "
+                "anything you need from it — it will not be here after a reload."
+            )
+            await _persist_error_turn_end(
+                request,
+                conversation_id=conv_id,
+                error_text=persist_failed_message,
+                turn_id=turn_id,
+                lang=body.lang,
+            )
+            yield _sse_pack(
+                "error",
+                {
+                    "code": "TURN_NOT_PERSISTED",
+                    "message": persist_failed_message,
+                    # The text is complete, not partial — it is already in the bubble the
+                    # client built from the deltas; re-sending it would duplicate it.
+                    "partial_text": "",
+                },
+            ).encode("utf-8")
         if hub is not None:
             await hub.broadcast_json(
                 {
@@ -1215,7 +1311,9 @@ async def _stream_chat_response(
             client_ip=client_ip,
             data={
                 "mode": "stream",
-                "status": "ok",
+                # The audit is the only durable trace of a turn whose rows are missing —
+                # recording "ok" for one made the loss invisible everywhere at once.
+                "status": "ok" if assistant_persisted or not persist_text else "persist_failed",
                 "intent": intent,
                 "approval_required": approval_required,
                 "latency_ms": latency_ms,
@@ -1265,21 +1363,16 @@ async def _stream_chat_response(
                         await _off_loop(
                             _mirror_cursor_agent_meta, request, conv_id, agent_id
                         )
-                    await _persist_user_once()  # user first (there's partial content)
-                    await _persist_assistant_turn_end(
-                        request,
-                        conversation_id=conv_id,
-                        user_text=body.text,
-                        assistant_text=tail,
-                        user_turn_id=user_turn_id,
-                        assistant_turn_id=turn_id,
-                        lang=body.lang,
-                        latency_ms=int((time.perf_counter() - t0) * 1000),
-                        intent=intent,
-                        tool_calls=tool_calls,
-                        # Disconnect/cancel cleanup: rescue only the partial text; don't
-                        # do the 2nd LLM call (capture) on the cleanup/GeneratorExit path.
-                        stage_captures=False,
-                    )
+                    # Same one-shot rescue the normal branch uses. Reaching it here means
+                    # the branch never ran (the stream was cut); if it did run and already
+                    # spent the attempt, this is a no-op rather than a third write.
+                    assistant_persisted = await _repersist_answer_once(tail)
+                    if not assistant_persisted:
+                        log.error(
+                            "assistant turn LOST (conv=%s turn=%s): the answer was streamed"
+                            " but no row reached memory.db",
+                            conv_id,
+                            turn_id,
+                        )
                 except Exception as exc:
                     log.warning("partial persist on disconnect failed: %s", exc)

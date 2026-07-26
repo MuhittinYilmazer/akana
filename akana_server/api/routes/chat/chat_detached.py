@@ -257,14 +257,27 @@ async def _command_turn_gen(
     yield meta
     if resp.text:
         yield delta
+    user_ok: list[bool] = []
     try:
         user_turn_id = await _persist_user_turn_start(
             request,
             conversation_id=conv_id,
             user_text=body.text,
             lang=body.lang,
+            ok_out=user_ok,
         )
-        if resp.text and _conversation_chat_usable(request.app, conv_id):
+        # An answer with no question is the one loss that keeps causing damage: it is
+        # replayed as LLM history, so the next turn answers — then contradicts — a
+        # request nobody can see. Same rule as the LLM turn paths, and it must match
+        # routes._persist_command_response exactly: an asymmetry between the live and
+        # the drained command path would be worse than either behaviour alone.
+        if not (user_ok and user_ok[0]):
+            log.warning(
+                "queued command turn NOT ARCHIVED (conv=%s): its user turn did not reach "
+                "the store; the reply is delivered anyway",
+                conv_id,
+            )
+        elif resp.text and _conversation_chat_usable(request.app, conv_id):
             settings = getattr(request.app.state, "settings", None)
             await _off_loop(
                 _chatpkg.persist_assistant_turn,
