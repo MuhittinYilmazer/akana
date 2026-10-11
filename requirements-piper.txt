@@ -4,4 +4,4 @@
 # degrades to edge at runtime (ImportError-guarded). Enable:
 #   pip install -r requirements-piper.txt
 #   (or `python akana.py setup --voice piper`).
-piper-tts>=1.4
+piper-tts>=1.4.2
